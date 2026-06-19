@@ -1,0 +1,644 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Built Trailers — Phase 1 (Live)</title>
+<style>
+:root{--bg:#0f1419;--panel:#161c24;--panel2:#1d2630;--line:#2a3540;--txt:#e7edf3;--muted:#8b9aa8;--accent:#ff7a18;--green:#3ecf8e;--red:#ff5d5d;--yellow:#ffd166;--blue:#5aa9ff;--mfg:#ba7dff}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;background:var(--bg);color:var(--txt);font-size:14px}
+.hidden{display:none!important}
+.app{display:flex;min-height:100vh}
+.sidebar{width:215px;background:var(--panel);border-right:1px solid var(--line);display:flex;flex-direction:column;position:sticky;top:0;height:100vh}
+.brand{padding:18px;border-bottom:1px solid var(--line)}.brand h1{font-size:16px}.brand .t{color:var(--accent)}.brand small{color:var(--muted);font-size:11px}
+.nav{padding:10px 8px;flex:1}.nav button{width:100%;text-align:left;background:none;border:none;color:var(--muted);padding:10px 12px;border-radius:8px;font-size:13.5px;margin-bottom:2px}
+.nav button:hover{background:var(--panel2);color:var(--txt)}.nav button.active{background:linear-gradient(90deg,rgba(255,122,24,.18),transparent);color:var(--txt);font-weight:600;box-shadow:inset 3px 0 0 var(--accent)}
+.who{padding:12px;border-top:1px solid var(--line);font-size:12px}.who b{display:block;margin:3px 0}
+.pill{display:inline-block;font-size:10px;padding:2px 7px;border-radius:20px;font-weight:700;text-transform:uppercase}
+.pill.admin{background:rgba(255,122,24,.2);color:#ffb347}.pill.editor{background:rgba(90,169,255,.2);color:var(--blue)}.pill.viewer{background:rgba(139,154,168,.2);color:var(--muted)}
+.main{flex:1;min-width:0}.topbar{display:flex;justify-content:space-between;align-items:center;padding:14px 22px;border-bottom:1px solid var(--line);background:var(--panel);position:sticky;top:0;z-index:10}
+.topbar h2{font-size:18px}.topbar .sub{color:var(--muted);font-size:12px}
+.content{padding:20px 22px}
+.grid{display:grid;gap:14px}.g4{grid-template-columns:repeat(4,1fr)}@media(max-width:1000px){.g4{grid-template-columns:repeat(2,1fr)}}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px}
+.card h3{font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.6px;margin-bottom:10px}
+.kpi .v{font-size:26px;font-weight:700}.kpi .s{font-size:12px;color:var(--muted)}
+table{width:100%;border-collapse:collapse;font-size:13px}th{text-align:left;color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.5px;padding:8px;border-bottom:1px solid var(--line)}
+td{padding:8px;border-bottom:1px solid var(--panel2)}tr:hover td{background:var(--panel2)}.right{text-align:right}.center{text-align:center}
+.badge{font-size:11px;padding:3px 9px;border-radius:20px;font-weight:600}.b-ok{background:rgba(62,207,142,.15);color:var(--green)}.b-low{background:rgba(255,209,102,.15);color:var(--yellow)}.b-below{background:rgba(255,93,93,.15);color:var(--red)}
+.b-buy{background:rgba(90,169,255,.15);color:var(--blue)}.b-mfg{background:rgba(186,125,255,.15);color:var(--mfg)}
+.btn{background:var(--accent);color:#1a1206;border:none;padding:8px 14px;border-radius:8px;font-weight:700;font-size:13px;cursor:pointer}.btn.sec{background:var(--panel2);color:var(--txt);border:1px solid var(--line)}.btn.sm{padding:4px 9px;font-size:12px}
+input,select{background:var(--panel2);color:var(--txt);border:1px solid var(--line);border-radius:7px;padding:8px;font-size:13px;font-family:inherit}
+.login{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:var(--bg);z-index:100;padding:20px}
+.login .box{max-width:840px;width:100%;display:grid;grid-template-columns:1fr 1fr;border:1px solid var(--line);border-radius:16px;overflow:hidden}
+@media(max-width:760px){.login .box{grid-template-columns:1fr}}
+.login .l{padding:32px;background:var(--panel)}.login .r{padding:22px;background:var(--panel2);max-height:520px;overflow:auto}
+.login .field{margin-bottom:12px}.login label{display:block;font-size:12px;color:var(--muted);margin-bottom:4px}.login input{width:100%}
+.err{color:var(--red);font-size:13px;min-height:18px}
+a.lnk{color:var(--blue);cursor:pointer}
+.banner{background:linear-gradient(100deg,rgba(62,207,142,.12),transparent);border:1px solid rgba(62,207,142,.3);border-radius:10px;padding:10px 14px;margin-bottom:16px;font-size:13px}
+.toast{position:fixed;bottom:20px;right:20px;background:var(--panel);border-left:4px solid var(--accent);border:1px solid var(--accent);border-radius:9px;padding:11px 15px;z-index:200}
+.kanban{display:grid;grid-template-columns:repeat(6,1fr);gap:10px;align-items:start}@media(max-width:1200px){.kanban{grid-template-columns:repeat(3,1fr)}}
+.col{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:9px;min-height:80px}
+.col h4{font-size:11px;text-transform:uppercase;color:var(--muted);margin-bottom:7px;display:flex;justify-content:space-between}
+.col.over{border-color:var(--accent);background:var(--panel2)}
+.ocard{background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:9px;margin-bottom:7px;cursor:grab;font-size:12px}
+.ocard .t{display:flex;justify-content:space-between;font-weight:700;margin-bottom:2px}
+.tabs{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px}.tabs button{background:var(--panel2);border:1px solid var(--line);color:var(--muted);padding:6px 12px;border-radius:7px;font-size:12px;cursor:pointer}.tabs button.active{background:var(--accent);color:#1a1206;font-weight:700}
+.field{margin-bottom:12px}.field label{display:block;font-size:12px;color:var(--muted);margin-bottom:4px}.field input,.field select,.field textarea{width:100%}
+.row{display:flex;gap:12px}.row>*{flex:1}
+.chip{display:inline-block;border:1px solid var(--line);border-radius:20px;padding:4px 10px;font-size:12px;margin:2px}
+.modal-bg{position:fixed;inset:0;background:rgba(0,0,0,.6);display:flex;align-items:center;justify-content:center;z-index:150;padding:20px}.modal{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:20px;max-width:540px;width:100%;max-height:86vh;overflow:auto}
+.split{display:grid;grid-template-columns:1fr 1fr;gap:16px}@media(max-width:860px){.split{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<!-- LOGIN -->
+<div class="login" id="login">
+  <div class="box">
+    <div class="l">
+      <h1 style="font-size:22px">BUILT <span style="color:var(--accent)">TRAILERS</span></h1>
+      <div style="color:var(--muted);margin-bottom:20px;font-size:13px">Phase 1 — live hosted environment</div>
+      <div class="field"><label>Username</label><input id="liUser" autocomplete="username"></div>
+      <div class="field"><label>Password</label><input id="liPass" type="password" autocomplete="current-password"></div>
+      <div class="err" id="liErr"></div>
+      <button class="btn" style="width:100%" onclick="login()">Sign in</button>
+      <p style="color:var(--muted);font-size:11px;margin-top:12px">Secure auth: passwords are bcrypt-hashed in the database; sessions use JWT.</p>
+    </div>
+    <div class="r">
+      <h3 style="font-size:12px;color:var(--muted);text-transform:uppercase;margin-bottom:8px">Demo accounts (click to fill)</h3>
+      <div style="color:var(--muted);font-size:12px;margin-bottom:8px">Password for all: <b>built2026</b></div>
+      <table id="acctList"><tbody></tbody></table>
+    </div>
+  </div>
+</div>
+
+<!-- APP -->
+<div class="app hidden" id="app">
+  <aside class="sidebar">
+    <div class="brand"><h1>BUILT <span class="t">TRAILERS</span></h1><small>Phase 1 · live</small></div>
+    <nav class="nav" id="nav"></nav>
+    <div class="who"><div class="muted">Signed in as</div><b id="whoName"></b><span id="whoPill"></span>
+      <button class="btn sec sm" style="width:100%;margin-top:8px" onclick="logout()">Log out</button></div>
+  </aside>
+  <main class="main">
+    <div class="topbar"><div><h2 id="pTitle">Dashboard</h2><div class="sub" id="pSub"></div></div><div id="pActions"></div></div>
+    <div class="content" id="content"></div>
+  </main>
+</div>
+<div id="toast"></div>
+
+<script>
+const API = '';
+let TOKEN = null, ME = null, page = 'dashboard';
+const $ = id => document.getElementById(id);
+const money = n => '$' + Math.round(n).toLocaleString();
+const money2 = n => '$' + (Math.round(n*100)/100).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});
+function toast(m){const t=document.createElement('div');t.className='toast';t.textContent=m;$('toast').appendChild(t);setTimeout(()=>t.remove(),3000);}
+async function api(path, opts={}){
+  const h = {'Content-Type':'application/json'};
+  if(TOKEN) h.Authorization='Bearer '+TOKEN;
+  const r = await fetch(API+path,{...opts,headers:h});
+  if(r.status===401){logout();throw new Error('Session expired');}
+  const d = await r.json().catch(()=>({}));
+  if(!r.ok) throw new Error(d.error||('HTTP '+r.status));
+  return d;
+}
+const canEdit = () => ME && (ME.role==='admin'||ME.role==='editor');
+const isAdmin = () => ME && ME.role==='admin';
+const canSell = () => ME && (ME.role==='admin' || ['Sales','Rep Specialist','General Manager'].includes(ME.title));
+
+// ---- login ----
+async function loadAccts(){
+  // public hint list (names only) — fetched after we know usernames via a tiny unauthenticated call is not available,
+  // so we show the known seed accounts statically for the demo.
+  const seed=[['tsoelberg','Todd Soelberg','General Manager','admin'],['mchen','Maria Chen','Shop Manager','admin'],
+   ['dolsen','Dave Olsen','Office Manager','admin'],['aruiz','Angela Ruiz','Sales','editor'],
+   ['creyes','Carlos Reyes','Boat Lead','editor'],['rmendez','Rosa Mendez','QC Specialist','editor'],
+   ['ilender','Investor / Lender','External Viewer','viewer']];
+  $('acctList').querySelector('tbody').innerHTML = seed.map(s=>`<tr style="cursor:pointer" onclick="document.getElementById('liUser').value='${s[0]}';document.getElementById('liPass').value='built2026'"><td><b>${s[0]}</b></td><td class="muted">${s[1]}</td><td><span class="pill ${s[3]}">${s[2]}</span></td></tr>`).join('');
+}
+async function login(){
+  try{
+    const d = await api('/api/auth/login',{method:'POST',body:JSON.stringify({username:$('liUser').value.trim(),password:$('liPass').value})});
+    TOKEN=d.token;ME=d.user;$('login').classList.add('hidden');$('app').classList.remove('hidden');page='dashboard';render();toast('Welcome, '+ME.name.split(' ')[0]+'!');
+  }catch(e){$('liErr').textContent=e.message;}
+}
+function logout(){TOKEN=null;ME=null;$('app').classList.add('hidden');$('login').classList.remove('hidden');}
+$('liPass').addEventListener('keydown',e=>{if(e.key==='Enter')login();});
+
+// ---- nav/render ----
+const NAV=[['dashboard','📊 Dashboard'],['orders','📋 Orders & Fulfillment'],['neworder','➕ New Order'],['customers','🏬 Customers & Dealers'],['parts','📦 Parts Master'],['predict','🤖 Predictive Ordering'],['pos','🧾 Purchase Orders'],['boms','🧩 BOMs & Cost'],['inventory','📈 Inventory Value'],['accounting','💵 Accounting'],['team','👷 Team & Payroll'],['timeoff','📅 Schedule & Time Off'],['outcomes','🎯 Goals & Outcomes'],['wins','🎉 Wins'],['forecast','🔮 Forecasting & Planning'],['notify','💬 Notifications'],['users','👤 Users & Roles']];
+function navVisible(n){ if(n[0]==='users') return isAdmin(); if(n[0]==='neworder') return canSell(); return true; }
+function renderNav(){
+  $('nav').innerHTML=NAV.filter(navVisible).map(n=>`<button class="${page===n[0]?'active':''}" onclick="go('${n[0]}')">${n[1]}</button>`).join('');
+  $('whoName').textContent=ME.name;
+  $('whoPill').innerHTML=`<span class="pill ${ME.role}">${ME.title||ME.role}</span>`;
+}
+function go(p){page=p;render();}
+async function render(){
+  renderNav();
+  const map={dashboard:viewDash,orders:viewOrders,neworder:viewNewOrder,customers:viewCustomers,parts:viewParts,predict:viewPredict,pos:viewPOs,boms:viewBoms,inventory:viewInv,accounting:viewAccounting,team:viewTeam,timeoff:viewTimeoff,outcomes:viewOutcomes,wins:viewWins,forecast:viewForecast,notify:viewNotify,users:viewUsers};
+  try{ await (map[page]||viewDash)(); }catch(e){ $('content').innerHTML=`<div class="card">Error: ${e.message}</div>`; }
+}
+function kpi(t,v,s){return `<div class="card kpi"><h3>${t}</h3><div class="v">${v}</div><div class="s">${s}</div></div>`;}
+
+async function viewDash(){
+  $('pTitle').textContent='Dashboard';$('pSub').textContent='Phase 1 — single source of truth (live from the database)';$('pActions').innerHTML='';
+  const [inv,models]=await Promise.all([api('/api/inventory/summary'),api('/api/models')]);
+  const avgMargin=models.reduce((s,m)=>s+m.margin,0)/models.length*100;
+  $('content').innerHTML=`
+   <div class="banner">✅ Connected to the live API and database. Every figure below is computed server-side from stored data.</div>
+   <div class="grid g4">
+    ${kpi('Inventory value',money(inv.totalValue),inv.skuCount+' SKUs on hand')}
+    ${kpi('Trailer models',models.length,inv.manufactured+' make / '+inv.purchased+' buy parts')}
+    ${kpi('Avg gross margin',avgMargin.toFixed(1)+'%','across all models')}
+    ${kpi('Below reorder',inv.belowReorder,'parts need attention')}
+   </div>
+   <div class="card" style="margin-top:16px"><h3>Model cost & margin</h3>
+   <table><thead><tr><th>Model</th><th>Category</th><th class="right">Material</th><th class="right">Labor</th><th class="right">Total cost</th><th class="right">Price</th><th class="right">Margin</th></tr></thead><tbody>
+   ${models.map(m=>`<tr><td><b>${m.id}</b> ${m.name}</td><td>${m.category}</td><td class="right">${money(m.material)}</td><td class="right">${money(m.laborCost)}</td><td class="right"><b>${money(m.totalCost)}</b></td><td class="right">${money(m.price)}</td><td class="right" style="color:${m.margin<0?'var(--red)':m.margin>.3?'var(--green)':'var(--yellow)'}">${(m.margin*100).toFixed(1)}%</td></tr>`).join('')}
+   </tbody></table></div>`;
+}
+
+async function viewParts(){
+  $('pTitle').textContent='Parts Master';$('pSub').textContent='Live parts, costs and on-hand — '+(canEdit()?'click a cost to edit':'read-only');$('pActions').innerHTML='';
+  const parts=await api('/api/parts');
+  $('content').innerHTML=`<div class="card"><h3>Parts (${parts.length})</h3>
+   <table><thead><tr><th>Part</th><th>Type</th><th>Vendor</th><th class="right">On hand</th><th class="right">Reorder</th><th class="right">Unit cost</th><th class="right">Ext. value</th><th class="center">Status</th>${canEdit()?'<th></th>':''}</tr></thead><tbody>
+   ${parts.map(p=>`<tr>
+     <td><b>${p.id}</b><br><span class="muted" style="font-size:11px">${p.name}</span></td>
+     <td>${p.type==='M'?'<span class="badge b-mfg">MAKE</span>':'<span class="badge b-buy">BUY</span>'}</td>
+     <td style="font-size:12px">${p.vendor||''}</td>
+     <td class="right">${p.onHand}</td><td class="right">${p.reorder}</td>
+     <td class="right">${canEdit()?`<a class="lnk" onclick="editCost('${p.id}',${p.cost})">${money2(p.cost)}</a>`:money2(p.cost)}</td>
+     <td class="right">${money(p.extValue)}</td>
+     <td class="center"><span class="badge ${p.status==='ok'?'b-ok':p.status==='low'?'b-low':'b-below'}">${p.status}</span></td>
+     ${canEdit()?`<td class="right"><button class="btn sm sec" onclick="receive('${p.id}')">Receive</button></td>`:''}
+   </tr>`).join('')}
+   </tbody></table></div>`;
+}
+async function editCost(id,cur){
+  const v=prompt('New unit cost for '+id+':',cur);if(v==null)return;
+  await api('/api/parts/'+id,{method:'PATCH',body:JSON.stringify({cost:Number(v)})});
+  toast('Cost updated — BOMs recalculated.');render();
+}
+async function receive(id){
+  const v=prompt('Quantity received for '+id+':','10');if(v==null)return;
+  await api('/api/parts/'+id+'/receive',{method:'POST',body:JSON.stringify({qty:Number(v)})});
+  toast('Received '+v+' '+id+'.');render();
+}
+
+async function viewBoms(){
+  $('pTitle').textContent='BOMs & Cost';$('pSub').textContent='Per-model bill of materials with live cost rollup';$('pActions').innerHTML='';
+  const models=await api('/api/models');
+  const cats=[...new Set(models.map(m=>m.category))];
+  $('content').innerHTML=`<div style="max-width:460px;margin-bottom:14px"><select id="bomSel" onchange="showBom(this.value)" style="width:100%">
+    ${cats.map(c=>`<optgroup label="${c}">${models.filter(m=>m.category===c).map(m=>`<option value="${m.id}">${m.id} — ${m.name}</option>`).join('')}</optgroup>`).join('')}
+   </select></div><div id="bomBody"></div>`;
+  showBom(models[0].id);
+}
+async function showBom(id){
+  const m=await api('/api/models/'+id);
+  $('bomBody').innerHTML=`
+   <div class="grid g4" style="margin-bottom:14px">
+    ${kpi('Material',money(m.material),'parts')}
+    ${kpi('Labor',money(m.laborCost),m.laborHrs.toFixed(1)+' hrs @ $'+m.labor[0]?.rate)}
+    ${kpi('Total cost',money(m.totalCost),'per unit')}
+    ${kpi('Margin',(m.margin*100).toFixed(1)+'%',money(m.marginDollars)+' on '+money(m.price))}
+   </div>
+   <div class="card"><h3>${m.name} — Bill of Materials</h3>
+   <table><thead><tr><th>Part</th><th class="right">Qty</th><th class="right">Unit</th><th class="right">Ext.</th></tr></thead><tbody>
+   ${m.bom.map(b=>`<tr><td>${b.name} ${b.type==='M'?'<span class="badge b-mfg">MAKE</span>':''}</td><td class="right">${b.qty}</td><td class="right">${money2(b.unitCost)}</td><td class="right">${money2(b.ext)}</td></tr>`).join('')}
+   <tr><td colspan="3" class="right"><b>Material</b></td><td class="right"><b>${money2(m.material)}</b></td></tr>
+   </tbody></table></div>
+   <div class="card" style="margin-top:14px"><h3>Labor routing</h3>
+   <table><thead><tr><th>Workstation</th><th class="right">Hours</th><th class="right">$/hr</th><th class="right">Ext.</th></tr></thead><tbody>
+   ${m.labor.map(l=>`<tr><td>${l.ws}</td><td class="right">${l.hours}</td><td class="right">${money2(l.rate)}</td><td class="right">${money2(l.ext)}</td></tr>`).join('')}
+   <tr><td colspan="3" class="right"><b>Labor</b></td><td class="right"><b>${money2(m.laborCost)}</b></td></tr>
+   </tbody></table></div>`;
+}
+
+async function viewInv(){
+  $('pTitle').textContent='Inventory Value';$('pSub').textContent='Live valuation of all parts on hand';$('pActions').innerHTML='';
+  const [inv,parts]=await Promise.all([api('/api/inventory/summary'),api('/api/parts')]);
+  const top=parts.slice().sort((a,b)=>b.extValue-a.extValue).slice(0,15);
+  $('content').innerHTML=`<div class="grid g4">
+    ${kpi('Total inventory value',money(inv.totalValue),'at current unit costs')}
+    ${kpi('SKUs',inv.skuCount,inv.purchased+' buy / '+inv.manufactured+' make')}
+    ${kpi('Below reorder',inv.belowReorder,'need replenishment')}
+    ${kpi('Make vs buy',inv.manufactured+' / '+inv.purchased,'manufactured / purchased')}
+   </div>
+   <div class="card" style="margin-top:16px"><h3>Top 15 parts by value on hand</h3>
+   <table><thead><tr><th>Part</th><th class="right">On hand</th><th class="right">Unit cost</th><th class="right">Ext. value</th></tr></thead><tbody>
+   ${top.map(p=>`<tr><td><b>${p.id}</b> ${p.name}</td><td class="right">${p.onHand}</td><td class="right">${money2(p.cost)}</td><td class="right">${money(p.extValue)}</td></tr>`).join('')}
+   </tbody></table></div>`;
+}
+
+async function viewUsers(){
+  $('pTitle').textContent='Users & Roles';$('pSub').textContent='Accounts, permission tiers and reporting hierarchy';$('pActions').innerHTML='';
+  const users=await api('/api/users');
+  const byId=Object.fromEntries(users.map(u=>[u.id,u]));
+  $('content').innerHTML=`<div class="card"><h3>Users (${users.length})</h3>
+   <table><thead><tr><th>Name</th><th>Username</th><th>Role</th><th class="center">Tier</th><th>Manager</th></tr></thead><tbody>
+   ${users.map(u=>`<tr><td><b>${u.name}</b></td><td>${u.username}</td><td>${u.title||''}</td><td class="center"><span class="pill ${u.role}">${u.role}</span></td><td class="muted">${u.manager_id?byId[u.manager_id]?.name||'':'—'}</td></tr>`).join('')}
+   </tbody></table>
+   <p class="muted" style="font-size:12px;margin-top:8px">Passwords are bcrypt-hashed; permission tiers are enforced on every API call.</p></div>`;
+}
+
+// ============ PHASE 2: ORDERS / FULFILLMENT / DEALERS ============
+function modal(title,html){const d=document.createElement('div');d.className='modal-bg';d.id='modalBg';d.onclick=e=>{if(e.target===d)d.remove();};d.innerHTML=`<div class="modal"><h2 style="margin-bottom:14px">${title}</h2>${html}</div>`;document.body.appendChild(d);}
+function closeModal(){const m=$('modalBg');if(m)m.remove();}
+
+let ordFilter='All';
+async function viewOrders(){
+  $('pTitle').textContent='Orders & Fulfillment';$('pSub').textContent='Pipeline by trailer type — '+(canEdit()?'drag a card to change its stage':'read-only');
+  $('pActions').innerHTML=canSell()?`<button class="btn" onclick="go('neworder')">➕ New Order</button>`:'';
+  const {stages,orders}=await api('/api/orders');
+  const types=['All',...Array.from(new Set(orders.map(o=>o.type)))];
+  const filtered=ordFilter==='All'?orders:orders.filter(o=>o.type===ordFilter);
+  const tabs=`<div class="tabs">${types.map(t=>`<button class="${ordFilter===t?'active':''}" onclick="ordFilter='${t}';viewOrders()">${t}<span style="opacity:.7;margin-left:5px">${t==='All'?orders.length:orders.filter(o=>o.type===t).length}</span></button>`).join('')}</div>`;
+  const board=`<div class="kanban">${stages.map(st=>`
+    <div class="col" ondragover="event.preventDefault();this.classList.add('over')" ondragleave="this.classList.remove('over')" ondrop="dropOrder(event,'${st}')">
+      <h4>${st.split(' ')[0]}<span>${filtered.filter(o=>o.stage===st).length}</span></h4>
+      ${filtered.filter(o=>o.stage===st).map(o=>`<div class="ocard" draggable="${canEdit()}" ondragstart="window._drag='${o.id}'" onclick="orderDetail('${o.id}')">
+        <div class="t"><span>${o.id}</span><span>${money(o.revenue)}</span></div>
+        <div>${o.qty}× ${o.model}</div>
+        <div class="muted" style="font-size:11px">${o.customer} · <span class="badge b-buy">${o.type}</span></div></div>`).join('')}
+    </div>`).join('')}</div>`;
+  // per-type summary
+  const summary=`<div class="card" style="margin-top:16px"><h3>Fulfillment by trailer type</h3>
+   <table><thead><tr><th>Type</th><th class="right">Open orders</th><th class="right">Units</th><th class="right">Backlog value</th></tr></thead><tbody>
+   ${Array.from(new Set(orders.map(o=>o.type))).map(t=>{const os=orders.filter(o=>o.type===t&&o.stage!=='Ready / Shipped');return `<tr><td><b>${t}</b></td><td class="right">${os.length}</td><td class="right">${os.reduce((a,o)=>a+o.qty,0)}</td><td class="right">${money(os.reduce((a,o)=>a+o.revenue,0))}</td></tr>`;}).join('')}
+   </tbody></table></div>`;
+  $('content').innerHTML=tabs+board+summary;
+}
+async function dropOrder(e,stage){
+  e.preventDefault();e.currentTarget.classList.remove('over');
+  if(!canEdit()||!window._drag)return;
+  const id=window._drag;window._drag=null;
+  try{ await api('/api/orders/'+id+'/stage',{method:'PATCH',body:JSON.stringify({stage})});
+    toast(stage==='Ready / Shipped'?id+' shipped — inventory consumed':id+' → '+stage); viewOrders();
+  }catch(err){toast(err.message);}
+}
+async function orderDetail(id){
+  const o=await api('/api/orders/'+id);
+  modal(o.id+' — '+o.customer,`
+    <div style="margin-bottom:10px"><span class="badge b-buy">${o.type}</span> <span class="muted">${o.qty}× ${o.model} · ${o.stage} · due ${o.due||'—'}</span></div>
+    <div class="grid g4" style="grid-template-columns:1fr 1fr;margin-bottom:12px">
+      ${kpi('Revenue',money(o.revenue),'')}${kpi('Rep',o.rep||'—','')}</div>
+    <h3 style="font-size:12px;color:var(--muted);text-transform:uppercase;margin-bottom:6px">Parts required</h3>
+    <table><thead><tr><th>Part</th><th class="right">Need</th><th class="right">On hand</th><th class="center">Status</th></tr></thead><tbody>
+    ${o.bom.map(b=>`<tr><td>${b.name}</td><td class="right">${b.need}</td><td class="right">${b.onHand}</td><td class="center">${b.short?'<span class="badge b-below">short</span>':'<span class="badge b-ok">ok</span>'}</td></tr>`).join('')}
+    </tbody></table>`);
+}
+
+async function viewNewOrder(){
+  $('pTitle').textContent='New Order';$('pSub').textContent='Sales-controlled — each dealer is limited to its authorized trailer types';$('pActions').innerHTML='';
+  if(!canSell()){$('content').innerHTML=`<div class="card"><div class="banner" style="background:rgba(255,209,102,.1);border-color:rgba(255,209,102,.4)">🔒 New orders are controlled by Sales. You are signed in as ${ME.title||ME.role}. Switch to a Sales role to place orders.</div></div>`;return;}
+  const [custs,models]=await Promise.all([api('/api/customers'),api('/api/models')]);
+  window._custs=custs;window._models=models;
+  $('content').innerHTML=`<div class="split">
+   <div class="card"><h3>Place an order</h3>
+     <div class="field"><label>Dealership / customer</label><select id="noCust" onchange="noCust()">${custs.map(c=>`<option value="${c.id}">${c.name} — ${c.kind}</option>`).join('')}</select></div>
+     <div id="noAllowed" style="margin-bottom:10px"></div>
+     <div class="field"><label>Trailer model (authorized types only)</label><select id="noModel" onchange="noQuote()"></select></div>
+     <div class="row"><div class="field"><label>Quantity</label><input id="noQty" type="number" value="1" min="1" oninput="noQuote()"></div>
+     <div class="field"><label>Requested delivery</label><input id="noDue" type="date" value="2026-07-20"></div></div>
+     <button class="btn" onclick="submitOrder()">Submit order</button>
+   </div>
+   <div class="card"><h3>Live quote</h3><div id="noQuote"></div></div></div>`;
+  noCust();
+}
+function noCust(){
+  const c=window._custs.find(x=>x.id===$('noCust').value)||window._custs[0];
+  $('noAllowed').innerHTML='<span class="muted" style="font-size:12px">Authorized:</span> '+(c.allowed.map(t=>`<span class="badge b-buy">${t}</span>`).join(' ')||'<span class="badge b-below">none</span>');
+  const ms=window._models.filter(m=>c.allowed.includes(m.category));
+  $('noModel').innerHTML=ms.length?ms.map(m=>`<option value="${m.id}">${m.category} · ${m.name} — ${money(m.price)}</option>`).join(''):'<option value="">— no authorized models —</option>';
+  noQuote();
+}
+function noQuote(){
+  const c=window._custs.find(x=>x.id===$('noCust').value);
+  const m=window._models.find(x=>x.id===$('noModel').value);
+  if(!m){$('noQuote').innerHTML='<div class="muted">This dealer has no authorized trailer types.</div>';return;}
+  const qty=Math.max(1,+$('noQty').value||1);
+  $('noQuote').innerHTML=`<div class="kpi"><div class="v">${money(m.price*qty)}</div><div class="s">${qty}× ${m.name}</div></div>
+    <table style="margin-top:10px"><tbody>
+    <tr><td class="muted">Dealer</td><td class="right">${c.name}</td></tr>
+    <tr><td class="muted">Type</td><td class="right"><span class="badge b-buy">${m.category}</span></td></tr>
+    <tr><td class="muted">Unit cost</td><td class="right">${money2(m.totalCost)}</td></tr>
+    <tr><td class="muted">Margin</td><td class="right">${(m.margin*100).toFixed(1)}%</td></tr>
+    <tr><td class="muted">Deposit (30%)</td><td class="right">${money(m.price*qty*.3)}</td></tr></tbody></table>`;
+}
+async function submitOrder(){
+  const m=window._models.find(x=>x.id===$('noModel').value);if(!m){toast('Pick a model');return;}
+  try{const r=await api('/api/orders',{method:'POST',body:JSON.stringify({customerId:$('noCust').value,modelId:$('noModel').value,qty:+$('noQty').value,due:$('noDue').value})});
+    toast(r.id+' created'); page='orders'; render();
+  }catch(e){toast(e.message);}
+}
+
+async function viewCustomers(){
+  $('pTitle').textContent='Customers & Dealers';$('pSub').textContent='Sales assigns which trailer types each dealer may order';$('pActions').innerHTML=canSell()?`<button class="btn" onclick="addDealer()">➕ Add dealer</button>`:'';
+  const [custs,types]=await Promise.all([api('/api/customers'),api('/api/trailer-types')]);
+  $('content').innerHTML=`<div class="card"><h3>Dealerships & authorized trailer types</h3>
+   <table><thead><tr><th>Dealer</th><th>Type</th><th>Rep</th><th>Authorized trailer types</th></tr></thead><tbody>
+   ${custs.map(c=>`<tr><td><b>${c.name}</b><br><span class="muted" style="font-size:11px">${c.contact||''}</span></td>
+     <td><span class="badge ${c.kind==='Retail'?'b-low':'b-buy'}">${c.kind}</span></td>
+     <td class="muted" style="font-size:12px">${c.rep||'—'}</td>
+     <td>${types.map(t=>{const on=c.allowed.includes(t);return `<span class="chip" onclick="${canSell()?`toggleType('${c.id}','${t}',${!on})`:''}" style="cursor:${canSell()?'pointer':'default'};border-color:${on?'var(--accent)':'var(--line)'};color:${on?'#ffb347':'var(--muted)'}">${on?'✓ ':''}${t}</span>`;}).join('')}</td></tr>`).join('')}
+   </tbody></table>
+   <p class="muted" style="font-size:12px;margin-top:8px">These authorizations drive the New Order form — reps can only sell what each dealer is approved for.</p></div>`;
+}
+async function toggleType(cid,t,on){ try{await api('/api/customers/'+cid+'/types',{method:'PATCH',body:JSON.stringify({type:t,on})});viewCustomers();}catch(e){toast(e.message);} }
+async function addDealer(){
+  const name=prompt('New dealership name:');if(!name)return;
+  try{await api('/api/customers',{method:'POST',body:JSON.stringify({name,kind:'Dealership',allowed:['Utility']})});toast('Added '+name);viewCustomers();}catch(e){toast(e.message);}
+}
+
+// ============ PHASE 3: PREDICTIVE ORDERING / PURCHASE ORDERS ============
+async function viewPredict(){
+  $('pTitle').textContent='Predictive Ordering';$('pSub').textContent='AI projects demand × lead time × capacity and recommends what to order/build, when';
+  const {rows,summary}=await api('/api/mrp');
+  const act=rows.filter(r=>r.sev!=='ok').sort((a,b)=>(a.sev==='crit'?0:1)-(b.sev==='crit'?0:1)||((a.daysCover??999)-(b.daysCover??999)));
+  $('pActions').innerHTML=(canEdit()&&act.some(r=>r.type==='P'))?`<button class="btn" onclick="autoPO()">⚡ Auto-generate all POs</button>`:'';
+  $('content').innerHTML=`
+   <div class="banner">🤖 Demand-weighted reorder model with lead-time safety stock. Inputs: open orders, per-model daily capacity, vendor lead times, cushion stock. <b>${summary.critical}</b> critical · <b>${summary.warning}</b> reorder-soon · <b>${summary.ok}</b> healthy.</div>
+   ${act.length?`<div class="card"><h3>Recommended actions (${act.length})</h3>
+   <table><thead><tr><th>Part</th><th class="right">On hand</th><th class="right">On order</th><th class="right">Demand</th><th class="right">Days cover</th><th class="right">Lead</th><th class="right">Suggest</th><th>Order by</th><th class="center">Action</th>${canEdit()?'<th></th>':''}</tr></thead><tbody>
+   ${act.map(r=>`<tr>
+     <td><b>${r.id}</b> <span class="muted">${r.name}</span></td>
+     <td class="right">${r.onHand}</td><td class="right">${r.onOrder||''}</td><td class="right">${r.demand||''}</td>
+     <td class="right" style="color:${(r.daysCover!=null&&r.daysCover<r.lead)?'var(--red)':'var(--yellow)'}">${r.daysCover!=null?r.daysCover+'d':'—'}</td>
+     <td class="right">${r.type==='M'?'build':r.lead+'d'}</td>
+     <td class="right"><b>${r.suggestQty}</b></td>
+     <td>${r.orderBy}</td>
+     <td class="center"><span class="badge ${r.sev==='crit'?'b-below':'b-low'}">${r.action}</span></td>
+     ${canEdit()?`<td class="right">${r.type==='M'?`<span class="muted" style="font-size:11px">build order</span>`:`<button class="btn sm" onclick="makePO('${r.id}',${r.suggestQty})">Create PO</button>`}</td>`:''}
+   </tr>`).join('')}
+   </tbody></table></div>`:'<div class="card"><div class="banner">✅ No action needed — every part has coverage beyond its lead time plus cushion.</div></div>'}
+   <div class="card" style="margin-top:16px"><h3>How a recommendation is computed</h3>
+   <p class="muted">Projected on-hand = current + open POs − demand from open orders. We compare days-of-coverage (on-hand ÷ daily consumption from production capacity) against vendor lead time + safety days. If coverage is thin, the suggested quantity rounds up to the vendor's lot size to refill past the reorder+cushion line and cover consumption during the lead window — so you reorder early enough to never run out.</p></div>`;
+}
+async function makePO(partId,qty){
+  try{const r=await api('/api/po',{method:'POST',body:JSON.stringify({partId,qty})});toast(r.id+' created → emailed to vendor');viewPredict();}catch(e){toast(e.message);}
+}
+async function autoPO(){
+  try{const r=await api('/api/mrp/auto',{method:'POST'});toast('⚡ Generated '+r.created+' purchase orders');page='pos';render();}catch(e){toast(e.message);}
+}
+async function viewPOs(){
+  $('pTitle').textContent='Purchase Orders';$('pSub').textContent='Generated for vendors as quantities dictate — receive to add stock';$('pActions').innerHTML=canEdit()?`<button class="btn sec" onclick="go('predict')">🤖 Predictive POs</button>`:'';
+  const pos=await api('/api/po');
+  const open=pos.filter(p=>p.status==='Open');
+  $('content').innerHTML=`<div class="grid g4" style="margin-bottom:16px">
+    ${kpi('Open POs',open.length,'awaiting delivery')}
+    ${kpi('Committed spend',money(open.reduce((a,p)=>a+p.total,0)),'on open POs')}
+    ${kpi('Total POs',pos.length,'all time')}
+    ${kpi('Received',pos.filter(p=>p.status==='Received').length,'into inventory')}
+   </div>
+   <div class="card"><h3>Purchase orders</h3>
+   <table><thead><tr><th>PO</th><th>Vendor</th><th>Part</th><th class="right">Qty</th><th class="right">Unit</th><th class="right">Total</th><th>Placed</th><th>ETA</th><th class="center">Status</th>${canEdit()?'<th></th>':''}</tr></thead><tbody>
+   ${pos.map(p=>`<tr><td><b>${p.id}</b></td><td>${p.vendor||''}</td><td>${p.part||p.partId}</td><td class="right">${p.qty}</td><td class="right">${money2(p.unit)}</td><td class="right">${money(p.total)}</td><td>${p.placed}</td><td>${p.eta||''}</td><td class="center"><span class="badge ${p.status==='Open'?'b-low':'b-ok'}">${p.status}</span></td>${canEdit()?`<td class="right">${p.status==='Open'?`<button class="btn sm sec" onclick="receivePO('${p.id}')">Receive</button>`:''}</td>`:''}</tr>`).join('')}
+   </tbody></table>
+   <p class="muted" style="font-size:12px;margin-top:8px">Receiving a PO adds quantity to inventory, updates valuation, and (in production) posts a bill to QuickBooks.</p></div>`;
+}
+async function receivePO(id){
+  try{await api('/api/po/'+id+'/receive',{method:'POST'});toast(id+' received — inventory updated');viewPOs();}catch(e){toast(e.message);}
+}
+
+// ============ PHASE 4: ACCOUNTING (QuickBooks) + OCR INVOICES ============
+async function viewAccounting(){
+  $('pTitle').textContent='Accounting';$('pSub').textContent='QuickBooks sync — invoices on ship, bills on PO receipt; OCR invoice intake updates costs';
+  $('pActions').innerHTML=canEdit()?`<button class="btn" onclick="syncQB()">⟳ Sync QuickBooks</button>`:'';
+  const [acct,invoices,custs]=await Promise.all([api('/api/accounting'),api('/api/invoices'),api('/api/customers').catch(()=>[])]);
+  const t=acct.totals;
+  const modeBadge=acct.mode==='quickbooks'?(acct.configured?'<span class="badge b-ok">QuickBooks connected</span>':'<span class="badge b-low">QuickBooks selected — credentials pending</span>'):'<span class="badge b-buy">Simulated mode</span>';
+  // vendor list for scan
+  const vendors=[...new Map((await api('/api/parts')).map(p=>[p.vendor,p.vendor])).keys()].filter(Boolean);
+  $('content').innerHTML=`
+   <div class="banner">${modeBadge} &nbsp; Invoices post automatically when an order ships; bills post when a PO is received. ${acct.mode==='simulated'?'Set <code>ACCOUNTING_MODE=quickbooks</code> + QBO credentials to push live.':''}</div>
+   <div class="grid g4" style="margin-bottom:16px">
+     ${kpi('Invoices posted',t.invoices,money(t.invoiceAmt)+' billed to customers')}
+     ${kpi('Bills posted',t.bills,money(t.billAmt)+' owed to vendors')}
+     ${kpi('Net (AR − AP)',money(t.invoiceAmt-t.billAmt),'invoices minus bills')}
+     ${kpi('Pending sync',t.pending,acct.mode==='simulated'?'simulated (local)':'awaiting QuickBooks')}
+   </div>
+   <div class="split">
+     <div class="card"><h3>Scan / upload vendor invoice (OCR)</h3>
+       <p class="muted" style="font-size:12px">Simulated OCR reads line items and updates part unit costs — which flows into BOM cost and inventory valuation, and posts a vendor bill.</p>
+       <div class="field"><label>Vendor</label><select id="scVendor">${vendors.map(v=>`<option>${v}</option>`).join('')}</select></div>
+       <button class="btn ${canEdit()?'':'sec'}" ${canEdit()?'':'disabled'} onclick="scanInvoice()">📄 Scan invoice</button>
+       <div id="scanOut" style="margin-top:12px"></div>
+     </div>
+     <div class="card"><h3>Recent vendor invoices</h3>
+       <table><thead><tr><th>Invoice</th><th>Vendor</th><th class="right">Lines</th><th class="right">Total</th><th class="center">Status</th></tr></thead><tbody>
+       ${invoices.length?invoices.map(i=>`<tr><td><b>${i.id}</b></td><td>${i.vendor||''}</td><td class="right">${i.lines}</td><td class="right">${money(i.total)}</td><td class="center"><span class="badge b-ok">${i.status}</span></td></tr>`).join(''):'<tr><td colspan="5" class="muted">No invoices scanned yet.</td></tr>'}
+       </tbody></table>
+     </div>
+   </div>
+   <div class="card" style="margin-top:16px"><h3>Accounting ledger (most recent)</h3>
+     <table><thead><tr><th>Type</th><th>Reference</th><th>Party</th><th class="right">Amount</th><th class="center">Mode</th><th class="center">Status</th></tr></thead><tbody>
+     ${acct.events.map(e=>`<tr><td>${e.kind==='invoice'?'<span class="badge b-ok">Invoice (AR)</span>':'<span class="badge b-low">Bill (AP)</span>'}</td><td>${e.ref||''}</td><td>${e.party||''}</td><td class="right">${money(e.amount)}</td><td class="center">${e.mode}</td><td class="center"><span class="badge ${e.status==='pending'?'b-low':'b-ok'}">${e.status}</span></td></tr>`).join('')}
+     </tbody></table>
+   </div>`;
+}
+async function syncQB(){ try{const r=await api('/api/accounting/sync',{method:'POST'});toast(r.mode==='quickbooks'?('Pushed '+r.pushed+' to QuickBooks'):'Simulated mode — '+r.pushed+' pushed (set QBO creds to go live)');viewAccounting();}catch(e){toast(e.message);} }
+async function scanInvoice(){
+  const vname=$('scVendor').value;
+  try{
+    const r=await api('/api/invoices/scan',{method:'POST',body:JSON.stringify({vendor:vname})});
+    $('scanOut').innerHTML=`<div class="banner" style="background:rgba(62,207,142,.1)">✅ ${r.id} from ${r.vendor} — ${r.lines.length} line(s), total ${money(r.total)}. Costs updated:</div>
+      <table style="margin-top:8px"><thead><tr><th>Part</th><th class="right">Old</th><th class="right">New</th></tr></thead><tbody>
+      ${r.lines.map(l=>`<tr><td>${l.partId} <span class="muted">${l.name}</span></td><td class="right">${money2(l.oldCost)}</td><td class="right">${money2(l.newCost)}</td></tr>`).join('')}</tbody></table>`;
+    toast('Invoice processed — costs & BOMs updated');
+  }catch(e){toast(e.message);}
+}
+
+// ============ PHASE 5: PEOPLE — PAYROLL, TIME OFF, OUTCOMES, WINS ============
+const TO_DAYS=['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
+async function viewTeam(){
+  $('pTitle').textContent='Team & Payroll';$('pSub').textContent='Roster, schedules and burdened payroll — these rates drive BOM labor cost';$('pActions').innerHTML='';
+  const [emps,pay]=await Promise.all([api('/api/employees'),api('/api/payroll/summary')]);
+  $('content').innerHTML=`<div class="grid g4" style="margin-bottom:16px">
+    ${kpi('Headcount',pay.headcount,'on the floor')}
+    ${kpi('Weekly payroll',money(pay.weekly),'burdened ×'+pay.burden)}
+    ${kpi('Annualized',money(pay.annualized),'run-rate')}
+    ${kpi('Avg burdened rate',money2(pay.weekly/emps.reduce((s,e)=>s+e.hoursWk,0)),'per hour')}
+   </div>
+   <div class="card"><h3>Employees</h3>
+   <table><thead><tr><th>Name</th><th>Workstation</th><th class="right">Base $/hr</th><th class="right">Hrs/wk</th><th class="right">Burdened $/hr</th><th class="right">Weekly cost</th><th>Manager</th></tr></thead><tbody>
+   ${emps.map(e=>`<tr><td><b>${e.name}</b></td><td><span class="badge b-buy">${e.workstation}</span></td><td class="right">${money2(e.baseRate)}</td><td class="right">${e.hoursWk}</td><td class="right">${money2(e.burdenedRate)}</td><td class="right">${money(e.weeklyCost)}</td><td class="muted">${e.manager||'—'}</td></tr>`).join('')}
+   </tbody></table>
+   <p class="muted" style="font-size:12px;margin-top:8px">Workstation pay rates flow into every BOM's labor cost — change the team and trailer margins update automatically.</p></div>
+   <div class="card" style="margin-top:16px"><h3>Weekly payroll by workstation</h3>
+   <table><tbody>${Object.entries(pay.byWorkstation).map(([w,c])=>`<tr><td>${w}</td><td class="right">${money(c)}</td></tr>`).join('')}</tbody></table></div>`;
+}
+
+let toEmps=[];
+async function viewTimeoff(){
+  $('pTitle').textContent='Schedule & Time Off';$('pSub').textContent='Requests route employee → direct manager → Office Manager / payroll';
+  $('pActions').innerHTML=canEdit()?`<button class="btn" onclick="openRequest()">➕ New request</button>`:'';
+  const [list,emps]=await Promise.all([api('/api/timeoff'),api('/api/employees')]);
+  toEmps=emps;
+  const canApprove=r=>isAdmin()||r.mgrId===ME.id;
+  const canProcess=()=>isAdmin()||ME.title==='Office Manager';
+  const mine=list.filter(r=>r.status==='Pending Manager'&&canApprove(r));
+  const queue=list.filter(r=>r.status==='Approved - To Payroll');
+  const badge=s=>s==='Processed'?'<span class="badge b-ok">Processed</span>':s==='Approved - To Payroll'?'<span class="badge b-buy">Approved → Payroll</span>':s==='Denied'?'<span class="badge b-below">Denied</span>':'<span class="badge b-low">Pending Manager</span>';
+  $('content').innerHTML=`
+   ${mine.length?`<div class="card"><h3>Approvals waiting on me</h3>${mine.map(r=>`<div class="banner" style="background:rgba(255,209,102,.08);display:flex;justify-content:space-between;align-items:center"><div><b>${r.emp}</b> · ${r.type} · ${r.start}${r.end!==r.start?' → '+r.end:''} · ${r.hours}h<br><span class="muted">"${r.reason}"</span></div><div style="display:flex;gap:6px"><button class="btn sm" onclick="toAct('${r.id}','approve')">Approve</button><button class="btn sm sec" onclick="toAct('${r.id}','deny')">Deny</button></div></div>`).join('')}</div>`:''}
+   ${canProcess()&&queue.length?`<div class="card" style="margin-top:16px"><h3>Payroll queue — approved, ready to process</h3><table><thead><tr><th>Req</th><th>Employee</th><th>Type</th><th class="right">Hrs</th><th>Approved by</th><th></th></tr></thead><tbody>${queue.map(r=>`<tr><td><b>${r.id}</b></td><td>${r.emp}</td><td>${r.type}</td><td class="right">${r.hours}</td><td class="muted">${r.mgrBy||''}</td><td class="right"><button class="btn sm" onclick="toAct('${r.id}','process')">Process to payroll</button></td></tr>`).join('')}</tbody></table></div>`:''}
+   <div class="card" style="margin-top:16px"><h3>Work schedules</h3>
+   <table><thead><tr><th>Employee</th>${TO_DAYS.map(d=>`<th class="center">${d}</th>`).join('')}<th class="right">Wk hrs</th><th class="right">PTO</th>${canEdit()?'<th></th>':''}</tr></thead><tbody>
+   ${emps.map(e=>`<tr><td><b>${e.name}</b><br><span class="muted" style="font-size:11px">${e.workstation}</span></td>${TO_DAYS.map(d=>{const sl=e.schedule[d];return `<td class="center" style="font-size:11px">${sl?sl[0]+'–'+sl[1]:'<span class="muted">off</span>'}</td>`;}).join('')}<td class="right">${e.weeklyHours.toFixed(1)}</td><td class="right">${e.ptoBalance}h</td>${canEdit()?`<td class="right"><button class="btn sm sec" onclick="editSched('${e.id}')">Edit</button></td>`:''}</tr>`).join('')}
+   </tbody></table></div>
+   <div class="card" style="margin-top:16px"><h3>All requests</h3><table><thead><tr><th>Req</th><th>Employee</th><th>Type</th><th>Dates</th><th class="right">Hrs</th><th class="center">Status</th><th>Manager</th><th>Payroll</th></tr></thead><tbody>
+   ${list.map(r=>`<tr><td><b>${r.id}</b></td><td>${r.emp}</td><td>${r.type}</td><td>${r.start||''}${r.end&&r.end!==r.start?' → '+r.end:''}</td><td class="right">${r.hours}</td><td class="center">${badge(r.status)}</td><td class="muted" style="font-size:11px">${r.mgrBy||'—'}</td><td class="muted" style="font-size:11px">${r.payBy||'—'}</td></tr>`).join('')}
+   </tbody></table></div>`;
+}
+async function toAct(id,action){ try{await api('/api/timeoff/'+id+'/'+action,{method:'POST'});toast(action+' done');viewTimeoff();}catch(e){toast(e.message);} }
+function openRequest(){
+  modal('New time-off request',`<div class="field"><label>Employee</label><select id="toEmp">${toEmps.map(e=>`<option value="${e.id}">${e.name} — ${e.workstation} (mgr: ${e.manager||'—'})</option>`).join('')}</select></div>
+   <div class="row"><div class="field"><label>Type</label><select id="toType"><option>PTO</option><option>Sick</option><option>Unpaid</option><option>Bereavement</option></select></div><div class="field"><label>Hours</label><input id="toHours" type="number" value="8"></div></div>
+   <div class="row"><div class="field"><label>Start</label><input id="toStart" type="date" value="2026-07-15"></div><div class="field"><label>End</label><input id="toEnd" type="date" value="2026-07-15"></div></div>
+   <div class="field"><label>Reason</label><textarea id="toReason" rows="2"></textarea></div>
+   <button class="btn" onclick="submitTO()">Submit — routes to manager</button>`);
+}
+async function submitTO(){ try{await api('/api/timeoff',{method:'POST',body:JSON.stringify({empId:$('toEmp').value,type:$('toType').value,hours:+$('toHours').value,start:$('toStart').value,end:$('toEnd').value,reason:$('toReason').value})});closeModal();toast('Submitted — routed to manager');viewTimeoff();}catch(e){toast(e.message);} }
+function editSched(id){
+  const e=toEmps.find(x=>x.id===id);
+  modal('Schedule — '+e.name,`${TO_DAYS.map(d=>{const sl=e.schedule[d]||['',''];return `<div class="row" style="align-items:center;margin-bottom:6px"><div style="flex:0 0 70px"><label style="font-size:12px"><input type="checkbox" id="sc_${d}_on" ${e.schedule[d]?'checked':''}> ${d}</label></div><div class="field" style="margin:0"><input id="sc_${d}_s" type="time" value="${sl[0]||'07:00'}"></div><div class="field" style="margin:0"><input id="sc_${d}_e" type="time" value="${sl[1]||'15:30'}"></div></div>`;}).join('')}<button class="btn" onclick="saveSched('${id}')">Save schedule</button>`);
+}
+async function saveSched(id){
+  const sched={};TO_DAYS.forEach(d=>{sched[d]=$('sc_'+d+'_on').checked?[$('sc_'+d+'_s').value,$('sc_'+d+'_e').value]:null;});
+  try{await api('/api/employees/'+id+'/schedule',{method:'PATCH',body:JSON.stringify({schedule:sched})});closeModal();toast('Schedule updated');viewTimeoff();}catch(e){toast(e.message);}
+}
+
+async function viewOutcomes(){
+  $('pTitle').textContent='Goals & Outcomes';$('pSub').textContent='Manager-set day/week/month outcomes + your own personal goals';$('pActions').innerHTML='';
+  const [users,mine,goals]=await Promise.all([api('/api/users'),api('/api/outcomes/'+ME.id),api('/api/selfgoals')]);
+  const reports=users.filter(u=>u.manager_id===ME.id);
+  const manageable=isAdmin()?users.filter(u=>u.id!==ME.id):reports;
+  const oc=(l,t,c)=>`<div class="card" style="border-left:3px solid ${c}"><h3 style="color:${c}">${l}</h3><div style="min-height:36px">${t||'<span class="muted">Not set</span>'}</div></div>`;
+  let html=`<div class="card"><h3>My expected outcomes</h3><div style="margin-bottom:6px"><span class="pill ${ME.role}">${ME.title||ME.role}</span></div>
+    <div class="grid g4" style="grid-template-columns:repeat(3,1fr)">${oc('Today',mine.day,'#ff7a18')}${oc('This week',mine.week,'#5aa9ff')}${oc('This month',mine.month,'#3ecf8e')}</div>
+    <p class="muted" style="font-size:12px;margin-top:6px">${mine.set_by?'Set by '+mine.set_by:'Awaiting your manager.'}</p></div>
+   <div class="card" style="margin-top:16px"><h3>My personal goals</h3>
+    ${goals.length?goals.map(g=>`<div style="display:flex;align-items:center;gap:10px;padding:7px;border:1px solid var(--line);border-radius:8px;margin-bottom:6px"><span onclick="toggleGoal('${g.id}')" style="cursor:pointer;font-size:18px">${g.done?'✅':'⬜'}</span><div style="flex:1;${g.done?'text-decoration:line-through;color:var(--muted)':''}">${g.text} <span class="muted" style="font-size:11px">· ${g.horizon}</span></div><button class="btn sm sec" onclick="delGoal('${g.id}')">✕</button></div>`).join(''):'<p class="muted">No personal goals yet.</p>'}
+    <div class="row" style="margin-top:8px"><div class="field" style="flex:3;margin:0"><input id="sgText" placeholder="e.g. Master the powder-coat line"></div><div class="field" style="flex:1;margin:0"><select id="sgH"><option>Day</option><option>Week</option><option selected>Month</option><option>Quarter</option><option>Year</option></select></div><button class="btn" onclick="addGoal()">Add</button></div></div>`;
+  if(manageable.length){
+    html+=`<div class="card" style="margin-top:16px"><h3>${isAdmin()?'Set outcomes — team':'My team — set their outcomes'}</h3>
+     ${manageable.map(u=>`<div style="border:1px solid var(--line);border-radius:10px;padding:12px;margin-bottom:10px"><div style="display:flex;justify-content:space-between;margin-bottom:8px"><b>${u.name}</b> <button class="btn sm" onclick="saveOut('${u.id}')">Save</button></div>
+       <div class="row"><div class="field" style="margin:0"><label>Daily</label><textarea id="o_${u.id}_d" rows="2"></textarea></div><div class="field" style="margin:0"><label>Weekly</label><textarea id="o_${u.id}_w" rows="2"></textarea></div><div class="field" style="margin:0"><label>Monthly</label><textarea id="o_${u.id}_m" rows="2"></textarea></div></div></div>`).join('')}</div>`;
+  }
+  $('content').innerHTML=html;
+  // prefill manageable outcomes
+  for(const u of manageable){ const o=await api('/api/outcomes/'+u.id); if($('o_'+u.id+'_d')){$('o_'+u.id+'_d').value=o.day||'';$('o_'+u.id+'_w').value=o.week||'';$('o_'+u.id+'_m').value=o.month||'';} }
+}
+async function addGoal(){ const t=$('sgText').value.trim();if(!t)return; try{await api('/api/selfgoals',{method:'POST',body:JSON.stringify({text:t,horizon:$('sgH').value})});toast('Goal added 💪');viewOutcomes();}catch(e){toast(e.message);} }
+async function toggleGoal(id){ await api('/api/selfgoals/'+id+'/toggle',{method:'POST'});viewOutcomes(); }
+async function delGoal(id){ await api('/api/selfgoals/'+id,{method:'DELETE'});viewOutcomes(); }
+async function saveOut(uid){ try{await api('/api/users/'+uid+'/outcomes',{method:'PATCH',body:JSON.stringify({day:$('o_'+uid+'_d').value,week:$('o_'+uid+'_w').value,month:$('o_'+uid+'_m').value})});toast('Outcomes set');}catch(e){toast(e.message);} }
+
+let winFilter='All', winMeta={};
+async function viewWins(){
+  $('pTitle').textContent='Wins & Celebrations';$('pSub').textContent='Celebrate individual, workstation and department wins';
+  const canCel=ME.title!=='External Viewer';
+  $('pActions').innerHTML=canCel?`<button class="btn" onclick="postWin()">🎉 Post a win</button>`:'';
+  const d=await api('/api/wins');winMeta=d;
+  const REACTIONS=['🎉','🙌','💪','🔥','👏'];
+  const wins=winFilter==='All'?d.wins:d.wins.filter(w=>w.scope===winFilter.toLowerCase());
+  const cheers=d.wins.reduce((s,w)=>s+w.cheers,0);
+  $('content').innerHTML=`<div class="banner">🎉 Recognize a teammate, a workstation, or a whole department. ${canCel?'React to give a cheer!':'(External viewers can read but not post.)'}</div>
+   <div class="grid g4" style="grid-template-columns:repeat(3,1fr);margin-bottom:14px">${kpi('Wins',d.wins.length,'on the wall')}${kpi('Total cheers',cheers,'team recognition')}${kpi('Departments',d.departments.length,'tracked')}</div>
+   <div class="tabs">${['All','Individual','Workstation','Department'].map(t=>`<button class="${winFilter===t?'active':''}" onclick="winFilter='${t}';viewWins()">${t}</button>`).join('')}</div>
+   ${wins.map(w=>{const sb=w.scope==='individual'?'b-buy':w.scope==='workstation'?'b-mfg':'b-ok';return `<div class="card" style="margin-bottom:12px;border-left:3px solid var(--accent)">
+     <div style="font-size:15px;font-weight:700">🏆 ${w.title}</div>
+     <div style="margin:4px 0"><span class="badge ${sb}">${w.scope}</span> ${w.targetLabel}</div>
+     ${w.detail?`<div class="muted" style="font-size:13px">${w.detail}</div>`:''}
+     <div class="muted" style="font-size:11px;margin-top:5px">Posted by ${w.by} · ${w.on}</div>
+     <div style="display:flex;gap:6px;margin-top:9px;flex-wrap:wrap">${REACTIONS.map(e=>{const n=(w.reactions[e]||[]).length;const me=(w.reactions[e]||[]).includes(ME.id);return `<button class="btn sm ${me?'':'sec'}" ${canCel?'':'disabled'} onclick="reactWin('${w.id}','${e}')">${e} ${n||''}</button>`;}).join('')}</div>
+   </div>`).join('')||'<div class="card"><p class="muted">No wins yet.</p></div>'}`;
+}
+async function reactWin(id,emoji){ try{await api('/api/wins/'+id+'/react',{method:'POST',body:JSON.stringify({emoji})});viewWins();}catch(e){toast(e.message);} }
+function postWin(){
+  modal('Post a win 🎉',`<div class="row"><div class="field"><label>Type</label><select id="wScope" onchange="winTargets()"><option value="individual">Individual</option><option value="workstation">Workstation</option><option value="department">Department</option></select></div><div class="field"><label>Who / where</label><select id="wTarget"></select></div></div>
+   <div class="field"><label>Headline</label><input id="wTitle" placeholder="e.g. Shipped 10 trailers with zero defects"></div>
+   <div class="field"><label>Details</label><textarea id="wDetail" rows="2"></textarea></div>
+   <button class="btn" onclick="submitWin()">🎉 Celebrate it</button>`);
+  winTargets();
+}
+async function winTargets(){
+  const scope=$('wScope').value;let opts='';
+  if(scope==='individual'){const us=await api('/api/users');opts=us.filter(u=>u.title!=='External Viewer').map(u=>`<option value="${u.id}">${u.name} — ${u.title||''}</option>`).join('');}
+  else if(scope==='workstation')opts=(winMeta.workstations||[]).map(w=>`<option>${w}</option>`).join('');
+  else opts=(winMeta.departments||[]).map(d=>`<option>${d}</option>`).join('');
+  $('wTarget').innerHTML=opts;
+}
+async function submitWin(){ const title=$('wTitle').value.trim();if(!title){toast('Add a headline');return;} try{await api('/api/wins',{method:'POST',body:JSON.stringify({scope:$('wScope').value,target:$('wTarget').value,title,detail:$('wDetail').value})});closeModal();toast('🎉 Win posted!');viewWins();}catch(e){toast(e.message);} }
+
+// ============ PHASE 6: FORECASTING / SCENARIO / NOTIFICATIONS ============
+function sparkline(hist,fc){
+  const all=[...hist,...fc];const max=Math.max(1,...all);const W=240,H=44,n=all.length;
+  const pts=all.map((v,i)=>`${(i/(n-1)*W).toFixed(1)},${(H-v/max*H).toFixed(1)}`).join(' ');
+  const split=((hist.length-1)/(n-1)*W).toFixed(1);
+  return `<svg width="${W}" height="${H}" style="overflow:visible"><polyline points="${pts}" fill="none" stroke="#5aa9ff" stroke-width="2"/><line x1="${split}" y1="0" x2="${split}" y2="${H}" stroke="var(--line)" stroke-dasharray="3 3"/></svg>`;
+}
+async function viewForecast(){
+  $('pTitle').textContent='Forecasting & Planning';$('pSub').textContent='ML demand forecast, working-capital outlook, and what-if scenarios';$('pActions').innerHTML='';
+  const [fc,wc]=await Promise.all([api('/api/forecast?horizon=90'),api('/api/workingcapital?horizon=30')]);
+  $('content').innerHTML=`
+   <div class="banner">🔮 Demand forecast = least-squares trend over a weekly demand series, retrained on the current order book + production capacity. Projected next ${fc.weeks} weeks: <b>${fc.totalUnits}</b> units · <b>${money(fc.totalRevenue)}</b>.</div>
+   <div class="card"><h3>Demand forecast by trailer type (90 days)</h3>
+   <table><thead><tr><th>Type</th><th>Trend (history → forecast)</th><th class="right">Trend/wk</th><th class="right">Proj. units</th><th class="right">Proj. revenue</th><th class="right">Confidence</th></tr></thead><tbody>
+   ${fc.categories.map(c=>`<tr><td><b>${c.category}</b></td><td>${sparkline(c.history,c.forecast)}</td><td class="right" style="color:${c.trendPctPerWeek>=0?'var(--green)':'var(--red)'}">${c.trendPctPerWeek>=0?'+':''}${c.trendPctPerWeek.toFixed(1)}%</td><td class="right">${c.projectedUnits}</td><td class="right">${money(c.projectedRevenue)}</td><td class="right">${c.confidence}%</td></tr>`).join('')}
+   </tbody></table>
+   <p class="muted" style="font-size:12px">Blue = weekly demand; dashed line splits actual history from forecast. Confidence is the model fit (R²).</p></div>
+
+   <div class="card" style="margin-top:16px"><h3>Working-capital outlook (30 days)</h3>
+   <table><tbody>
+   <tr><td>Inventory on hand</td><td class="right">${money(wc.inventory)}</td></tr>
+   <tr><td>Open POs (committed)</td><td class="right">−${money(wc.openPO)}</td></tr>
+   <tr><td>Predicted new POs</td><td class="right">−${money(wc.predictedPO)}</td></tr>
+   <tr><td>Payroll (horizon)</td><td class="right">−${money(wc.payroll)}</td></tr>
+   <tr><td>Customer deposits held</td><td class="right">${money(wc.deposits)}</td></tr>
+   <tr style="border-top:1px solid var(--line)"><td><b>Projected 30-day cash need</b></td><td class="right" style="color:${wc.cashNeed>0?'var(--red)':'var(--green)'}"><b>${money(wc.cashNeed)}</b></td></tr>
+   </tbody></table></div>
+
+   <div class="card" style="margin-top:16px"><h3>Scenario planner</h3>
+   <div class="row">
+     <div class="field"><label>Demand</label><select id="scD"><option value="1">As-is</option><option value="1.25">+25%</option><option value="1.5">+50%</option><option value="2">Double</option><option value="0.75">−25%</option></select></div>
+     <div class="field"><label>Material cost</label><select id="scM"><option value="1">As-is</option><option value="1.15">+15%</option><option value="1.3">+30%</option><option value="0.9">−10%</option></select></div>
+     <div class="field"><label>Add welders</label><select id="scW"><option value="0">+0</option><option value="1">+1</option><option value="2">+2</option></select></div>
+     <div class="field"><label>Horizon</label><select id="scH"><option value="30">30 days</option><option value="60">60 days</option><option value="90">90 days</option></select></div>
+   </div>
+   <button class="btn" onclick="runScenario()">Run projection</button>
+   <div id="scOut" style="margin-top:14px"></div></div>`;
+}
+async function runScenario(){
+  const body={demandMult:+$('scD').value,materialMult:+$('scM').value,addWelders:+$('scW').value,horizonDays:+$('scH').value};
+  const r=await api('/api/scenario',{method:'POST',body:JSON.stringify(body)});
+  $('scOut').innerHTML=`<table><tbody>
+   <tr><td>Projected revenue (backlog)</td><td class="right">${money(r.revenue)}</td></tr>
+   <tr><td>Projected COGS</td><td class="right">${money(r.cogs)}</td></tr>
+   <tr><td>Gross margin</td><td class="right">${(r.grossMargin*100).toFixed(1)}%</td></tr>
+   <tr><td>Added weld capacity</td><td class="right">${r.extraWeldHrsDay} hrs/day</td></tr>
+   <tr><td>Payroll over horizon</td><td class="right">${money(r.payroll)}</td></tr>
+   <tr><td>Purchasing need</td><td class="right">${money(r.purchasingNeed)}</td></tr>
+   <tr style="border-top:1px solid var(--line)"><td><b>Projected peak cash need</b></td><td class="right"><b>${money(r.peakCashNeed)}</b></td></tr>
+   </tbody></table><div class="banner" style="margin-top:10px">💡 ${r.recommendation}</div>`;
+}
+
+async function viewNotify(){
+  $('pTitle').textContent='Notifications';$('pSub').textContent='SMS — auto-texts on order status + manual alerts';$('pActions').innerHTML='';
+  const d=await api('/api/notifications');
+  const modeBadge=d.mode==='twilio'?(d.configured?'<span class="badge b-ok">Twilio connected</span>':'<span class="badge b-low">Twilio selected — credentials pending</span>'):'<span class="badge b-buy">Simulated mode</span>';
+  $('content').innerHTML=`<div class="banner">${modeBadge} &nbsp; Customers are auto-texted when an order changes stage. ${d.mode==='simulated'?'Set <code>SMS_MODE=twilio</code> + Twilio credentials to send real texts.':''}</div>
+   ${canEdit()?`<div class="card"><h3>Send a message</h3><div class="row"><div class="field" style="flex:1"><label>Recipient</label><input id="nTo" placeholder="Customer / Purchasing / name"></div><div class="field" style="flex:2"><label>Message</label><input id="nBody" placeholder="Type a message"></div></div><button class="btn" onclick="sendNotif()">Send SMS</button></div>`:''}
+   <div class="card" style="margin-top:16px"><h3>Message log</h3>
+   <table><thead><tr><th>When</th><th>To</th><th>Message</th><th class="center">Kind</th><th class="center">Status</th></tr></thead><tbody>
+   ${d.items.map(n=>`<tr><td class="muted" style="font-size:11px">${(n.ts||'').toString().slice(0,16).replace('T',' ')}</td><td>${n.recipient||''}</td><td>${n.body}</td><td class="center"><span class="badge ${n.kind==='alert'?'b-low':'b-buy'}">${n.kind}</span></td><td class="center"><span class="badge b-ok">${n.status}</span></td></tr>`).join('')}
+   </tbody></table></div>`;
+}
+async function sendNotif(){ const recipient=$('nTo').value.trim(),body=$('nBody').value.trim();if(!body){toast('Enter a message');return;} try{await api('/api/notifications/send',{method:'POST',body:JSON.stringify({recipient,body,kind:'manual'})});toast('Message sent');viewNotify();}catch(e){toast(e.message);} }
+
+loadAccts();

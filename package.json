@@ -1,0 +1,22 @@
+{
+  "name": "built-trailers-phase1",
+  "version": "1.0.0",
+  "description": "Built Trailers — Phase 1: single source of truth (auth/roles, parts master, BOMs, inventory with live valuation).",
+  "type": "module",
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "start": "node src/server.js",
+    "init-db": "node db/seed.js",
+    "build": "node db/seed.js",
+    "dev": "node src/server.js",
+    "verify": "node db/verify.js"
+  },
+  "dependencies": {
+    "@electric-sql/pglite": "^0.2.12",
+    "bcryptjs": "^2.4.3",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "jsonwebtoken": "^9.0.2",
+    "pg": "^8.12.0"
+  }
+}
