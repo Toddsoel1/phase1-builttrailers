@@ -5,8 +5,10 @@ services:
     name: built-trailers-phase1
     runtime: node
     plan: starter            # free/low-cost tier; upgrade as needed
-    buildCommand: npm install && npm run init-db
-    startCommand: npm start
+    buildCommand: npm install
+    # Seed runs at startup, when DATABASE_URL is connected (Render does not expose it at build
+    # time). The seed is idempotent — it only loads data on first run, then no-ops.
+    startCommand: npm run init-db && npm start
     healthCheckPath: /api/health
     envVars:
       - key: DATABASE_URL

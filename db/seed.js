@@ -56,9 +56,15 @@ function makeUsername(name, seen) {
 async function run() {
   const kind = await initDb();
   console.log('DB:', kind);
-  // schema
+  // schema (idempotent)
   for (const stmt of schema.split(/;\s*\n/).map(s => s.trim()).filter(Boolean)) {
     await q(stmt + ';');
+  }
+  // Idempotency guard: if data already exists, do not wipe/reseed (safe to run on every deploy).
+  const existing = await q('SELECT count(*)::int AS c FROM app_user').catch(() => ({ rows: [{ c: 0 }] }));
+  if (Number(existing.rows[0].c) > 0) {
+    console.log(`Already seeded (${existing.rows[0].c} users) — skipping reseed.`);
+    process.exit(0);
   }
   // clear (children first)
   for (const t of ['notification', 'win_reaction', 'win', 'self_goal', 'user_outcome', 'time_off', 'employee',
