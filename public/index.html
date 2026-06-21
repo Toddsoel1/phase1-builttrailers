@@ -172,9 +172,417 @@ function go(p){page=p;render();}
 async function render(){
   renderNav();
   const map={dashboard:viewDash,orders:viewOrders,neworder:viewNewOrder,customers:viewCustomers,parts:viewParts,predict:viewPredict,pos:viewPOs,boms:viewBoms,inventory:viewInv,accounting:viewAccounting,team:viewTeam,timeoff:viewTimeoff,outcomes:viewOutcomes,wins:viewWins,forecast:viewForecast,notify:viewNotify,support:viewSupport,users:viewUsers};
-  try{ await (map[page]||viewDash)(); }catch(e){ $('content').innerHTML=`<div class="card">Error: ${e.message}</div>`; }
+  try{
+    await (map[page]||viewDash)();
+    const pa=$('pActions');
+    if(pa&&!pa.querySelector('.help-btn')){
+      pa.insertAdjacentHTML('beforeend',`<button class="btn sm sec help-btn" onclick="showHelp('${page}')" title="How to use this section" style="margin-left:6px">? Help</button>`);
+    }
+  }catch(e){ $('content').innerHTML=`<div class="card">Error: ${e.message}</div>`; }
 }
 function kpi(t,v,s){return `<div class="card kpi"><h3>${t}</h3><div class="v">${v}</div><div class="s">${s}</div></div>`;}
+
+// ── In-app Help System ──────────────────────────────────────────────────────
+const HELP={
+  dashboard:{title:'📊 Dashboard',body:`
+    <p>Your daily command center. Everything here is <strong>read-only</strong> — it's a live snapshot of the business right now.</p>
+    <h4 style="color:var(--accent);margin:14px 0 6px">What you're looking at</h4>
+    <ul>
+      <li><strong>Open Orders</strong> — count of orders at each stage (Quote → Shipped)</li>
+      <li><strong>Inventory Value</strong> — total on-hand parts × unit cost</li>
+      <li><strong>Cash Flow</strong> — invoiced (AR) vs bills owed (AP)</li>
+      <li><strong>Pending Approvals</strong> — POs and BOM changes waiting for sign-off</li>
+      <li><strong>Recent Wins</strong> — latest team recognition posts</li>
+    </ul>
+    <h4 style="color:var(--accent);margin:14px 0 6px">Tips</h4>
+    <ul>
+      <li>Use the nav on the left to act on anything you see here</li>
+      <li>Numbers refresh each time you navigate back to this page</li>
+      <li>Red numbers = something needs attention (short inventory, pending approvals)</li>
+    </ul>`},
+  orders:{title:'📋 Orders & Fulfillment',body:`
+    <p>Tracks every sale from first quote through final shipment.</p>
+    <h4 style="color:var(--accent);margin:14px 0 6px">Order stages</h4>
+    <ol>
+      <li><strong>Quote</strong> — order entered, not yet confirmed by customer</li>
+      <li><strong>Confirmed</strong> — customer committed, goes on the production schedule</li>
+      <li><strong>In Production</strong> — trailer is being built</li>
+      <li><strong>Ready / Shipped</strong> — complete; invoice auto-posts to QuickBooks; customer gets SMS if opted in</li>
+    </ol>
+    <h4 style="color:var(--accent);margin:14px 0 6px">How to advance an order</h4>
+    <ol>
+      <li>Click the order row to expand it</li>
+      <li>Click the next stage button in the detail panel</li>
+      <li>The stage badge updates instantly</li>
+    </ol>
+    <h4 style="color:var(--accent);margin:14px 0 6px">Parts availability check</h4>
+    <p>The expanded order panel shows a BOM breakdown — green = enough on hand, red = shortage. Address shortages via Predictive Ordering before advancing to In Production.</p>
+    <h4 style="color:var(--accent);margin:14px 0 6px">Who can do what</h4>
+    <ul>
+      <li><strong>Viewer</strong> — read-only, see all orders and details</li>
+      <li><strong>Editor / Admin</strong> — create orders, advance stages, add notes</li>
+    </ul>`},
+  neworder:{title:'➕ New Order',body:`
+    <p>Create a new sales order in three steps.</p>
+    <h4 style="color:var(--accent);margin:14px 0 6px">Step-by-step</h4>
+    <ol>
+      <li><strong>Select dealer / customer</strong> — only active, authorized accounts appear. If a customer is missing, add them in Customers &amp; Dealers first.</li>
+      <li><strong>Select trailer model</strong> — the list filters to models that customer is authorized to order. If a model is greyed out or missing, go to Customers &amp; Dealers and authorize that type for this account.</li>
+      <li><strong>Set quantity, delivery date, and optional notes</strong> → click <strong>Create Order</strong></li>
+    </ol>
+    <p>The new order starts at <strong>Quote</strong> stage. Move it to Confirmed once the customer commits.</p>
+    <h4 style="color:var(--accent);margin:14px 0 6px">Common problems</h4>
+    <ul>
+      <li><em>Customer not in list</em> → add them in Customers &amp; Dealers</li>
+      <li><em>Model not available</em> → authorize that trailer type for the customer first</li>
+      <li><em>Can't see this section</em> → your job title needs the "New Order" section enabled by an admin</li>
+    </ul>`},
+  customers:{title:'🏬 Customers & Dealers',body:`
+    <p>Manages every account that can place orders — both dealers and retail customers.</p>
+    <h4 style="color:var(--accent);margin:14px 0 6px">Adding a customer</h4>
+    <ol>
+      <li>Click <strong>➕ Add customer</strong></li>
+      <li>Enter name, contact name, phone, and type (Dealer or Retail)</li>
+      <li>Save — they now appear in the New Order customer list</li>
+    </ol>
+    <h4 style="color:var(--accent);margin:14px 0 6px">Authorizing trailer types</h4>
+    <p>Each customer can only order trailer models you authorize. On their row, click the trailer type chips to toggle authorization (highlighted = authorized). This controls what appears in the New Order form for that account.</p>
+    <h4 style="color:var(--accent);margin:14px 0 6px">SMS consent</h4>
+    <p>Before a customer can receive text notifications (order stage updates), you must record their phone number and SMS consent. Either:</p>
+    <ul>
+      <li>Admin records consent here with a phone number</li>
+      <li>Or the customer texts START to +1 (435) 900-8198 themselves</li>
+    </ul>
+    <h4 style="color:var(--accent);margin:14px 0 6px">Customer types</h4>
+    <ul>
+      <li><strong>Dealer</strong> — buys in volume, B2B relationship, shown in blue</li>
+      <li><strong>Retail</strong> — individual buyer, shown in orange</li>
+    </ul>`},
+  parts:{title:'📦 Parts Master',body:`
+    <p>The master list of every component used in production. Part costs here drive BOM cost rollup and inventory valuation everywhere in the app.</p>
+    <h4 style="color:var(--accent);margin:14px 0 6px">Part types</h4>
+    <ul>
+      <li><strong>P (Purchase)</strong> — bought from a vendor; has a vendor and unit cost</li>
+      <li><strong>M (Make)</strong> — manufactured in-house; cost comes from its own sub-BOM</li>
+    </ul>
+    <h4 style="color:var(--accent);margin:14px 0 6px">Key fields</h4>
+    <ul>
+      <li><strong>Unit cost</strong> — what one unit costs; update this when vendor prices change</li>
+      <li><strong>On hand</strong> — current inventory quantity; updates automatically when POs are received</li>
+      <li><strong>Reorder point</strong> — MRP alerts when on_hand drops below this</li>
+      <li><strong>Cushion</strong> — buffer above the reorder point before MRP triggers a recommendation</li>
+    </ul>
+    <h4 style="color:var(--accent);margin:14px 0 6px">Updating a cost</h4>
+    <ol>
+      <li>Find the part in the table</li>
+      <li>Click its row to edit</li>
+      <li>Update <strong>Unit cost</strong> → Save</li>
+    </ol>
+    <p>Alternatively, scan a vendor invoice in Accounting — the OCR auto-updates costs from the invoice line items.</p>
+    <h4 style="color:var(--accent);margin:14px 0 6px">Status badges</h4>
+    <ul>
+      <li><span style="background:#2d5a2d;color:#4caf50;padding:1px 6px;border-radius:4px;font-size:11px">OK</span> — on hand ≥ reorder + cushion</li>
+      <li><span style="background:#5a2d2d;color:#f44336;padding:1px 6px;border-radius:4px;font-size:11px">LOW</span> — on hand below reorder point</li>
+    </ul>`},
+  predict:{title:'🤖 Predictive Ordering (MRP)',body:`
+    <p>Material Requirements Planning — calculates what to buy and how much, based on open orders and inventory levels.</p>
+    <h4 style="color:var(--accent);margin:14px 0 6px">How MRP calculates</h4>
+    <p>For each part: <strong>Total demand</strong> (open orders × BOM qty) − <strong>On hand</strong> − <strong>Cushion</strong> = <strong>Recommended order qty</strong></p>
+    <h4 style="color:var(--accent);margin:14px 0 6px">Reading the table</h4>
+    <ul>
+      <li><strong>On Hand</strong> — current inventory</li>
+      <li><strong>Need</strong> — total required to fulfill all open orders</li>
+      <li><strong>Suggest</strong> — recommended PO quantity</li>
+      <li>Red row = already below reorder point right now</li>
+      <li>Orange row = will go short when open orders are fulfilled</li>
+    </ul>
+    <h4 style="color:var(--accent);margin:14px 0 6px">Creating a PO from recommendations</h4>
+    <ol>
+      <li>Check the boxes next to parts you want to order</li>
+      <li>Click <strong>Create PO from selection</strong></li>
+      <li>Review the draft PO (adjust quantities or prices if needed)</li>
+      <li>Submit — it enters the approval workflow if over the threshold</li>
+    </ol>
+    <h4 style="color:var(--accent);margin:14px 0 6px">Tips</h4>
+    <ul>
+      <li>MRP only uses confirmed + in-production orders — quotes don't affect calculations</li>
+      <li>If a part has no BOM association it won't appear here — add it to the relevant BOM first</li>
+    </ul>`},
+  pos:{title:'🧾 Purchase Orders',body:`
+    <p>Full lifecycle for ordering parts from vendors: Draft → Pending Approval → Approved → Received.</p>
+    <h4 style="color:var(--accent);margin:14px 0 6px">Creating a PO</h4>
+    <ol>
+      <li>Click <strong>+ New PO</strong></li>
+      <li>Select vendor (must be approved — new vendors need their own approval first)</li>
+      <li>Add line items: part + quantity + unit price</li>
+      <li>Click <strong>Submit</strong></li>
+    </ol>
+    <h4 style="color:var(--accent);margin:14px 0 6px">Approval workflow</h4>
+    <p>If the PO total exceeds a configured dollar threshold, it routes to the assigned approver(s) in sequence.</p>
+    <ul>
+      <li>The approver gets an app notification (and SMS if enabled)</li>
+      <li>They click Approve or Reject from the POs page or their notification</li>
+      <li>Multi-step: each approver in the chain must approve before the PO moves forward</li>
+    </ul>
+    <h4 style="color:var(--accent);margin:14px 0 6px">Receiving a PO</h4>
+    <ol>
+      <li>Open the approved PO</li>
+      <li>Click <strong>Receive</strong></li>
+      <li>On-hand inventory for each line item increments automatically</li>
+      <li>A vendor bill posts to QuickBooks</li>
+    </ol>
+    <h4 style="color:var(--accent);margin:14px 0 6px">New vendor approval</h4>
+    <p>First-time vendors require a separate approval before any PO can be placed. The vendor approval request works the same way as a PO approval — configure the approver in the approval rules settings.</p>
+    <h4 style="color:var(--accent);margin:14px 0 6px">Common issues</h4>
+    <ul>
+      <li><em>PO stuck at "Pending Approval"</em> → the specific assigned approver must act; check who is assigned in approval rules</li>
+      <li><em>Can't select vendor</em> → the vendor may need approval first</li>
+    </ul>`},
+  boms:{title:'🧩 BOMs & Cost',body:`
+    <p>Bill of Materials for each trailer model — the parts and labor that make up every unit's cost.</p>
+    <h4 style="color:var(--accent);margin:14px 0 6px">Reading the BOM</h4>
+    <ul>
+      <li><strong>Parts table</strong> — each part, quantity per unit, unit cost (live from Parts Master), and extended cost (qty × unit cost)</li>
+      <li><strong>Labor routing</strong> — each workstation, hours per unit, $/hr rate, and extended cost</li>
+      <li><strong>KPI cards at top</strong> — Material cost, Labor cost, Total cost per unit, Gross margin %</li>
+    </ul>
+    <h4 style="color:var(--accent);margin:14px 0 6px">Proposing a BOM change (requires accounting approval)</h4>
+    <ol>
+      <li>Select the model from the dropdown at the top</li>
+      <li>Change a quantity in the parts table, or click <strong>+ Propose Part</strong> / <strong>+ Propose Step</strong></li>
+      <li>A <strong>Pending Change</strong> record is created — the live BOM is <em>not</em> changed yet</li>
+      <li>An accounting user goes to the <strong>Accounting</strong> section and clicks <strong>✓ Approve</strong></li>
+      <li>After approval, the BOM and cost rollup update immediately</li>
+    </ol>
+    <h4 style="color:var(--accent);margin:14px 0 6px">Cost sources</h4>
+    <ul>
+      <li>Part costs come from the Parts Master unit cost — update them there</li>
+      <li>Labor rates are set per workstation on each labor step</li>
+      <li>If the employee roster has payroll data, rates are also informed by average burdened wages per workstation</li>
+    </ul>
+    <h4 style="color:var(--accent);margin:14px 0 6px">Tips</h4>
+    <ul>
+      <li>You can approve your own proposed changes from the BOM page if you have accounting access</li>
+      <li>Multiple pending changes can stack — they apply in order when approved</li>
+      <li>Rejected changes are logged but not applied</li>
+    </ul>`},
+  inventory:{title:'📈 Inventory Value',body:`
+    <p>A read-only financial snapshot of all parts currently on hand.</p>
+    <h4 style="color:var(--accent);margin:14px 0 6px">What's shown</h4>
+    <ul>
+      <li><strong>Total inventory value</strong> — sum of (on_hand × unit_cost) for every part</li>
+      <li><strong>Parts below reorder</strong> — how many SKUs need attention</li>
+      <li><strong>Purchased vs Manufactured</strong> split</li>
+      <li><strong>Top 15 parts by value</strong> — where your money is concentrated</li>
+    </ul>
+    <h4 style="color:var(--accent);margin:14px 0 6px">How to use it</h4>
+    <ul>
+      <li>Review monthly to understand working capital tied up in inventory</li>
+      <li>Use the top-15 list to prioritize which parts to audit or reorder carefully</li>
+      <li>If a value looks wrong: check the part's unit cost in Parts Master and on_hand quantity</li>
+    </ul>
+    <p>On-hand quantities increase when POs are received and decrease when orders are built. Costs update when Parts Master unit costs change or vendor invoices are scanned.</p>`},
+  accounting:{title:'💵 Accounting',body:`
+    <p>QuickBooks Online integration and financial operations hub.</p>
+    <h4 style="color:var(--accent);margin:14px 0 6px">What happens automatically</h4>
+    <ul>
+      <li>Order advances to <strong>Ready/Shipped</strong> → invoice posts to QB (customer billed)</li>
+      <li>PO is <strong>Received</strong> → vendor bill posts to QB (accounts payable)</li>
+    </ul>
+    <h4 style="color:var(--accent);margin:14px 0 6px">BOM Change Requests</h4>
+    <p>If there are pending BOM edits waiting for approval, they appear in the highlighted card at the top of this page. Click <strong>✓ Approve</strong> to apply a change to the live BOM, or <strong>✕ Reject</strong> to discard it.</p>
+    <h4 style="color:var(--accent);margin:14px 0 6px">Scanning a vendor invoice</h4>
+    <ol>
+      <li>Select the vendor from the dropdown</li>
+      <li>Click <strong>📄 Scan invoice</strong></li>
+      <li>The OCR reads line items, updates part unit costs in Parts Master, and posts a vendor bill</li>
+    </ol>
+    <h4 style="color:var(--accent);margin:14px 0 6px">Pulling from QuickBooks</h4>
+    <p>Use the pull buttons to import existing QB data into Built Trailers:</p>
+    <ul>
+      <li><strong>⬇ Customers</strong> — imports QB customers into Customers &amp; Dealers</li>
+      <li><strong>⬇ Parts (Items)</strong> — imports QB items into Parts Master</li>
+      <li><strong>⬇ Orders (Invoices)</strong> — imports QB invoices as shipped orders</li>
+    </ul>
+    <h4 style="color:var(--accent);margin:14px 0 6px">Connecting QuickBooks</h4>
+    <ol>
+      <li>Click <strong>Connect QuickBooks</strong> (first time) or <strong>Re-authorize</strong> (token expired)</li>
+      <li>Sign in to Intuit and grant access</li>
+      <li>QB credentials expire every 100 days — re-authorize when you see a 403 error</li>
+    </ol>
+    <h4 style="color:var(--accent);margin:14px 0 6px">Common issues</h4>
+    <ul>
+      <li><em>403 / auth error</em> → click Re-authorize and complete sign-in again</li>
+      <li><em>Simulated mode badge</em> → set ACCOUNTING_MODE=quickbooks in server environment</li>
+      <li><em>Pending events stuck</em> → click "Push pending" to retry; check QB Error Log for details</li>
+    </ul>`},
+  team:{title:'👷 Team & Payroll',body:`
+    <p>Employee roster and payroll summary.</p>
+    <h4 style="color:var(--accent);margin:14px 0 6px">Employee records</h4>
+    <p>Each employee has: name, workstation assignment, base pay rate ($/hr), hire date, and manager. The <strong>workstation</strong> field links to labor routing in BOMs — average wages per workstation inform the burdened labor rate used in cost calculations.</p>
+    <h4 style="color:var(--accent);margin:14px 0 6px">Adding an employee</h4>
+    <ol>
+      <li>Click <strong>+ Add Employee</strong></li>
+      <li>Fill in name, workstation, base rate, hire date, and who they report to</li>
+      <li>Save — they now appear in workstation reporting and payroll summary</li>
+    </ol>
+    <h4 style="color:var(--accent);margin:14px 0 6px">Payroll summary</h4>
+    <p>Shows estimated total payroll based on headcount × base rates. This is not connected to a payroll processor — it's an internal estimate for planning purposes.</p>
+    <h4 style="color:var(--accent);margin:14px 0 6px">Tips</h4>
+    <ul>
+      <li>Keep workstation names consistent with the labor step names in BOMs so cost calculations are accurate</li>
+      <li>Deactivating a user account (Users &amp; Roles) does not remove them from Team — manage separately</li>
+    </ul>`},
+  timeoff:{title:'📅 Schedule & Time Off',body:`
+    <p>Manages time-off requests and the team schedule.</p>
+    <h4 style="color:var(--accent);margin:14px 0 6px">Submitting a request (employee)</h4>
+    <ol>
+      <li>Click <strong>+ Request Time Off</strong></li>
+      <li>Select date range and leave type (Vacation, Sick, Personal)</li>
+      <li>Add a note if needed → Submit</li>
+      <li>Your manager and admin will see it in their review queue</li>
+    </ol>
+    <h4 style="color:var(--accent);margin:14px 0 6px">Approving requests (manager / admin)</h4>
+    <ol>
+      <li>Pending requests appear at the top of the page</li>
+      <li>Click <strong>Approve</strong> or <strong>Deny</strong></li>
+      <li>Approved time off appears on the team calendar</li>
+    </ol>
+    <h4 style="color:var(--accent);margin:14px 0 6px">Calendar view</h4>
+    <p>The calendar shows all approved time off by employee. Use it for scheduling and capacity planning to avoid conflicts during high-production periods.</p>`},
+  outcomes:{title:'🎯 Goals & Outcomes',body:`
+    <p>Outcome-based goal setting for the team — defines what "success" looks like for each person at every time horizon.</p>
+    <h4 style="color:var(--accent);margin:14px 0 6px">How it works</h4>
+    <ul>
+      <li><strong>Admins and managers</strong> set Daily, Weekly, and Monthly outcome statements for each direct report</li>
+      <li><strong>Employees</strong> see their own outcomes and can track personal goals</li>
+      <li>These are qualitative outcome statements, not a task tracker</li>
+    </ul>
+    <h4 style="color:var(--accent);margin:14px 0 6px">Setting outcomes for your team</h4>
+    <ol>
+      <li>Scroll to "Set outcomes — team" card</li>
+      <li>For each team member, fill in what a successful Day / Week / Month looks like</li>
+      <li>Click <strong>Save</strong> on each person's card</li>
+    </ol>
+    <h4 style="color:var(--accent);margin:14px 0 6px">Personal goals</h4>
+    <p>Use the "Add goal" form to set personal growth goals for yourself. Choose a time horizon (Day / Week / Month / Quarter / Year). Goals appear on your own outcomes card.</p>
+    <h4 style="color:var(--accent);margin:14px 0 6px">Tips</h4>
+    <ul>
+      <li>Keep outcome statements brief and measurable ("Ship 4 trailers" not "Work hard")</li>
+      <li>Review weekly with direct reports in 1-on-1s</li>
+    </ul>`},
+  wins:{title:'🎉 Wins',body:`
+    <p>Team recognition board. Celebrate accomplishments and build culture.</p>
+    <h4 style="color:var(--accent);margin:14px 0 6px">Posting a win</h4>
+    <ol>
+      <li>Click <strong>+ Post a Win</strong></li>
+      <li>Write a short description of the achievement (a milestone, record, great work, shoutout)</li>
+      <li>Tag it to an individual, a workstation, or the whole team</li>
+      <li>Post — it appears on the board and on the Dashboard</li>
+    </ol>
+    <h4 style="color:var(--accent);margin:14px 0 6px">Reacting</h4>
+    <p>Click any emoji reaction button under a win to add your reaction. Multiple team members can react. Reactions are visible to everyone.</p>
+    <h4 style="color:var(--accent);margin:14px 0 6px">Tips</h4>
+    <ul>
+      <li>Post wins frequently — even small ones matter for morale</li>
+      <li>Tag a workstation to recognize the whole crew, not just individuals</li>
+      <li>Recent wins scroll on the Dashboard so the whole team sees them immediately</li>
+    </ul>`},
+  forecast:{title:'🔮 Forecasting & Planning',body:`
+    <p>Financial and capacity planning tools for leadership.</p>
+    <h4 style="color:var(--accent);margin:14px 0 6px">Revenue forecast</h4>
+    <p>Projects revenue based on confirmed and in-production orders, with trend analysis from historical shipments. Use this to set monthly targets and identify slow periods early.</p>
+    <h4 style="color:var(--accent);margin:14px 0 6px">Working capital</h4>
+    <p>Shows cash tied up in: inventory on hand + accounts receivable (invoiced not yet paid) − accounts payable (bills owed). A negative or very high number indicates cash flow risk.</p>
+    <h4 style="color:var(--accent);margin:14px 0 6px">Production capacity</h4>
+    <p>Compares your daily build capacity (set per trailer model) against the current order backlog. If demand exceeds capacity, you'll see a projected backlog date.</p>
+    <h4 style="color:var(--accent);margin:14px 0 6px">Scenario modeling</h4>
+    <p>Adjust volume, price, or cost assumptions to see the impact on margin and cash. Use scenarios to answer "what if we took 10 more orders this month?" before committing.</p>`},
+  notify:{title:'💬 Notifications',body:`
+    <p>Manages SMS notifications to customers and approval alerts to employees.</p>
+    <h4 style="color:var(--accent);margin:14px 0 6px">SMS mode</h4>
+    <ul>
+      <li><strong>Simulated</strong> — texts are logged but not sent (safe for testing)</li>
+      <li><strong>Live (Twilio)</strong> — real texts sent via +1 (435) 900-8198</li>
+    </ul>
+    <p>To switch to live: set <code>SMS_MODE=twilio</code> in server environment and add Twilio credentials.</p>
+    <h4 style="color:var(--accent);margin:14px 0 6px">Customer SMS notifications</h4>
+    <p>Customers are texted automatically when their order changes stage. Requirements:</p>
+    <ul>
+      <li>Customer must have a phone number saved in Customers &amp; Dealers</li>
+      <li>SMS consent must be recorded (customer texted START to the number, or admin recorded consent)</li>
+      <li>SMS mode must be set to Twilio (not simulated)</li>
+    </ul>
+    <h4 style="color:var(--accent);margin:14px 0 6px">Employee approval notifications</h4>
+    <p>When a PO or BOM change requires an employee's approval, they receive an in-app notification. If their phone and SMS consent is on file, they also get a text.</p>
+    <h4 style="color:var(--accent);margin:14px 0 6px">Customer opt-in / opt-out</h4>
+    <ul>
+      <li>Opt in: customer texts <strong>START</strong>, <strong>YES</strong>, <strong>IN</strong>, or <strong>ENROLL</strong> to +1 (435) 900-8198</li>
+      <li>Opt out: customer texts <strong>STOP</strong> — they are immediately removed from all messages</li>
+    </ul>`},
+  support:{title:'🆘 Support',body:`
+    <p>In-app help desk. You're using it right now.</p>
+    <h4 style="color:var(--accent);margin:14px 0 6px">Ticket types</h4>
+    <ul>
+      <li><strong>Question</strong> — the AI answers in real time; no human needed for most questions</li>
+      <li><strong>Bug Report</strong> — something is broken; gets escalated to a developer</li>
+      <li><strong>Feature Request</strong> — capability the system doesn't have yet; logged for review</li>
+    </ul>
+    <h4 style="color:var(--accent);margin:14px 0 6px">Starting a ticket</h4>
+    <ol>
+      <li>Click <strong>New support ticket</strong></li>
+      <li>Choose the type and write a clear description of what's happening (or what you need)</li>
+      <li>Submit — the AI responds immediately</li>
+      <li>Keep chatting to narrow down the problem</li>
+      <li>If unresolved, click <strong>Escalate</strong> to flag it for developer review</li>
+    </ol>
+    <h4 style="color:var(--accent);margin:14px 0 6px">Admin review queue</h4>
+    <p>Admins see all tickets (not just their own) in the review pane. They can add internal notes, change ticket status, and mark issues resolved.</p>
+    <h4 style="color:var(--accent);margin:14px 0 6px">Tips for better AI answers</h4>
+    <ul>
+      <li>Say which section you're in ("I'm on the POs page...")</li>
+      <li>Describe what you expected vs what actually happened</li>
+      <li>Include any error message text you see</li>
+    </ul>`},
+  users:{title:'👤 Users & Roles',body:`
+    <p>Manages who has access to the system and what they can do.</p>
+    <h4 style="color:var(--accent);margin:14px 0 6px">Adding a user</h4>
+    <ol>
+      <li>Click <strong>+ Add User</strong></li>
+      <li>Enter full name, username (they'll log in with this), job title, and a temporary password</li>
+      <li>Click Create — they can log in immediately and change their password from the top-right menu</li>
+    </ol>
+    <h4 style="color:var(--accent);margin:14px 0 6px">Assigning multiple job titles</h4>
+    <ol>
+      <li>Find the user in the Users table</li>
+      <li>Click the <strong>＋</strong> button on their row</li>
+      <li>Check/uncheck the titles they should hold</li>
+      <li>Their effective access = union of all assigned titles' sections; their effective tier = highest tier among all titles</li>
+    </ol>
+    <h4 style="color:var(--accent);margin:14px 0 6px">Job Titles & Permissions</h4>
+    <ul>
+      <li>Each title has a <strong>tier</strong> (Admin / Editor / Viewer) and a list of <strong>sections</strong> it can access</li>
+      <li>Click <strong>Edit access</strong> to open a checkbox grid of all 18 app sections</li>
+      <li>Tier controls what actions are possible; sections control which nav items are visible</li>
+    </ul>
+    <h4 style="color:var(--accent);margin:14px 0 6px">Permission tiers</h4>
+    <ul>
+      <li><strong>Admin</strong> — full access: user management, BOM approvals, all sections</li>
+      <li><strong>Editor</strong> — create and edit orders, POs, customers, parts, employees</li>
+      <li><strong>Viewer</strong> — read-only on their assigned sections</li>
+    </ul>
+    <h4 style="color:var(--accent);margin:14px 0 6px">Deactivating vs deleting</h4>
+    <ul>
+      <li><strong>Deactivate</strong> — user can no longer log in; all their records are preserved (used when someone has order/PO history)</li>
+      <li><strong>Delete</strong> — permanently removes the account (only available if the user has no transaction history)</li>
+    </ul>`}
+};
+function showHelp(section){
+  const h=HELP[section];
+  if(!h)return modal('Help','<p class="muted">No guide available for this section yet.</p>');
+  const style=`<style>.help-body h4{font-size:13px;margin:14px 0 5px}.help-body ul,.help-body ol{padding-left:18px;color:var(--muted);font-size:13px;line-height:1.7}.help-body li{margin-bottom:4px}.help-body p{font-size:13px;color:var(--muted);line-height:1.7;margin-bottom:10px}.help-body strong{color:var(--text)}.help-body code{background:var(--bg);padding:1px 4px;border-radius:4px;font-size:12px}</style>`;
+  modal(h.title,style+`<div class="help-body" style="max-height:65vh;overflow-y:auto;padding-right:4px">${h.body}</div>`);
+}
 
 async function viewDash(){
   $('pTitle').textContent='Dashboard';$('pSub').textContent='Phase 1 — single source of truth (live from the database)';$('pActions').innerHTML='';
