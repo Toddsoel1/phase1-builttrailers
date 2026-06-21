@@ -1,8 +1,28 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Built Trailers — Phase 1 (Live)</title>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>Built Trailers</title>
+
+<!-- PWA manifest -->
+<link rel="manifest" href="/manifest.json">
+
+<!-- iOS home screen -->
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Built Trailers">
+<link rel="apple-touch-icon" href="/icons/icon-180.png">
+<link rel="apple-touch-icon" sizes="152x152" href="/icons/icon-152.png">
+<link rel="apple-touch-icon" sizes="192x192" href="/icons/icon-192.png">
+
+<!-- Android / theme -->
+<meta name="theme-color" content="#ffb347">
+<meta name="mobile-web-app-capable" content="yes">
+
+<!-- Favicon -->
+<link rel="icon" type="image/png" sizes="192x192" href="/icons/icon-192.png">
+<link rel="icon" type="image/png" sizes="32x32"  href="/icons/icon-96.png">
 <style>
 :root{--bg:#0f1419;--panel:#161c24;--panel2:#1d2630;--line:#2a3540;--txt:#e7edf3;--muted:#8b9aa8;--accent:#ff7a18;--green:#3ecf8e;--red:#ff5d5d;--yellow:#ffd166;--blue:#5aa9ff;--mfg:#ba7dff}
 *{box-sizing:border-box;margin:0;padding:0}
@@ -89,7 +109,7 @@ a.lnk{color:var(--blue);cursor:pointer}
 <div id="toast"></div>
 
 <script>
-const API = '';
+const API = window.location.origin;
 let TOKEN = null, ME = null, page = 'dashboard';
 const $ = id => document.getElementById(id);
 const money = n => '$' + Math.round(n).toLocaleString();
@@ -99,8 +119,10 @@ async function api(path, opts={}){
   const h = {'Content-Type':'application/json'};
   if(TOKEN) h.Authorization='Bearer '+TOKEN;
   const r = await fetch(API+path,{...opts,headers:h});
-  if(r.status===401){logout();throw new Error('Session expired');}
   const d = await r.json().catch(()=>({}));
+  if(r.status===401 && d.qboReconnectRequired){const e=new Error(d.error);e.qboReconnectRequired=true;throw e;}
+  if(r.status===401){logout();throw new Error('Session expired');}
+  if(r.status===402 && d.qboFeatureUnavailable){const e=new Error(d.error);e.qboFeatureUnavailable=true;throw e;}
   if(!r.ok) throw new Error(d.error||('HTTP '+r.status));
   return d;
 }
@@ -128,7 +150,7 @@ function logout(){TOKEN=null;ME=null;$('app').classList.add('hidden');$('login')
 $('liPass').addEventListener('keydown',e=>{if(e.key==='Enter')login();});
 
 // ---- nav/render ----
-const NAV=[['dashboard','📊 Dashboard'],['orders','📋 Orders & Fulfillment'],['neworder','➕ New Order'],['customers','🏬 Customers & Dealers'],['parts','📦 Parts Master'],['predict','🤖 Predictive Ordering'],['pos','🧾 Purchase Orders'],['boms','🧩 BOMs & Cost'],['inventory','📈 Inventory Value'],['accounting','💵 Accounting'],['team','👷 Team & Payroll'],['timeoff','📅 Schedule & Time Off'],['outcomes','🎯 Goals & Outcomes'],['wins','🎉 Wins'],['forecast','🔮 Forecasting & Planning'],['notify','💬 Notifications'],['users','👤 Users & Roles']];
+const NAV=[['dashboard','📊 Dashboard'],['orders','📋 Orders & Fulfillment'],['neworder','➕ New Order'],['customers','🏬 Customers & Dealers'],['parts','📦 Parts Master'],['predict','🤖 Predictive Ordering'],['pos','🧾 Purchase Orders'],['boms','🧩 BOMs & Cost'],['inventory','📈 Inventory Value'],['accounting','💵 Accounting'],['team','👷 Team & Payroll'],['timeoff','📅 Schedule & Time Off'],['outcomes','🎯 Goals & Outcomes'],['wins','🎉 Wins'],['forecast','🔮 Forecasting & Planning'],['notify','💬 Notifications'],['support','🆘 Support'],['users','👤 Users & Roles']];
 function navVisible(n){ if(n[0]==='users') return isAdmin(); if(n[0]==='neworder') return canSell(); return true; }
 function renderNav(){
   $('nav').innerHTML=NAV.filter(navVisible).map(n=>`<button class="${page===n[0]?'active':''}" onclick="go('${n[0]}')">${n[1]}</button>`).join('');
@@ -138,7 +160,7 @@ function renderNav(){
 function go(p){page=p;render();}
 async function render(){
   renderNav();
-  const map={dashboard:viewDash,orders:viewOrders,neworder:viewNewOrder,customers:viewCustomers,parts:viewParts,predict:viewPredict,pos:viewPOs,boms:viewBoms,inventory:viewInv,accounting:viewAccounting,team:viewTeam,timeoff:viewTimeoff,outcomes:viewOutcomes,wins:viewWins,forecast:viewForecast,notify:viewNotify,users:viewUsers};
+  const map={dashboard:viewDash,orders:viewOrders,neworder:viewNewOrder,customers:viewCustomers,parts:viewParts,predict:viewPredict,pos:viewPOs,boms:viewBoms,inventory:viewInv,accounting:viewAccounting,team:viewTeam,timeoff:viewTimeoff,outcomes:viewOutcomes,wins:viewWins,forecast:viewForecast,notify:viewNotify,support:viewSupport,users:viewUsers};
   try{ await (map[page]||viewDash)(); }catch(e){ $('content').innerHTML=`<div class="card">Error: ${e.message}</div>`; }
 }
 function kpi(t,v,s){return `<div class="card kpi"><h3>${t}</h3><div class="v">${v}</div><div class="s">${s}</div></div>`;}
@@ -162,9 +184,12 @@ async function viewDash(){
 }
 
 async function viewParts(){
-  $('pTitle').textContent='Parts Master';$('pSub').textContent='Live parts, costs and on-hand — '+(canEdit()?'click a cost to edit':'read-only');$('pActions').innerHTML='';
+  $('pTitle').textContent='Parts Master';$('pSub').textContent='Live parts, costs and on-hand — '+(canEdit()?'click a cost to edit':'read-only');
+  $('pActions').innerHTML=canEdit()?`<button class="btn" onclick="previewQBItems()">⬇ Import from QuickBooks</button>`:'';
   const parts=await api('/api/parts');
-  $('content').innerHTML=`<div class="card"><h3>Parts (${parts.length})</h3>
+  $('content').innerHTML=`
+   <div id="qbItemsPanel" style="display:none;margin-bottom:14px"></div>
+   <div class="card"><h3>Parts (${parts.length})</h3>
    <table><thead><tr><th>Part</th><th>Type</th><th>Vendor</th><th class="right">On hand</th><th class="right">Reorder</th><th class="right">Unit cost</th><th class="right">Ext. value</th><th class="center">Status</th>${canEdit()?'<th></th>':''}</tr></thead><tbody>
    ${parts.map(p=>`<tr>
      <td><b>${p.id}</b><br><span class="muted" style="font-size:11px">${p.name}</span></td>
@@ -177,6 +202,56 @@ async function viewParts(){
      ${canEdit()?`<td class="right"><button class="btn sm sec" onclick="receive('${p.id}')">Receive</button></td>`:''}
    </tr>`).join('')}
    </tbody></table></div>`;
+}
+async function previewQBItems(){
+  const panel=$('qbItemsPanel');
+  panel.style.display='block';
+  panel.innerHTML=`<div class="card"><p class="muted">Loading QuickBooks items…</p></div>`;
+  try{
+    const items=await api('/api/qbo/preview/items');
+    const newCount=items.filter(i=>i.status==='new'&&!i.skip).length;
+    const updCount=items.filter(i=>i.status==='update').length;
+    panel.innerHTML=`<div class="card">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+        <h3>QuickBooks Items &nbsp;<span class="badge b-ok">${newCount} new</span> <span class="badge b-buy">${updCount} updates</span></h3>
+        <div style="display:flex;gap:8px">
+          <button class="btn sm sec" onclick="$('qbItemsPanel').style.display='none'">Close</button>
+          <button class="btn sm" onclick="syncQBItems(null)">Import All</button>
+          <button class="btn sm sec" onclick="syncQBItems('selected')">Import Selected</button>
+        </div>
+      </div>
+      <table><thead><tr>
+        <th><input type="checkbox" id="qbChkAll" onchange="document.querySelectorAll('.qb-cb').forEach(c=>c.checked=this.checked)"></th>
+        <th>QB Item Name</th><th>QB Type</th><th class="right">QB Cost</th><th class="right">Current Cost</th><th>Vendor</th><th>Status</th>
+      </tr></thead><tbody>
+      ${items.map(i=>`<tr style="${i.skip?'opacity:.45':''}">
+        <td><input type="checkbox" class="qb-cb" data-id="${i.qbId}" ${i.skip?'':'checked'}></td>
+        <td>${i.name}${i.existingPartId&&i.existingPartId!=='QB-'+i.qbId?`<br><span class="muted" style="font-size:10px">matches ${i.existingPartId}</span>`:''}</td>
+        <td><span class="badge ${i.itemType==='Service'?'b-low':'b-buy'}" style="font-size:10px">${i.itemType}</span></td>
+        <td class="right">${money2(i.cost)}</td>
+        <td class="right">${i.existingCost!=null?money2(i.existingCost):'—'}</td>
+        <td style="font-size:12px">${i.vendor||''}</td>
+        <td><span class="badge ${i.status==='new'?'b-ok':'b-buy'}">${i.status}</span></td>
+      </tr>`).join('')}
+      </tbody></table>
+      <div id="qbSyncOut" style="margin-top:10px"></div>
+    </div>`;
+  }catch(e){panel.innerHTML=`<div class="card">${qboErrBanner(e)}</div>`;}
+}
+async function syncQBItems(mode){
+  let ids=null;
+  if(mode==='selected'){
+    ids=[...document.querySelectorAll('.qb-cb:checked')].map(c=>c.dataset.id);
+    if(!ids.length){toast('No items selected');return;}
+  }
+  const out=$('qbSyncOut');if(out)out.innerHTML='<span class="muted">Syncing…</span>';
+  try{
+    const r=await api('/api/qbo/pull',{method:'POST',body:JSON.stringify({what:['items'],itemIds:ids})});
+    const v=r.results.items;
+    if(out)out.innerHTML=`<span class="badge b-ok">${v.created} created &nbsp; ${v.updated} updated &nbsp; ${v.skipped} skipped</span>`;
+    toast(`QB items synced — ${v.created} new, ${v.updated} updated`);
+    viewParts();
+  }catch(e){if(out)out.innerHTML=qboErrBanner(e);toast(e.message);}
 }
 async function editCost(id,cur){
   const v=prompt('New unit cost for '+id+':',cur);if(v==null)return;
@@ -240,10 +315,58 @@ async function viewUsers(){
   const users=await api('/api/users');
   const byId=Object.fromEntries(users.map(u=>[u.id,u]));
   $('content').innerHTML=`<div class="card"><h3>Users (${users.length})</h3>
-   <table><thead><tr><th>Name</th><th>Username</th><th>Role</th><th class="center">Tier</th><th>Manager</th></tr></thead><tbody>
-   ${users.map(u=>`<tr><td><b>${u.name}</b></td><td>${u.username}</td><td>${u.title||''}</td><td class="center"><span class="pill ${u.role}">${u.role}</span></td><td class="muted">${u.manager_id?byId[u.manager_id]?.name||'':'—'}</td></tr>`).join('')}
+   <table><thead><tr><th>Name</th><th>Username</th><th>Role</th><th class="center">Tier</th><th>Manager</th><th>Phone</th><th>SMS Consent</th><th></th></tr></thead><tbody>
+   ${users.map(u=>`<tr>
+     <td><b>${u.name}</b></td><td>${u.username}</td><td>${u.title||''}</td>
+     <td class="center"><span class="pill ${u.role}">${u.role}</span></td>
+     <td class="muted">${u.manager_id?byId[u.manager_id]?.name||'':'—'}</td>
+     <td class="muted" style="font-size:12px">${u.phone||'—'}</td>
+     <td style="font-size:12px">${u.sms_consent?'<span style="color:#4caf50">✓ Consented</span>':'<span class="muted">—</span>'}</td>
+     <td>${isAdmin()?`<button class="btn" style="padding:3px 10px;font-size:12px" onclick="editUserSms('${u.id}')">Edit</button>`:''}</td>
+   </tr>`).join('')}
    </tbody></table>
-   <p class="muted" style="font-size:12px;margin-top:8px">Passwords are bcrypt-hashed; permission tiers are enforced on every API call.</p></div>`;
+   <p class="muted" style="font-size:12px;margin-top:8px">Passwords are bcrypt-hashed; permission tiers are enforced on every API call. SMS consent is required before any text message is sent to an employee.</p></div>`;
+}
+async function editUserSms(id){
+  const users=await api('/api/users');
+  const u=users.find(x=>x.id===id);if(!u)return;
+  modal(`SMS consent — ${u.name}`,`
+    <div style="background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:12px;margin-bottom:14px;font-size:12px;color:var(--muted);line-height:1.6">
+      <b style="color:var(--text)">Self opt-in options:</b><br>
+      Text <b style="color:var(--accent)">APPROVE</b> to <b>+1 (435) 900-8198</b><br>
+      — or visit <b style="color:var(--accent)">/optin</b> and select "Employee"
+    </div>
+    <div class="field"><label>Mobile phone</label><input id="euPhone" type="tel" value="${u.phone||''}" placeholder="+18015551234" oninput="checkEuAutoConsent()"></div>
+    <div id="euAutoTag" style="display:none;margin-bottom:8px;font-size:12px;color:#4caf50">✓ This number already opted in via text or web form — consent auto-linked.</div>
+    <div style="border:1px solid var(--line);border-radius:8px;padding:12px;margin:4px 0 12px;background:var(--bg)">
+      <label style="display:flex;gap:10px;align-items:flex-start;cursor:pointer">
+        <input type="checkbox" id="euConsent" ${u.sms_consent?'checked':''} style="margin-top:3px;flex-shrink:0">
+        <span style="font-size:12px;color:var(--muted);line-height:1.5">This employee has agreed to receive SMS approval request notifications from Built Trailers at +1 (435) 900-8198 as part of their job role. Reply STOP to cancel, HELP for help.</span>
+      </label>
+    </div>
+    <div class="row" style="gap:8px">
+      <button class="btn" onclick="saveUserSms('${id}')">Save</button>
+      ${u.sms_consent?`<button class="btn" style="background:var(--danger,#c0392b)" onclick="revokeUserSms('${id}')">Revoke consent</button>`:''}
+    </div>`);
+}
+async function checkEuAutoConsent(){
+  const phone=($('euPhone').value||'').trim();
+  if(phone.replace(/\D/g,'').length<10){$('euAutoTag').style.display='none';return;}
+  try{
+    const r=await api('/api/sms/optin-check?phone='+encodeURIComponent(phone));
+    $('euAutoTag').style.display=r.optedIn?'block':'none';
+    if(r.optedIn){$('euConsent').checked=true;}
+  }catch{$('euAutoTag').style.display='none';}
+}
+async function saveUserSms(id){
+  const phone=($('euPhone').value||'').trim();
+  const smsConsent=$('euConsent').checked;
+  if(phone&&!smsConsent)return toast('Check consent before saving a phone number.');
+  try{await api('/api/users/'+id,{method:'PATCH',body:JSON.stringify({phone:phone||null,smsConsent})});closeModal();toast('Saved');viewUsers();}catch(e){toast(e.message);}
+}
+async function revokeUserSms(id){
+  if(!confirm('Revoke SMS consent? This employee will no longer receive SMS notifications.'))return;
+  try{await api('/api/users/'+id,{method:'PATCH',body:JSON.stringify({smsConsent:false})});closeModal();toast('Consent revoked');viewUsers();}catch(e){toast(e.message);}
 }
 
 // ============ PHASE 2: ORDERS / FULFILLMENT / DEALERS ============
@@ -338,12 +461,14 @@ async function submitOrder(){
 }
 
 async function viewCustomers(){
-  $('pTitle').textContent='Customers & Dealers';$('pSub').textContent='Sales assigns which trailer types each dealer may order';$('pActions').innerHTML=canSell()?`<button class="btn" onclick="addDealer()">➕ Add dealer</button>`:'';
+  $('pTitle').textContent='Customers & Dealers';$('pSub').textContent='Sales assigns which trailer types each dealer may order';$('pActions').innerHTML=canSell()?`<button class="btn" onclick="addDealer()">➕ Add customer</button>`:'';
   const [custs,types]=await Promise.all([api('/api/customers'),api('/api/trailer-types')]);
   $('content').innerHTML=`<div class="card"><h3>Dealerships & authorized trailer types</h3>
-   <table><thead><tr><th>Dealer</th><th>Type</th><th>Rep</th><th>Authorized trailer types</th></tr></thead><tbody>
+   <table><thead><tr><th>Customer</th><th>Type</th><th>Phone</th><th>SMS</th><th>Rep</th><th>Authorized trailer types</th></tr></thead><tbody>
    ${custs.map(c=>`<tr><td><b>${c.name}</b><br><span class="muted" style="font-size:11px">${c.contact||''}</span></td>
      <td><span class="badge ${c.kind==='Retail'?'b-low':'b-buy'}">${c.kind}</span></td>
+     <td class="muted" style="font-size:12px">${c.phone||'—'}</td>
+     <td style="font-size:12px">${c.smsConsent?'<span style="color:#4caf50">✓ Consented</span>':'<span class="muted">—</span>'}</td>
      <td class="muted" style="font-size:12px">${c.rep||'—'}</td>
      <td>${types.map(t=>{const on=c.allowed.includes(t);return `<span class="chip" onclick="${canSell()?`toggleType('${c.id}','${t}',${!on})`:''}" style="cursor:${canSell()?'pointer':'default'};border-color:${on?'var(--accent)':'var(--line)'};color:${on?'#ffb347':'var(--muted)'}">${on?'✓ ':''}${t}</span>`;}).join('')}</td></tr>`).join('')}
    </tbody></table>
@@ -351,8 +476,43 @@ async function viewCustomers(){
 }
 async function toggleType(cid,t,on){ try{await api('/api/customers/'+cid+'/types',{method:'PATCH',body:JSON.stringify({type:t,on})});viewCustomers();}catch(e){toast(e.message);} }
 async function addDealer(){
-  const name=prompt('New dealership name:');if(!name)return;
-  try{await api('/api/customers',{method:'POST',body:JSON.stringify({name,kind:'Dealership',allowed:['Utility']})});toast('Added '+name);viewCustomers();}catch(e){toast(e.message);}
+  modal('Add Customer / Dealer',`
+    <div class="field"><label>Name *</label><input id="adName" placeholder="ABC Trailer Sales"></div>
+    <div class="row">
+      <div class="field"><label>Type</label><select id="adKind"><option>Dealership</option><option>Retail</option></select></div>
+      <div class="field"><label>Contact person</label><input id="adContact" placeholder="Jane Smith"></div>
+    </div>
+    <div class="field"><label>Mobile phone</label><input id="adPhone" type="tel" placeholder="+18015551234" oninput="checkAdAutoConsent()"></div>
+    <div id="adAutoTag" style="display:none;margin-bottom:8px;font-size:12px;color:#4caf50">✓ This number already opted in via text or web form — consent will be auto-linked.</div>
+    <div style="border:1px solid var(--line);border-radius:8px;padding:12px;margin:4px 0 12px;background:var(--bg)">
+      <label style="display:flex;gap:10px;align-items:flex-start;cursor:pointer">
+        <input type="checkbox" id="adConsent" style="margin-top:3px;flex-shrink:0">
+        <span style="font-size:12px;color:var(--muted);line-height:1.5">By providing their mobile number, this customer agrees to receive order status text messages from Built Trailers at +1 (435) 900-8198. Up to 4 messages per order. Msg &amp; data rates may apply. Reply STOP to cancel, HELP for help.</span>
+      </label>
+    </div>
+    <p style="font-size:11px;color:var(--muted);margin-bottom:12px">
+      Prefer self opt-in? Share <b>/optin</b> with the customer, or have them text <b>JOIN</b> to <b>+1 (435) 900-8198</b> — consent will auto-link when this record is saved.
+    </p>
+    <button class="btn" onclick="saveDealer()">Add customer</button>`);
+}
+async function checkAdAutoConsent(){
+  const phone=($('adPhone').value||'').trim();
+  if(phone.replace(/\D/g,'').length<10){$('adAutoTag').style.display='none';return;}
+  try{
+    const r=await api('/api/sms/optin-check?phone='+encodeURIComponent(phone));
+    $('adAutoTag').style.display=r.optedIn?'block':'none';
+    if(r.optedIn){$('adConsent').checked=true;}
+  }catch{$('adAutoTag').style.display='none';}
+}
+async function saveDealer(){
+  const name=($('adName').value||'').trim();if(!name)return toast('Name required');
+  const phone=($('adPhone').value||'').trim();
+  const smsConsent=$('adConsent').checked;
+  if(phone&&!smsConsent)return toast('Check the SMS consent box before saving a phone number.');
+  try{
+    await api('/api/customers',{method:'POST',body:JSON.stringify({name,kind:$('adKind').value,contact:($('adContact').value||'').trim()||null,phone:phone||null,smsConsent})});
+    closeModal();toast('Added '+name);viewCustomers();
+  }catch(e){toast(e.message);}
 }
 
 // ============ PHASE 3: PREDICTIVE ORDERING / PURCHASE ORDERS ============
@@ -386,36 +546,144 @@ async function autoPO(){
   try{const r=await api('/api/mrp/auto',{method:'POST'});toast('⚡ Generated '+r.created+' purchase orders');page='pos';render();}catch(e){toast(e.message);}
 }
 async function viewPOs(){
-  $('pTitle').textContent='Purchase Orders';$('pSub').textContent='Generated for vendors as quantities dictate — receive to add stock';$('pActions').innerHTML=canEdit()?`<button class="btn sec" onclick="go('predict')">🤖 Predictive POs</button>`:'';
-  const pos=await api('/api/po');
+  $('pTitle').textContent='Purchase Orders';$('pSub').textContent='Generated for vendors as quantities dictate — receive to add stock';
+  $('pActions').innerHTML=canEdit()?`<button class="btn" onclick="showNewVendor()">+ Vendor</button>&nbsp;<button class="btn sec" onclick="go('predict')">🤖 Predictive POs</button>`:'';
+  const [pos,myPending,rules,users]=await Promise.all([
+    api('/api/po'),api('/api/approvals/pending'),
+    ME.role==='admin'?api('/api/approval-rules'):Promise.resolve([]),
+    ME.role==='admin'?api('/api/users'):Promise.resolve([]),
+  ]);
   const open=pos.filter(p=>p.status==='Open');
-  $('content').innerHTML=`<div class="grid g4" style="margin-bottom:16px">
+  const pending=pos.filter(p=>p.status==='Pending Approval');
+  $('content').innerHTML=`
+   <div class="grid g4" style="margin-bottom:16px">
     ${kpi('Open POs',open.length,'awaiting delivery')}
     ${kpi('Committed spend',money(open.reduce((a,p)=>a+p.total,0)),'on open POs')}
-    ${kpi('Total POs',pos.length,'all time')}
+    ${kpi('Pending approval',pending.length,'awaiting decision')}
     ${kpi('Received',pos.filter(p=>p.status==='Received').length,'into inventory')}
    </div>
+   ${myPending.length?`<div class="card" style="margin-bottom:14px;border-left:3px solid var(--warn)">
+    <h3>My pending approvals (${myPending.length})</h3>
+    <table><thead><tr><th>Type</th><th>Reference</th><th>Description</th><th class="right">Amount</th><th>Requested by</th><th></th></tr></thead><tbody>
+    ${myPending.map(r=>`<tr>
+      <td><span class="badge b-low">${r.type.toUpperCase()}</span></td>
+      <td><b>${r.ref_id}</b></td>
+      <td style="font-size:12px">${r.ref_desc||''}</td>
+      <td class="right">${r.ref_amount?money(r.ref_amount):'—'}</td>
+      <td style="font-size:12px">${r.requester_name||''}</td>
+      <td class="right" style="white-space:nowrap">
+        <button class="btn sm" onclick="decideApproval('${r.token}','approved')">Approve</button>&nbsp;
+        <button class="btn sm sec" onclick="decideApproval('${r.token}','rejected')">Reject</button>
+      </td>
+    </tr>`).join('')}
+    </tbody></table></div>`:''}
    <div class="card"><h3>Purchase orders</h3>
-   <table><thead><tr><th>PO</th><th>Vendor</th><th>Part</th><th class="right">Qty</th><th class="right">Unit</th><th class="right">Total</th><th>Placed</th><th>ETA</th><th class="center">Status</th>${canEdit()?'<th></th>':''}</tr></thead><tbody>
-   ${pos.map(p=>`<tr><td><b>${p.id}</b></td><td>${p.vendor||''}</td><td>${p.part||p.partId}</td><td class="right">${p.qty}</td><td class="right">${money2(p.unit)}</td><td class="right">${money(p.total)}</td><td>${p.placed}</td><td>${p.eta||''}</td><td class="center"><span class="badge ${p.status==='Open'?'b-low':'b-ok'}">${p.status}</span></td>${canEdit()?`<td class="right">${p.status==='Open'?`<button class="btn sm sec" onclick="receivePO('${p.id}')">Receive</button>`:''}</td>`:''}</tr>`).join('')}
-   </tbody></table>
-   <p class="muted" style="font-size:12px;margin-top:8px">Receiving a PO adds quantity to inventory, updates valuation, and (in production) posts a bill to QuickBooks.</p></div>`;
+   <table><thead><tr><th>PO</th><th>Vendor</th><th>Part</th><th class="right">Qty</th><th class="right">Total</th><th>ETA</th><th class="center">Status</th>${canEdit()?'<th></th>':''}</tr></thead><tbody>
+   ${pos.map(p=>{
+     const isPending=p.status==='Pending Approval',isRejected=p.status==='Rejected';
+     const badge=isPending?'b-low':isRejected?'b-below':p.status==='Open'?'b-mfg':'b-ok';
+     return `<tr><td><b>${p.id}</b></td><td>${p.vendor||''}</td><td style="font-size:12px">${p.part||p.partId}</td>
+       <td class="right">${p.qty}</td><td class="right">${money(p.total)}</td><td>${p.eta||''}</td>
+       <td class="center"><span class="badge ${badge}">${p.status}</span></td>
+       ${canEdit()?`<td class="right">${p.status==='Open'?`<button class="btn sm sec" onclick="receivePO('${p.id}')">Receive</button>`:''}</td>`:''}
+     </tr>`;
+   }).join('')}
+   </tbody></table></div>
+   ${ME.role==='admin'?`<div class="card" style="margin-top:16px">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+      <h3>Approval rules</h3>
+      <button class="btn sm" onclick="showAddRule()">+ Add rule</button>
+    </div>
+    <table><thead><tr><th>Type</th><th>Trigger</th><th>Approver</th><th>Step</th><th>Notify</th><th>Active</th><th></th></tr></thead><tbody>
+    ${rules.length?rules.map(r=>`<tr>
+      <td><span class="badge b-buy">${r.type.toUpperCase()}</span></td>
+      <td style="font-size:12px">${r.min_amount!=null?'≥'+money(r.min_amount):'Any amount'}${r.max_amount!=null?' &lt; '+money(r.max_amount):''}</td>
+      <td>${r.approver_name}<br><span class="muted" style="font-size:10px">${r.approver_title||''}</span></td>
+      <td class="center">${r.seq}</td>
+      <td>${r.notify}</td>
+      <td class="center"><input type="checkbox" ${r.active?'checked':''} onchange="toggleRule('${r.id}',this.checked)"></td>
+      <td class="right"><button class="btn sm sec" onclick="deleteRule('${r.id}')">Del</button></td>
+    </tr>`).join(''):'<tr><td colspan="7" class="muted">No rules — all POs approved automatically.</td></tr>'}
+    </tbody></table>
+    <div id="addRuleForm" style="display:none;margin-top:12px;padding-top:12px;border-top:1px solid var(--border)">
+      <div class="grid g4">
+        <div class="field"><label>Type</label><select id="ruleType"><option value="po">PO</option><option value="vendor">New Vendor</option></select></div>
+        <div class="field"><label>Min $ (blank=any)</label><input id="ruleMin" type="number" placeholder="e.g. 500"></div>
+        <div class="field"><label>Max $ (blank=none)</label><input id="ruleMax" type="number" placeholder="e.g. 4999"></div>
+        <div class="field"><label>Approver</label><select id="ruleApprover">${users.filter(u=>u.role!=='viewer').map(u=>`<option value="${u.id}">${u.name} (${u.title||''})</option>`).join('')}</select></div>
+        <div class="field"><label>Step (seq)</label><input id="ruleSeq" type="number" value="1" min="1"></div>
+        <div class="field"><label>Notify</label><select id="ruleNotify"><option value="app">App only</option><option value="sms">SMS only</option><option value="both">App + SMS</option></select></div>
+        <div class="field"><label>Label</label><input id="ruleLabel" placeholder="e.g. GM approval"></div>
+      </div>
+      <button class="btn sm" onclick="saveRule()">Save rule</button>
+      <button class="btn sm sec" style="margin-left:8px" onclick="$('addRuleForm').style.display='none'">Cancel</button>
+    </div>
+   </div>`:''}
+   <div id="newVendorModal" style="display:none;margin-top:16px" class="card">
+    <h3>Add new vendor</h3>
+    <div class="grid g4">
+      <div class="field"><label>Vendor name</label><input id="vName" placeholder="e.g. Pacific Steel Supply"></div>
+      <div class="field"><label>Lead days</label><input id="vLead" type="number" value="7"></div>
+      <div class="field"><label>Payment terms</label><input id="vTerms" placeholder="e.g. Net 30"></div>
+    </div>
+    <p class="muted" style="font-size:12px">New vendors go through an approval workflow before POs can be placed.</p>
+    <button class="btn sm" onclick="saveNewVendor()">Submit for approval</button>
+    <button class="btn sm sec" style="margin-left:8px" onclick="$('newVendorModal').style.display='none'">Cancel</button>
+    <div id="vendorOut" style="margin-top:8px"></div>
+   </div>`;
 }
 async function receivePO(id){
   try{await api('/api/po/'+id+'/receive',{method:'POST'});toast(id+' received — inventory updated');viewPOs();}catch(e){toast(e.message);}
+}
+async function decideApproval(token, decision){
+  const note=decision==='rejected'?prompt('Reason for rejection (optional):',''):null;
+  if(decision==='rejected'&&note===null)return;
+  try{
+    const r=await api('/api/approvals/'+token+'/decide',{method:'POST',body:JSON.stringify({decision,note:note||null})});
+    toast(decision==='approved'?`Approved — ${r.outcome==='fully_approved'?'PO is now open':'next approver notified'}`:`Rejected — PO cancelled`);
+    viewPOs();
+  }catch(e){toast(e.message);}
+}
+function showAddRule(){$('addRuleForm').style.display=$('addRuleForm').style.display==='none'?'block':'none';}
+async function saveRule(){
+  try{
+    await api('/api/approval-rules',{method:'POST',body:JSON.stringify({
+      type:$('ruleType').value, minAmount:$('ruleMin').value?Number($('ruleMin').value):null,
+      maxAmount:$('ruleMax').value?Number($('ruleMax').value):null,
+      approverId:$('ruleApprover').value, seq:Number($('ruleSeq').value||1),
+      notify:$('ruleNotify').value, label:$('ruleLabel').value||null
+    })});
+    toast('Rule saved');viewPOs();
+  }catch(e){toast(e.message);}
+}
+async function toggleRule(id,active){
+  try{await api('/api/approval-rules/'+id,{method:'PATCH',body:JSON.stringify({active})});}catch(e){toast(e.message);viewPOs();}
+}
+async function deleteRule(id){
+  if(!confirm('Delete this approval rule?'))return;
+  try{await api('/api/approval-rules/'+id,{method:'DELETE'});toast('Rule deleted');viewPOs();}catch(e){toast(e.message);}
+}
+function showNewVendor(){$('newVendorModal').style.display=$('newVendorModal').style.display==='none'?'block':'none';}
+async function saveNewVendor(){
+  const name=$('vName').value.trim();if(!name){toast('Vendor name required');return;}
+  try{
+    const r=await api('/api/vendors',{method:'POST',body:JSON.stringify({name,leadDays:Number($('vLead').value||7),terms:$('vTerms').value||null})});
+    $('vendorOut').innerHTML=r.status==='pending'?`<span class="badge b-low">Submitted for approval — approvers have been notified</span>`:`<span class="badge b-ok">Vendor added (no approval rules active)</span>`;
+    toast(r.status==='pending'?'Vendor submitted for approval':'Vendor created');
+  }catch(e){toast(e.message);}
 }
 
 // ============ PHASE 4: ACCOUNTING (QuickBooks) + OCR INVOICES ============
 async function viewAccounting(){
   $('pTitle').textContent='Accounting';$('pSub').textContent='QuickBooks sync — invoices on ship, bills on PO receipt; OCR invoice intake updates costs';
-  $('pActions').innerHTML=canEdit()?`<button class="btn" onclick="syncQB()">⟳ Sync QuickBooks</button>`:'';
+  $('pActions').innerHTML=canEdit()?`<button class="btn" onclick="pullFromQB()">⬇ Pull from QuickBooks</button>&nbsp;<button class="btn sec" onclick="syncQB()">⟳ Push pending</button>`:'';
   const [acct,invoices,custs]=await Promise.all([api('/api/accounting'),api('/api/invoices'),api('/api/customers').catch(()=>[])]);
   const t=acct.totals;
   const modeBadge=acct.mode==='quickbooks'?(acct.configured?'<span class="badge b-ok">QuickBooks connected</span>':'<span class="badge b-low">QuickBooks selected — credentials pending</span>'):'<span class="badge b-buy">Simulated mode</span>';
   // vendor list for scan
   const vendors=[...new Map((await api('/api/parts')).map(p=>[p.vendor,p.vendor])).keys()].filter(Boolean);
   $('content').innerHTML=`
-   <div class="banner">${modeBadge} &nbsp; Invoices post automatically when an order ships; bills post when a PO is received. ${acct.mode==='simulated'?'Set <code>ACCOUNTING_MODE=quickbooks</code> + QBO credentials to push live.':''}</div>
+   <div class="banner">${modeBadge} &nbsp; Invoices post automatically when an order ships; bills post when a PO is received. ${acct.mode==='simulated'?'Set <code>ACCOUNTING_MODE=quickbooks</code> + QBO credentials to push live.':acct.configured?'<button class="btn sec" style="margin-left:12px;padding:2px 10px;font-size:12px" onclick="qboReauth()">Re-authorize</button>':''}</div>
    <div class="grid g4" style="margin-bottom:16px">
      ${kpi('Invoices posted',t.invoices,money(t.invoiceAmt)+' billed to customers')}
      ${kpi('Bills posted',t.bills,money(t.billAmt)+' owed to vendors')}
@@ -435,13 +703,82 @@ async function viewAccounting(){
        </tbody></table>
      </div>
    </div>
+   <div class="card" style="margin-top:16px"><h3>Pull from QuickBooks</h3>
+     <p class="muted" style="font-size:12px">Import your existing QuickBooks data into Built Trailers. Customers sync to Customers & Dealers; items sync to Parts Master; invoices sync as shipped orders. Runs are incremental — existing records update in place.</p>
+     <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">
+       <button class="btn" onclick="pullFromQB(['customers'])">⬇ Customers</button>
+       <button class="btn" onclick="pullFromQB(['items'])">⬇ Parts (Items)</button>
+       <button class="btn" onclick="pullFromQB(['invoices'])">⬇ Orders (Invoices)</button>
+       <button class="btn sec" onclick="pullFromQB(['customers','items','invoices'])">⬇ Pull All</button>
+     </div>
+     <div id="pullOut" style="margin-top:12px"></div>
+   </div>
+   <div class="card" style="margin-top:16px">
+     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+       <h3 style="margin:0">QuickBooks Error Log</h3>
+       <div style="display:flex;gap:8px">
+         <button class="btn sm sec" onclick="loadQBOErrors()">Refresh</button>
+         <a class="btn sm sec" href="/api/qbo/errors/export" download>⬇ Export CSV</a>
+       </div>
+     </div>
+     <div id="qboErrOut"><span class="muted">Loading…</span></div>
+   </div>
    <div class="card" style="margin-top:16px"><h3>Accounting ledger (most recent)</h3>
      <table><thead><tr><th>Type</th><th>Reference</th><th>Party</th><th class="right">Amount</th><th class="center">Mode</th><th class="center">Status</th></tr></thead><tbody>
      ${acct.events.map(e=>`<tr><td>${e.kind==='invoice'?'<span class="badge b-ok">Invoice (AR)</span>':'<span class="badge b-low">Bill (AP)</span>'}</td><td>${e.ref||''}</td><td>${e.party||''}</td><td class="right">${money(e.amount)}</td><td class="center">${e.mode}</td><td class="center"><span class="badge ${e.status==='pending'?'b-low':'b-ok'}">${e.status}</span></td></tr>`).join('')}
      </tbody></table>
    </div>`;
+  loadQBOErrors();
 }
 async function syncQB(){ try{const r=await api('/api/accounting/sync',{method:'POST'});toast(r.mode==='quickbooks'?('Pushed '+r.pushed+' to QuickBooks'):'Simulated mode — '+r.pushed+' pushed (set QBO creds to go live)');viewAccounting();}catch(e){toast(e.message);} }
+async function loadQBOErrors(){
+  const el=$('qboErrOut'); if(!el) return;
+  try{
+    const rows=await api('/api/qbo/errors');
+    if(!rows.length){el.innerHTML='<p class="muted">No errors recorded.</p>';return;}
+    el.innerHTML=`<table style="font-size:12px"><thead><tr>
+      <th>Time</th><th>Type</th><th>Method</th><th>Endpoint</th><th class="center">Status</th><th>intuit_tid</th><th>Message</th>
+    </tr></thead><tbody>
+    ${rows.map(r=>`<tr>
+      <td style="white-space:nowrap">${new Date(r.ts).toLocaleString()}</td>
+      <td><span class="badge ${r.error_type==='QBOAuthError'?'b-crit':r.error_type==='QBOFeatureError'?'b-low':'b-buy'}" style="font-size:10px">${r.error_type||'Error'}</span></td>
+      <td>${r.method||''}</td>
+      <td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${r.endpoint||''}">${r.endpoint||''}</td>
+      <td class="center">${r.status||''}</td>
+      <td style="font-size:10px;font-family:monospace">${r.intuit_tid||'—'}</td>
+      <td style="max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${(r.message||'').replace(/"/g,'&quot;')}">${r.message||''}</td>
+    </tr>`).join('')}
+    </tbody></table>`;
+  }catch(e){el.innerHTML=`<p class="muted" style="color:var(--danger)">${e.message}</p>`;}
+}
+async function qboReauth(){ try{const r=await api('/api/auth/qbo');window.location.href=r.url;}catch(e){toast(e.message);} }
+function qboReconnectBanner(msg){
+  return `<div class="banner" style="background:rgba(239,68,68,.08);border-color:var(--danger);display:flex;align-items:center;gap:12px">
+    <span style="color:var(--danger)">⚠ ${msg}</span>
+    <button class="btn" style="margin-left:auto;white-space:nowrap" onclick="qboReauth()">Reconnect QuickBooks</button>
+  </div>`;
+}
+function qboFeatureBanner(msg){
+  return `<div class="banner" style="background:rgba(245,158,11,.08);border-color:#f59e0b;display:flex;align-items:center;gap:12px">
+    <span style="color:#b45309">⚠ ${msg} Your data has been saved locally.</span>
+    <a class="btn sec" style="margin-left:auto;white-space:nowrap" href="https://quickbooks.intuit.com/pricing/" target="_blank" rel="noopener">View QB Plans</a>
+  </div>`;
+}
+function qboErrBanner(e, el){
+  if(e.qboReconnectRequired) return qboReconnectBanner(e.message);
+  if(e.qboFeatureUnavailable) return qboFeatureBanner(e.message);
+  return `<span class="muted" style="color:var(--danger)">${e.message}</span>`;
+}
+async function pullFromQB(what){
+  const el=$('pullOut'); if(el) el.innerHTML='<span class="muted">Syncing from QuickBooks…</span>';
+  try{
+    const r=await api('/api/qbo/pull',{method:'POST',body:JSON.stringify({what:what||['customers','items','invoices']})});
+    const res=r.results;
+    const rows=Object.entries(res).map(([k,v])=>`<tr><td style="text-transform:capitalize">${k}</td><td class="right">${v.created??'-'} created</td><td class="right">${v.updated??'-'} updated</td>${v.skipped!=null?`<td class="right">${v.skipped} skipped</td>`:''}</tr>`).join('');
+    if(el) el.innerHTML=`<table><thead><tr><th>Category</th><th class="right">Created</th><th class="right">Updated</th><th class="right">Skipped</th></tr></thead><tbody>${rows}</tbody></table>`;
+    toast('QuickBooks pull complete');
+  }catch(e){if(el)el.innerHTML=qboErrBanner(e);toast(e.message);}
+}
 async function scanInvoice(){
   const vname=$('scVendor').value;
   try{
@@ -557,7 +894,8 @@ async function viewWins(){
      ${w.detail?`<div class="muted" style="font-size:13px">${w.detail}</div>`:''}
      <div class="muted" style="font-size:11px;margin-top:5px">Posted by ${w.by} · ${w.on}</div>
      <div style="display:flex;gap:6px;margin-top:9px;flex-wrap:wrap">${REACTIONS.map(e=>{const n=(w.reactions[e]||[]).length;const me=(w.reactions[e]||[]).includes(ME.id);return `<button class="btn sm ${me?'':'sec'}" ${canCel?'':'disabled'} onclick="reactWin('${w.id}','${e}')">${e} ${n||''}</button>`;}).join('')}</div>
-   </div>`).join('')||'<div class="card"><p class="muted">No wins yet.</p></div>'}`;
+   </div>`}).join('')||'<div class="card"><p class="muted">No wins yet.</p></div>'}`;
+
 }
 async function reactWin(id,emoji){ try{await api('/api/wins/'+id+'/react',{method:'POST',body:JSON.stringify({emoji})});viewWins();}catch(e){toast(e.message);} }
 function postWin(){
@@ -641,4 +979,260 @@ async function viewNotify(){
 }
 async function sendNotif(){ const recipient=$('nTo').value.trim(),body=$('nBody').value.trim();if(!body){toast('Enter a message');return;} try{await api('/api/notifications/send',{method:'POST',body:JSON.stringify({recipient,body,kind:'manual'})});toast('Message sent');viewNotify();}catch(e){toast(e.message);} }
 
+// ============ SUPPORT ============
+let SUP_TICKET = null;
+let SUP_SENDING = false;
+
+async function viewSupport(){
+  $('pTitle').textContent='Support';
+  $('pSub').textContent='AI-powered help — get instant answers or escalate to a developer';
+  $('pActions').innerHTML='';
+
+  const [myTickets, queueTickets] = await Promise.all([
+    api('/api/support/tickets'),
+    isAdmin() ? api('/api/support/tickets?status=escalated') : Promise.resolve([]),
+  ]);
+
+  const statusBadge = s => {
+    const map = { open:'b-ok', 'ai-resolved':'b-ok', escalated:'b-low', approved:'b-buy', rejected:'b-crit', done:'b-ok' };
+    return `<span class="badge ${map[s]||'b-ok'}" style="font-size:10px">${s}</span>`;
+  };
+  const typeBadge = t => `<span class="badge b-low" style="font-size:10px">${t}</span>`;
+
+  $('content').innerHTML=`
+  <div class="grid g2" style="margin-bottom:16px">
+    <div class="card" style="cursor:pointer;text-align:center;padding:32px 16px" onclick="startSupportChat()">
+      <div style="font-size:36px;margin-bottom:8px">💬</div>
+      <h3 style="margin:0 0 4px">Get Help</h3>
+      <p class="muted" style="margin:0">Chat with AI — instant answers to most questions</p>
+    </div>
+    <div class="card" style="cursor:pointer;text-align:center;padding:32px 16px" onclick="startSupportChat('feature')">
+      <div style="font-size:36px;margin-bottom:8px">💡</div>
+      <h3 style="margin:0 0 4px">Request a Feature</h3>
+      <p class="muted" style="margin:0">Suggest something new for the app</p>
+    </div>
+  </div>
+
+  <div id="supChatPanel" style="display:none">
+    <div class="card" style="margin-bottom:16px">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+        <h3 style="margin:0" id="supChatTitle">Support Chat</h3>
+        <button class="btn sm sec" onclick="closeSupportChat()">Close</button>
+      </div>
+      <div id="supMessages" style="min-height:120px;max-height:400px;overflow-y:auto;display:flex;flex-direction:column;gap:10px;margin-bottom:12px;padding:4px"></div>
+      <div style="display:flex;gap:8px">
+        <input id="supInput" class="inp" style="flex:1" placeholder="Describe your issue…" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendSupportMsg();}">
+        <button class="btn" id="supSendBtn" onclick="sendSupportMsg()">Send</button>
+      </div>
+      <div id="supEscalateBar" style="display:none;margin-top:12px;padding-top:12px;border-top:1px solid var(--border);display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+        <span class="muted" style="font-size:13px">Still not resolved?</span>
+        <button class="btn sm sec" onclick="escalateTicket('bug')">🐛 Submit as Bug Report</button>
+        <button class="btn sm sec" onclick="escalateTicket('feature')">💡 Submit as Feature Request</button>
+      </div>
+    </div>
+  </div>
+
+  ${isAdmin() && queueTickets.length ? `
+  <div class="card" style="margin-bottom:16px">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+      <h3 style="margin:0">Review Queue <span class="badge b-low">${queueTickets.length}</span></h3>
+      <span class="muted" style="font-size:12px">Escalated by users — approve to implement, reject to decline</span>
+    </div>
+    <table><thead><tr><th>User</th><th>Type</th><th>Title</th><th>Status</th><th>Submitted</th><th></th></tr></thead><tbody>
+    ${queueTickets.map(t=>`<tr>
+      <td>${t.user_name||'—'}</td>
+      <td>${typeBadge(t.type)}</td>
+      <td style="max-width:260px">${t.title}</td>
+      <td>${statusBadge(t.status)}</td>
+      <td class="muted" style="font-size:12px">${new Date(t.created_at).toLocaleDateString()}</td>
+      <td><button class="btn sm sec" onclick="viewTicketDetail('${t.id}')">Review</button></td>
+    </tr>`).join('')}
+    </tbody></table>
+  </div>` : ''}
+
+  ${isAdmin() ? `
+  <div class="card" style="margin-bottom:16px">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+      <h3 style="margin:0">All Tickets</h3>
+      <select class="inp" style="width:auto;font-size:12px" onchange="filterSupportTickets(this.value)">
+        <option value="">All statuses</option>
+        <option value="open">Open</option>
+        <option value="escalated">Escalated</option>
+        <option value="approved">Approved</option>
+        <option value="rejected">Rejected</option>
+        <option value="done">Done</option>
+      </select>
+    </div>
+    <div id="allTicketsTable">` + renderTicketTable(myTickets) + `</div>
+  </div>` : `
+  <div class="card">
+    <h3>My Tickets</h3>
+    ${myTickets.length ? renderTicketTable(myTickets) : '<p class="muted">No tickets yet.</p>'}
+  </div>`}
+
+  <div id="supDetailPanel" style="display:none"></div>`;
+}
+
+function renderTicketTable(tickets){
+  if(!tickets.length) return '<p class="muted">No tickets.</p>';
+  const statusBadge = s => {
+    const map={open:'b-ok','ai-resolved':'b-ok',escalated:'b-low',approved:'b-buy',rejected:'b-crit',done:'b-ok'};
+    return `<span class="badge ${map[s]||'b-ok'}" style="font-size:10px">${s}</span>`;
+  };
+  return `<table><thead><tr><th>Type</th><th>Title</th><th>Status</th><th>Date</th><th></th></tr></thead><tbody>
+  ${tickets.map(t=>`<tr>
+    <td><span class="badge b-low" style="font-size:10px">${t.type}</span></td>
+    <td>${t.title}</td>
+    <td>${statusBadge(t.status)}</td>
+    <td class="muted" style="font-size:12px">${new Date(t.created_at).toLocaleDateString()}</td>
+    <td><button class="btn sm sec" onclick="viewTicketDetail('${t.id}')">View</button></td>
+  </tr>`).join('')}
+  </tbody></table>`;
+}
+
+async function filterSupportTickets(status){
+  const url = status ? `/api/support/tickets?status=${status}` : '/api/support/tickets';
+  const tickets = await api(url);
+  const el=$('allTicketsTable'); if(el) el.innerHTML=renderTicketTable(tickets);
+}
+
+async function startSupportChat(type='question'){
+  const title = type==='feature'
+    ? (prompt('Briefly describe the feature you want:')||'').trim()
+    : (prompt('Briefly describe your issue:')||'').trim();
+  if(!title) return;
+  const id = (await api('/api/support/tickets',{method:'POST',body:JSON.stringify({type,title})})).id;
+  SUP_TICKET = id;
+  const panel=$('supChatPanel'); if(panel) panel.style.display='block';
+  const titleEl=$('supChatTitle'); if(titleEl) titleEl.textContent=title;
+  renderSupMessages([]);
+  $('supEscalateBar') && ($('supEscalateBar').style.display='none');
+  $('supInput') && $('supInput').focus();
+  if(type==='feature'){
+    await sendSupportMsg('I would like to request a new feature: '+title);
+  }
+}
+
+function closeSupportChat(){
+  SUP_TICKET=null;
+  const p=$('supChatPanel'); if(p) p.style.display='none';
+}
+
+function renderSupMessages(messages){
+  const el=$('supMessages'); if(!el) return;
+  if(!messages.length){el.innerHTML='<p class="muted" style="text-align:center;margin:20px 0">How can I help you today?</p>';return;}
+  el.innerHTML=messages.map(m=>{
+    const isUser=m.role==='user', isAI=m.role==='ai';
+    const bg=isUser?'var(--accent)':isAI?'var(--surface)':'rgba(245,158,11,.1)';
+    const align=isUser?'flex-end':'flex-start';
+    const label=isUser?'You':isAI?'AI Support':'Admin';
+    return `<div style="display:flex;flex-direction:column;align-items:${align};max-width:85%;align-self:${align}">
+      <span style="font-size:10px;color:var(--muted);margin-bottom:3px;${isUser?'text-align:right':''}">${label}</span>
+      <div style="background:${bg};border-radius:12px;padding:10px 14px;font-size:14px;line-height:1.5;white-space:pre-wrap">${m.body.replace(/</g,'&lt;')}</div>
+    </div>`;
+  }).join('');
+  el.scrollTop=el.scrollHeight;
+}
+
+async function sendSupportMsg(prefill){
+  if(!SUP_TICKET){toast('No active support chat');return;}
+  if(SUP_SENDING) return;
+  const inp=$('supInput');
+  const message=prefill||(inp?inp.value.trim():'');
+  if(!message) return;
+  if(inp&&!prefill) inp.value='';
+  SUP_SENDING=true;
+  const btn=$('supSendBtn'); if(btn){btn.disabled=true;btn.textContent='...';}
+
+  // Optimistically add user message
+  const msgEl=$('supMessages');
+  if(msgEl){
+    const t=await api('/api/support/tickets/'+SUP_TICKET);
+    renderSupMessages(t.messages.concat([{role:'user',body:message}]));
+    const typing=document.createElement('div');
+    typing.id='supTyping';typing.style.cssText='color:var(--muted);font-size:13px;padding:4px 0';
+    typing.textContent='AI is typing…';
+    msgEl.appendChild(typing);msgEl.scrollTop=msgEl.scrollHeight;
+  }
+
+  try{
+    const r=await api('/api/support/tickets/'+SUP_TICKET+'/chat',{method:'POST',body:JSON.stringify({message})});
+    const t=await api('/api/support/tickets/'+SUP_TICKET);
+    renderSupMessages(t.messages);
+    if(r.suggestEscalate){
+      const bar=$('supEscalateBar');if(bar) bar.style.display='flex';
+    }
+  }catch(e){toast(e.message);}
+  finally{
+    SUP_SENDING=false;
+    const b=$('supSendBtn');if(b){b.disabled=false;b.textContent='Send';}
+    const ty=document.getElementById('supTyping');if(ty)ty.remove();
+    if(inp) inp.focus();
+  }
+}
+
+async function escalateTicket(type){
+  if(!SUP_TICKET) return;
+  try{
+    await api('/api/support/tickets/'+SUP_TICKET+'/escalate',{method:'POST',body:JSON.stringify({type})});
+    toast(type==='bug'?'Bug report submitted — thank you!':'Feature request submitted — thank you!');
+    const bar=$('supEscalateBar');if(bar) bar.style.display='none';
+    closeSupportChat();
+    viewSupport();
+  }catch(e){toast(e.message);}
+}
+
+async function viewTicketDetail(id){
+  const t=await api('/api/support/tickets/'+id);
+  const panel=$('supDetailPanel');if(!panel)return;
+  panel.style.display='block';
+  panel.scrollIntoView({behavior:'smooth'});
+  const statusBadge=s=>{const map={open:'b-ok','ai-resolved':'b-ok',escalated:'b-low',approved:'b-buy',rejected:'b-crit',done:'b-ok'};return`<span class="badge ${map[s]||'b-ok'}">${s}</span>`;};
+  panel.innerHTML=`<div class="card">
+    <div style="display:flex;align-items:center;gap:12px;margin-bottom:16px">
+      <h3 style="margin:0;flex:1">${t.title}</h3>
+      ${statusBadge(t.status)}
+      <button class="btn sm sec" onclick="$('supDetailPanel').style.display='none'">Close</button>
+    </div>
+    ${t.ai_summary?`<div class="banner" style="margin-bottom:12px"><strong>AI Summary:</strong> ${t.ai_summary}</div>`:''}
+    <div style="display:flex;flex-direction:column;gap:8px;max-height:320px;overflow-y:auto;margin-bottom:16px">
+    ${t.messages.map(m=>{
+      const isUser=m.role==='user',isAI=m.role==='ai';
+      const bg=isUser?'var(--accent)':isAI?'var(--surface)':'rgba(245,158,11,.1)';
+      const align=isUser?'flex-end':'flex-start';
+      const label=isUser?t.user_name||'User':isAI?'AI Support':'Admin';
+      return `<div style="display:flex;flex-direction:column;align-items:${align};max-width:85%;align-self:${align}">
+        <span style="font-size:10px;color:var(--muted);margin-bottom:2px">${label}</span>
+        <div style="background:${bg};border-radius:10px;padding:8px 12px;font-size:13px;white-space:pre-wrap">${m.body.replace(/</g,'&lt;')}</div>
+      </div>`;
+    }).join('')}
+    </div>
+    ${isAdmin()?`
+    <div style="border-top:1px solid var(--border);padding-top:12px;display:flex;flex-wrap:wrap;gap:8px;align-items:center">
+      <textarea id="supAdminNote" class="inp" rows="2" style="flex:1;min-width:200px" placeholder="Admin note (optional)…">${t.admin_note||''}</textarea>
+      <div style="display:flex;flex-direction:column;gap:6px">
+        <button class="btn sm" onclick="adminDecision('${t.id}','approved')">✅ Approve for Implementation</button>
+        <button class="btn sm sec" onclick="adminDecision('${t.id}','rejected')">❌ Reject</button>
+        <button class="btn sm sec" onclick="adminDecision('${t.id}','done')">✔ Mark Done</button>
+      </div>
+    </div>`:''}</div>`;
+}
+
+async function adminDecision(id, status){
+  const note=($('supAdminNote')||{}).value||'';
+  await api('/api/support/tickets/'+id,{method:'PATCH',body:JSON.stringify({status,adminNote:note||undefined})});
+  toast('Ticket updated');
+  viewSupport();
+}
+
 loadAccts();
+</script>
+<script>
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('/sw.js').catch(e => console.warn('SW:', e));
+  });
+}
+</script>
+</body>
+</html>

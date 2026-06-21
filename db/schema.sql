@@ -12,14 +12,16 @@ CREATE TABLE IF NOT EXISTS app_user (
   password_hash TEXT NOT NULL,
   title         TEXT,                 -- job role (references role.name)
   role          TEXT NOT NULL DEFAULT 'viewer',  -- permission tier (admin/editor/viewer)
-  manager_id    TEXT REFERENCES app_user(id)
+  manager_id    TEXT REFERENCES app_user(id),
+  phone         TEXT
 );
 
 CREATE TABLE IF NOT EXISTS vendor (
   id        TEXT PRIMARY KEY,
   name      TEXT NOT NULL,
   lead_days INT  NOT NULL DEFAULT 0,
-  terms     TEXT
+  terms     TEXT,
+  status    TEXT NOT NULL DEFAULT 'active'   -- active / pending / rejected
 );
 
 CREATE TABLE IF NOT EXISTS part (
@@ -74,12 +76,14 @@ CREATE TABLE IF NOT EXISTS trailer_type (
 );
 
 CREATE TABLE IF NOT EXISTS customer (
-  id      TEXT PRIMARY KEY,
-  name    TEXT NOT NULL,
-  kind    TEXT NOT NULL DEFAULT 'Dealership',  -- Dealership / Retail
-  contact TEXT,
-  phone   TEXT,
-  rep_id  TEXT REFERENCES app_user(id)
+  id              TEXT PRIMARY KEY,
+  name            TEXT NOT NULL,
+  kind            TEXT NOT NULL DEFAULT 'Dealership',  -- Dealership / Retail
+  contact         TEXT,
+  phone           TEXT,
+  rep_id          TEXT REFERENCES app_user(id),
+  sms_consent     BOOLEAN NOT NULL DEFAULT false,
+  sms_consent_at  TIMESTAMPTZ
 );
 
 CREATE TABLE IF NOT EXISTS customer_allowed_type (
@@ -224,3 +228,96 @@ CREATE TABLE IF NOT EXISTS notification (
   status  TEXT NOT NULL DEFAULT 'sent'
 );
 CREATE INDEX IF NOT EXISTS idx_labor_model ON model_labor(model_id);
+
+-- ===== Approval workflow =====
+CREATE TABLE IF NOT EXISTS approval_rule (
+  id          TEXT PRIMARY KEY,
+  type        TEXT NOT NULL CHECK (type IN ('po', 'vendor')),
+  min_amount  NUMERIC(12,2),
+  max_amount  NUMERIC(12,2),
+  approver_id TEXT NOT NULL REFERENCES app_user(id) ON DELETE CASCADE,
+  seq         INT NOT NULL DEFAULT 1,
+  notify      TEXT NOT NULL DEFAULT 'app' CHECK (notify IN ('app', 'sms', 'both')),
+  active      BOOLEAN NOT NULL DEFAULT true,
+  label       TEXT,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS approval_request (
+  id            TEXT PRIMARY KEY,
+  rule_id       TEXT NOT NULL REFERENCES approval_rule(id) ON DELETE CASCADE,
+  type          TEXT NOT NULL CHECK (type IN ('po', 'vendor')),
+  ref_id        TEXT NOT NULL,
+  ref_amount    NUMERIC(12,2),
+  ref_desc      TEXT,
+  approver_id   TEXT NOT NULL REFERENCES app_user(id),
+  seq           INT NOT NULL DEFAULT 1,
+  status        TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','approved','rejected','cancelled')),
+  token         TEXT NOT NULL UNIQUE,
+  notify_method TEXT NOT NULL DEFAULT 'app',
+  requested_by  TEXT REFERENCES app_user(id),
+  requested_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  decided_by    TEXT REFERENCES app_user(id),
+  decided_at    TIMESTAMPTZ,
+  note          TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_appreq_ref     ON approval_request(ref_id);
+CREATE INDEX IF NOT EXISTS idx_appreq_user    ON approval_request(approver_id, status);
+CREATE INDEX IF NOT EXISTS idx_appreq_token   ON approval_request(token);
+
+-- ===== In-app support system =====
+CREATE TABLE IF NOT EXISTS support_ticket (
+  id          TEXT PRIMARY KEY,
+  user_id     TEXT REFERENCES app_user(id),
+  type        TEXT NOT NULL DEFAULT 'question' CHECK (type IN ('question','bug','feature')),
+  title       TEXT NOT NULL,
+  status      TEXT NOT NULL DEFAULT 'open'
+                CHECK (status IN ('open','ai-resolved','escalated','approved','rejected','done')),
+  ai_summary  TEXT,   -- AI's diagnosis / recommendation stored for admin review
+  admin_note  TEXT,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS support_message (
+  id        SERIAL PRIMARY KEY,
+  ticket_id TEXT NOT NULL REFERENCES support_ticket(id) ON DELETE CASCADE,
+  role      TEXT NOT NULL CHECK (role IN ('user','ai','admin')),
+  body      TEXT NOT NULL,
+  ts        TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_ticket_user   ON support_ticket(user_id);
+CREATE INDEX IF NOT EXISTS idx_ticket_status ON support_ticket(status);
+CREATE INDEX IF NOT EXISTS idx_smsg_ticket   ON support_message(ticket_id);
+
+-- ===== QuickBooks error log =====
+CREATE TABLE IF NOT EXISTS qbo_error_log (
+  id         SERIAL PRIMARY KEY,
+  ts         TIMESTAMPTZ NOT NULL DEFAULT now(),
+  method     TEXT,
+  endpoint   TEXT,
+  status     INT,
+  intuit_tid TEXT,
+  error_type TEXT,           -- QBOAuthError / QBOFeatureError / Error
+  message    TEXT NOT NULL,
+  raw_body   TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_qboerr_ts ON qbo_error_log(ts DESC);
+
+-- ===== Additive migrations (safe to re-run) =====
+ALTER TABLE customer  ADD COLUMN IF NOT EXISTS sms_consent    BOOLEAN     NOT NULL DEFAULT false;
+ALTER TABLE customer  ADD COLUMN IF NOT EXISTS sms_consent_at TIMESTAMPTZ;
+ALTER TABLE app_user  ADD COLUMN IF NOT EXISTS sms_consent    BOOLEAN     NOT NULL DEFAULT false;
+ALTER TABLE app_user  ADD COLUMN IF NOT EXISTS sms_consent_at TIMESTAMPTZ;
+
+-- ===== SMS opt-in registry (keyword + webform opt-ins by phone) =====
+CREATE TABLE IF NOT EXISTS sms_optin (
+  phone        TEXT PRIMARY KEY,
+  audience     TEXT NOT NULL DEFAULT 'customer',  -- customer / employee
+  opted_in     BOOLEAN NOT NULL DEFAULT false,
+  opted_in_at  TIMESTAMPTZ,
+  opted_out_at TIMESTAMPTZ,
+  method       TEXT   -- keyword / webform
+);

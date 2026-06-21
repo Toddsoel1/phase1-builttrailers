@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Built Trailers — SMS Notifications</title>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#0f1117;color:#e8eaf0;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:20px}
+  .card{background:#1a1d27;border:1px solid #2a2d3a;border-radius:16px;padding:32px;max-width:440px;width:100%}
+  .logo{font-size:22px;font-weight:700;color:#ffb347;margin-bottom:4px}
+  .sub{color:#7a7f94;font-size:14px;margin-bottom:28px}
+  h1{font-size:20px;font-weight:600;margin-bottom:6px}
+  .desc{color:#9a9eb4;font-size:14px;line-height:1.5;margin-bottom:24px}
+  .section{border:1px solid #2a2d3a;border-radius:10px;padding:16px;margin-bottom:20px}
+  .section h2{font-size:13px;font-weight:600;text-transform:uppercase;letter-spacing:.08em;color:#7a7f94;margin-bottom:12px}
+  .keyword-row{display:flex;align-items:center;gap:12px;margin-bottom:8px}
+  .keyword{background:#23263a;border:1px solid #3a3d50;border-radius:6px;padding:6px 14px;font-family:monospace;font-size:15px;font-weight:700;color:#ffb347}
+  .keyword-label{font-size:13px;color:#9a9eb4}
+  .phone-display{font-size:18px;font-weight:600;color:#e8eaf0;margin-top:4px}
+  .divider{display:flex;align-items:center;gap:12px;margin:20px 0;color:#5a5f74;font-size:13px}
+  .divider::before,.divider::after{content:'';flex:1;height:1px;background:#2a2d3a}
+  label{display:block;font-size:13px;color:#9a9eb4;margin-bottom:5px}
+  input[type=tel],select{width:100%;background:#23263a;border:1px solid #3a3d50;border-radius:8px;padding:10px 12px;color:#e8eaf0;font-size:15px;outline:none;margin-bottom:14px}
+  input[type=tel]:focus,select:focus{border-color:#ffb347}
+  select option{background:#23263a}
+  .consent-box{background:#23263a;border:1px solid #3a3d50;border-radius:8px;padding:14px;margin-bottom:18px}
+  .consent-box label{display:flex;gap:10px;align-items:flex-start;cursor:pointer;color:#9a9eb4;font-size:12px;line-height:1.6;margin:0}
+  .consent-box input[type=checkbox]{margin-top:2px;flex-shrink:0;width:16px;height:16px;accent-color:#ffb347}
+  .btn{width:100%;background:#ffb347;color:#0f1117;border:none;border-radius:8px;padding:13px;font-size:15px;font-weight:700;cursor:pointer}
+  .btn:hover{background:#ffc46a}
+  .btn:disabled{opacity:.5;cursor:default}
+  .note{font-size:11px;color:#5a5f74;line-height:1.5;margin-top:14px}
+  .success{text-align:center;padding:24px 0;display:none}
+  .success .icon{font-size:48px;margin-bottom:12px}
+  .success h2{font-size:18px;margin-bottom:8px}
+  .success p{color:#9a9eb4;font-size:14px}
+  .error-msg{color:#e74c3c;font-size:13px;margin-bottom:10px;display:none}
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="logo">Built Trailers</div>
+  <div class="sub">SMS Notification Opt-In</div>
+
+  <div id="formView">
+    <h1>Stay in the loop</h1>
+    <p class="desc">Get text updates on your order as it moves through production — or receive approval alerts as part of your role.</p>
+
+    <!-- Via Text -->
+    <div class="section">
+      <h2>Option 1 — Text to opt in</h2>
+      <div class="keyword-row"><span class="keyword">START</span></div>
+      <div class="keyword-row"><span class="keyword">YES</span></div>
+      <div class="keyword-row"><span class="keyword">IN</span></div>
+      <div class="keyword-row"><span class="keyword">ENROLL</span></div>
+      <div style="margin-top:10px;font-size:13px;color:#7a7f94">Text any of the above to:</div>
+      <div class="phone-display">+1 (435) 900-8198</div>
+      <div style="font-size:12px;color:#5a5f74;margin-top:6px">You'll receive a confirmation text. Reply STOP anytime to cancel.</div>
+    </div>
+
+    <div class="divider">or fill out the form</div>
+
+    <!-- Via Web Form -->
+    <div class="section">
+      <h2>Option 2 — Web form</h2>
+
+      <div id="errorMsg" class="error-msg"></div>
+
+      <label>I am a…</label>
+      <select id="audience">
+        <option value="customer">Customer / Dealer</option>
+        <option value="employee">Employee (approval notifications)</option>
+      </select>
+
+      <label>Mobile phone number</label>
+      <input type="tel" id="phone" placeholder="+1 (801) 555-1234" autocomplete="tel">
+
+      <div class="consent-box">
+        <label>
+          <input type="checkbox" id="consent">
+          <span id="consentText">By providing my mobile number I agree to receive order status text messages from Built Trailers at +1 (435) 900-8198. Up to 4 messages per order. Msg &amp; data rates may apply. Reply STOP to cancel, HELP for help.</span>
+        </label>
+      </div>
+
+      <button class="btn" id="submitBtn" onclick="submitForm()" disabled>Subscribe</button>
+
+      <p class="note">
+        Consent is not required to make a purchase. Message frequency varies by order activity.
+        <br>View our <a href="/terms" style="color:#7a7f94">Terms of Service</a> and <a href="/privacy" style="color:#7a7f94">Privacy Policy</a>.
+      </p>
+    </div>
+  </div>
+
+  <div class="success" id="successView">
+    <div class="icon">✅</div>
+    <h2>You're subscribed!</h2>
+    <p>Check your phone — we just sent you a confirmation text from +1 (435) 900-8198.</p>
+    <p style="margin-top:10px">Reply <strong>STOP</strong> at any time to unsubscribe.</p>
+  </div>
+</div>
+
+<script>
+const consentTexts = {
+  customer: 'By providing my mobile number I agree to receive order status text messages from Built Trailers at +1 (435) 900-8198. Up to 4 messages per order. Msg & data rates may apply. Reply STOP to cancel, HELP for help.',
+  employee: 'By providing my mobile number I agree to receive SMS approval request notifications from Built Trailers at +1 (435) 900-8198 as part of my job role. Msg & data rates may apply. Reply STOP to cancel, HELP for help.'
+};
+
+document.getElementById('audience').addEventListener('change', function() {
+  document.getElementById('consentText').textContent = consentTexts[this.value] || consentTexts.customer;
+  document.getElementById('consent').checked = false;
+  updateBtn();
+});
+
+document.getElementById('consent').addEventListener('change', updateBtn);
+document.getElementById('phone').addEventListener('input', updateBtn);
+
+function updateBtn() {
+  const phone = document.getElementById('phone').value.trim();
+  const consent = document.getElementById('consent').checked;
+  document.getElementById('submitBtn').disabled = !phone || !consent;
+}
+
+async function submitForm() {
+  const phone = document.getElementById('phone').value.trim();
+  const audience = document.getElementById('audience').value;
+  const err = document.getElementById('errorMsg');
+  err.style.display = 'none';
+
+  document.getElementById('submitBtn').disabled = true;
+  document.getElementById('submitBtn').textContent = 'Subscribing…';
+
+  try {
+    const res = await fetch('/api/sms/optin', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ phone, audience })
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Something went wrong');
+    document.getElementById('formView').style.display = 'none';
+    document.getElementById('successView').style.display = 'block';
+  } catch(e) {
+    err.textContent = e.message;
+    err.style.display = 'block';
+    document.getElementById('submitBtn').disabled = false;
+    document.getElementById('submitBtn').textContent = 'Subscribe';
+  }
+}
+</script>
+</body>
+</html>

@@ -5,7 +5,7 @@
 // set ACCOUNTING_MODE=quickbooks and provide QBO credentials — the marked hook below is
 // where the real QuickBooks Online API calls plug in.
 import { q, all, one } from './db.js';
-import { qboConfigured as qboReady, createInvoice as qboInvoice, createBill as qboBill } from './qbo.js';
+import { qboConfigured as qboReady, createInvoice as qboInvoice, createBill as qboBill, QBOFeatureError } from './qbo.js';
 
 export function accountingMode() {
   return process.env.ACCOUNTING_MODE === 'quickbooks' ? 'quickbooks' : 'simulated';
@@ -23,8 +23,14 @@ async function record(kind, ref, party, amount, userId) {
         : await qboBill({ vendor: party, amount, ref });
       status = 'synced';
     } catch (e) {
-      status = 'pending'; // queued; will retry on /api/accounting/sync once creds/data are in place
-      try { await q('INSERT INTO audit_log(user_id,action,detail) VALUES ($1,$2,$3)', [userId || null, 'acct.error', String(e.message || e).slice(0, 300)]); } catch {}
+      if (e instanceof QBOFeatureError || e?.qboFeature) {
+        // Feature not in this QB subscription — record locally, don't queue for retry
+        status = 'posted';
+        try { await q('INSERT INTO audit_log(user_id,action,detail) VALUES ($1,$2,$3)', [userId || null, 'acct.feature_unavailable', String(e.message || e).slice(0, 300)]); } catch {}
+      } else {
+        status = 'pending'; // transient error — will retry on /api/accounting/sync
+        try { await q('INSERT INTO audit_log(user_id,action,detail) VALUES ($1,$2,$3)', [userId || null, 'acct.error', String(e.message || e).slice(0, 300)]); } catch {}
+      }
     }
   }
   await q(`INSERT INTO accounting_event(kind,ref,party,amount,mode,status,external_id)

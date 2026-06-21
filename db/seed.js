@@ -67,7 +67,7 @@ async function run() {
     process.exit(0);
   }
   // clear (children first)
-  for (const t of ['notification', 'win_reaction', 'win', 'self_goal', 'user_outcome', 'time_off', 'employee',
+  for (const t of ['approval_request', 'approval_rule', 'notification', 'win_reaction', 'win', 'self_goal', 'user_outcome', 'time_off', 'employee',
                    'accounting_event', 'vendor_invoice', 'purchase_order', 'sales_order',
                    'customer_allowed_type', 'customer', 'trailer_type',
                    'audit_log', 'model_labor', 'bom_line', 'model', 'part', 'vendor', 'app_user', 'role']) {
@@ -85,6 +85,10 @@ async function run() {
       [id, name, un, pwHash, title, tierOf[title] || 'viewer']);
   }
   for (const [id, , , mgr] of USERS) if (mgr) await q('UPDATE app_user SET manager_id=$1 WHERE id=$2', [mgr, id]);
+  // phones for approvers (used by approval SMS notifications)
+  await q("UPDATE app_user SET phone='208-555-0101' WHERE id='u1'"); // GM
+  await q("UPDATE app_user SET phone='208-555-0102' WHERE id='u2'"); // Shop Manager
+  await q("UPDATE app_user SET phone='208-555-0103' WHERE id='u3'"); // Office Manager / Accounting
   // vendors
   for (const v of VENDORS) await q('INSERT INTO vendor(id,name,lead_days,terms) VALUES ($1,$2,$3,$4)', v);
   // parts
@@ -199,6 +203,20 @@ async function run() {
   await q(`INSERT INTO notification(channel,recipient,body,kind,ref,mode,status) VALUES
      ('sms','High Desert Powersports','Your 3x Utility Trailer 7X14 Tandem (SO-1043) is now Confirmed.','order-status','SO-1043','simulated','sent'),
      ('sms','Purchasing','Low stock alert: Ball Coupler 2" below reorder point.','alert','BUY-COUP-200','simulated','sent')`);
+
+  // Default approval rules: PO thresholds + new-vendor approvals
+  // seq=1 = Accounting (Office Mgr), seq=2 = GM for larger amounts
+  const RULES = [
+    ['rule_po_acct',  'po', 500,    null,  'u3', 1, 'app', 'PO $500+ → Accounting'],
+    ['rule_po_mgr',   'po', 2500,   null,  'u2', 2, 'app', 'PO $2,500+ → Shop Manager'],
+    ['rule_po_gm',    'po', 5000,   null,  'u1', 3, 'app', 'PO $5,000+ → General Manager'],
+    ['rule_vend_acct','vendor', null, null, 'u3', 1, 'app', 'New vendor → Accounting'],
+    ['rule_vend_gm',  'vendor', null, null, 'u1', 2, 'app', 'New vendor → General Manager'],
+  ];
+  for (const [id, type, min, max, approver, seq, notify, label] of RULES) {
+    await q('INSERT INTO approval_rule(id,type,min_amount,max_amount,approver_id,seq,notify,label) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)',
+      [id, type, min, max, approver, seq, notify, label]);
+  }
 
   const counts = {};
   for (const t of ['role', 'app_user', 'vendor', 'part', 'model', 'bom_line', 'model_labor', 'trailer_type', 'customer', 'sales_order', 'purchase_order', 'accounting_event', 'employee', 'time_off', 'win', 'notification']) {

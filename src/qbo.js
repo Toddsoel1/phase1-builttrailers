@@ -2,43 +2,225 @@
 // Activated when ACCOUNTING_MODE=quickbooks and the QBO_* env vars are set. Until then the
 // app stays in simulated mode (see accounting.js). Uses Node 20+ global fetch.
 import 'dotenv/config';
+import crypto from 'crypto';
+import { q, one, all } from './db.js';
 
-const TOKEN_URL = 'https://oauth.platform.intuit.com/oauth2/v1/tokens';
-const API_BASE = (process.env.QBO_ENV === 'production')
+// Thrown for any Intuit auth/authorization failure so callers can prompt reconnect
+export class QBOAuthError extends Error {
+  constructor(msg) { super(msg); this.name = 'QBOAuthError'; this.qboAuth = true; }
+}
+
+// Thrown when the QB feature is unavailable in the user's subscription tier
+export class QBOFeatureError extends Error {
+  constructor(msg, feature) { super(msg); this.name = 'QBOFeatureError'; this.qboFeature = true; this.feature = feature || null; }
+}
+
+const API_BASE  = (process.env.QBO_ENV === 'production')
   ? 'https://quickbooks.api.intuit.com'
   : 'https://sandbox-quickbooks.api.intuit.com';
 const MINOR = '73';
 
-export function qboConfigured() {
-  return !!(process.env.QBO_CLIENT_ID && process.env.QBO_CLIENT_SECRET &&
-            process.env.QBO_REFRESH_TOKEN && process.env.QBO_REALM_ID);
+// ---- Intuit discovery document (fetched once, cached for 24 h) ----
+const DISCOVERY_URL = 'https://developer.api.intuit.com/.well-known/openid_sandbox_configuration';
+const DISCOVERY_URL_PROD = 'https://developer.api.intuit.com/.well-known/openid_configuration';
+let discoveryCache = null;
+let discoveryExp = 0;
+async function discovery() {
+  if (discoveryCache && Date.now() < discoveryExp) return discoveryCache;
+  const url = (process.env.QBO_ENV === 'production') ? DISCOVERY_URL_PROD : DISCOVERY_URL;
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`Intuit discovery fetch failed ${res.status}`);
+  discoveryCache = await res.json();
+  discoveryExp = Date.now() + 24 * 60 * 60 * 1000;
+  return discoveryCache;
+}
+async function authorizationEndpoint() { return (await discovery()).authorization_endpoint; }
+async function tokenEndpoint()         { return (await discovery()).token_endpoint; }
+async function revocationEndpoint()    { return (await discovery()).revocation_endpoint; }
+
+// ---- config table (auto-created; stores rotating refresh token) ----
+let configTableReady = false;
+async function ensureConfigTable() {
+  if (configTableReady) return;
+  await q(`CREATE TABLE IF NOT EXISTS config (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
+    ts    TIMESTAMPTZ NOT NULL DEFAULT now()
+  )`, []);
+  configTableReady = true;
+}
+async function getConfig(key) {
+  try {
+    await ensureConfigTable();
+    return (await one('SELECT value FROM config WHERE key=$1', [key]))?.value ?? null;
+  } catch { return null; }
+}
+async function setConfig(key, value) {
+  try {
+    await ensureConfigTable();
+    await q(`INSERT INTO config(key,value,ts) VALUES ($1,$2,now())
+             ON CONFLICT(key) DO UPDATE SET value=EXCLUDED.value, ts=now()`, [key, value]);
+  } catch {}
 }
 
-let tokenCache = { access: null, exp: 0 };
-async function accessToken() {
-  if (tokenCache.access && Date.now() < tokenCache.exp) return tokenCache.access;
+// Returns true when env vars are present — the initial requirement before any token rotation
+export function qboConfigured() {
+  return !!(process.env.QBO_CLIENT_ID && process.env.QBO_CLIENT_SECRET &&
+            process.env.QBO_REALM_ID  && process.env.QBO_REFRESH_TOKEN);
+}
+
+// ---- OAuth2 authorization flow (one-time admin setup) ----
+export async function getAuthUrl(redirectUri) {
+  const state = crypto.randomBytes(16).toString('hex');
+  await setConfig('qbo_oauth_state', state);  // persisted so server restarts don't break CSRF check
+  const endpoint = await authorizationEndpoint();
+  return `${endpoint}?${new URLSearchParams({
+    client_id:     process.env.QBO_CLIENT_ID,
+    scope:         'com.intuit.quickbooks.accounting',
+    redirect_uri:  redirectUri,
+    response_type: 'code',
+    state,
+  })}`;
+}
+
+export async function exchangeCode(code, redirectUri, state) {
+  const savedState = await getConfig('qbo_oauth_state');
+  if (!savedState) throw new Error('No OAuth state found — restart the authorization flow');
+  if (state !== savedState) throw new Error('State mismatch — possible CSRF attack; restart the authorization flow');
+  await setConfig('qbo_oauth_state', '');  // consume immediately to prevent replay
+
   const basic = Buffer.from(`${process.env.QBO_CLIENT_ID}:${process.env.QBO_CLIENT_SECRET}`).toString('base64');
-  const res = await fetch(TOKEN_URL, {
+  const res = await fetch(await tokenEndpoint(), {
     method: 'POST',
     headers: { Authorization: `Basic ${basic}`, 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' },
-    body: new URLSearchParams({ grant_type: 'refresh_token', refresh_token: process.env.QBO_REFRESH_TOKEN })
+    body: new URLSearchParams({ grant_type: 'authorization_code', code, redirect_uri: redirectUri }),
   });
-  if (!res.ok) throw new Error(`QBO token refresh ${res.status}: ${await res.text()}`);
+  if (!res.ok) { const b = await res.text(); throw new Error(parseQBOFault(b, `QBO token exchange ${res.status}: ${b}`)); }
+  const j = await res.json();
+  await setConfig('qbo_refresh_token', j.refresh_token);
+  return { refreshToken: j.refresh_token, accessToken: j.access_token };
+}
+
+// ---- Token management ----
+let tokenCache = { access: null, exp: 0 };
+
+async function activeRefreshToken() {
+  // DB token is more current than env var (it rotates on each use)
+  return (await getConfig('qbo_refresh_token')) || process.env.QBO_REFRESH_TOKEN;
+}
+
+async function accessToken() {
+  if (tokenCache.access && Date.now() < tokenCache.exp) return tokenCache.access;
+  const refreshToken = await activeRefreshToken();
+  if (!refreshToken) throw new QBOAuthError('No QBO refresh token — reconnect QuickBooks via Settings → Accounting');
+  const basic = Buffer.from(`${process.env.QBO_CLIENT_ID}:${process.env.QBO_CLIENT_SECRET}`).toString('base64');
+  const res = await fetch(await tokenEndpoint(), {
+    method: 'POST',
+    headers: { Authorization: `Basic ${basic}`, 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' },
+    body: new URLSearchParams({ grant_type: 'refresh_token', refresh_token: refreshToken }),
+  });
+  if (!res.ok) throw new QBOAuthError(`QuickBooks authorization expired — please reconnect (token refresh ${res.status})`);
   const j = await res.json();
   tokenCache = { access: j.access_token, exp: Date.now() + (j.expires_in - 60) * 1000 };
-  // NOTE: Intuit rotates the refresh token (~101 days, reissued each refresh). In production,
-  // persist j.refresh_token back to your secret store so it never goes stale.
+  await setConfig('qbo_refresh_token', j.refresh_token);  // persist the rotated token
   return tokenCache.access;
 }
 
-async function call(method, path, body) {
+// ---- API helpers ----
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+// Parse Intuit's structured fault response into a readable message.
+// QB returns: { Fault: { type, Error: [{ Message, Detail, code, element }] } }
+function parseQBOFault(raw, fallback) {
+  try {
+    const j = typeof raw === 'string' ? JSON.parse(raw) : raw;
+    const fault = j?.Fault || j?.fault;
+    if (!fault) return fallback;
+    const errs = fault.Error || fault.error || [];
+    const parts = errs.map(e => {
+      const msg    = e.Message  || e.message  || '';
+      const detail = e.Detail   || e.detail   || '';
+      const code   = e.code     || e.Code     || '';
+      const elem   = e.element  || e.Element  || '';
+      return [
+        code   ? `[${code}]` : '',
+        msg    ? msg : '',
+        detail && detail !== msg ? ` — ${detail}` : '',
+        elem   ? ` (field: ${elem})` : '',
+      ].filter(Boolean).join('');
+    });
+    const type = fault.type || fault['@type'] || '';
+    return `QuickBooks ${type ? type + ': ' : ''}${parts.join('; ') || fallback}`;
+  } catch { return fallback; }
+}
+
+async function logQBOError({ method, path, status, tid, errorType, message, rawBody }) {
+  try {
+    await q(`INSERT INTO qbo_error_log(method,endpoint,status,intuit_tid,error_type,message,raw_body)
+             VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+      [method, path, status, tid || null, errorType, message.slice(0, 1000), (rawBody || '').slice(0, 4000)]);
+  } catch {}  // never let logging failure break the main flow
+}
+
+export async function qboErrorLog(limit = 100) {
+  return all(`SELECT id,ts,method,endpoint,status,intuit_tid,error_type,message
+              FROM qbo_error_log ORDER BY ts DESC LIMIT $1`, [limit]);
+}
+
+async function call(method, path, body, { _retry401 = false, _attempt = 0 } = {}) {
   const tok = await accessToken();
   const res = await fetch(`${API_BASE}/v3/company/${process.env.QBO_REALM_ID}/${path}`, {
     method,
     headers: { Authorization: `Bearer ${tok}`, 'Content-Type': 'application/json', Accept: 'application/json' },
-    body: body ? JSON.stringify(body) : undefined
+    body: body ? JSON.stringify(body) : undefined,
   });
-  if (!res.ok) throw new Error(`QBO ${method} ${path} ${res.status}: ${await res.text()}`);
+
+  const tid = res.headers.get('intuit_tid') || res.headers.get('intuit-tid') || '';
+
+  // 401 — stale cached token; clear cache and retry once with a fresh access token
+  if (res.status === 401 && !_retry401) {
+    tokenCache = { access: null, exp: 0 };
+    return call(method, path, body, { _retry401: true, _attempt });
+  }
+
+  if (!res.ok) {
+    const errBody = await res.text();
+    const tidSuffix = tid ? ` (intuit_tid: ${tid})` : '';
+
+    // Auth failure — prompt reconnect
+    if (res.status === 401 || res.status === 403) {
+      const isAuthFail = res.status === 401 || errBody.includes('003100') || errBody.includes('ApplicationAuthorizationFailed');
+      if (isAuthFail) {
+        const err = new QBOAuthError(`QuickBooks authorization lost — please reconnect via Settings → Accounting → Re-authorize${tidSuffix}`);
+        await logQBOError({ method, path, status: res.status, tid, errorType: 'QBOAuthError', message: err.message, rawBody: errBody });
+        throw err;
+      }
+    }
+
+    // Subscription/version-specific feature unavailability
+    const featurePattern = /subscription|not available|upgrade your|not supported|not enabled|feature.*plan|plan.*feature/i;
+    const featureCodePattern = /"code"\s*:\s*"(2\d{3}|6\d{3})"/;
+    if (featurePattern.test(errBody) || featureCodePattern.test(errBody)) {
+      const feature = path.split('?')[0].split('/').pop();
+      const err = new QBOFeatureError(
+        `This feature (${feature}) is not available in your current QuickBooks Online subscription. The transaction has been saved locally.${tidSuffix}`,
+        feature
+      );
+      await logQBOError({ method, path, status: res.status, tid, errorType: 'QBOFeatureError', message: err.message, rawBody: errBody });
+      throw err;
+    }
+
+    // 429 / 5xx — transient; exponential backoff up to 3 attempts (1 s, 2 s, 4 s)
+    if ((res.status === 429 || res.status >= 500) && _attempt < 3) {
+      const delay = (2 ** _attempt) * 1000 + Math.random() * 200;
+      await sleep(delay);
+      return call(method, path, body, { _retry401, _attempt: _attempt + 1 });
+    }
+
+    const message = parseQBOFault(errBody, `QBO ${method} ${path} ${res.status}`) + tidSuffix;
+    await logQBOError({ method, path, status: res.status, tid, errorType: 'Error', message, rawBody: errBody });
+    throw new Error(message);
+  }
   return res.json();
 }
 async function query(q) {
@@ -74,7 +256,7 @@ async function anyExpenseAccountId() {
   return a[0].Id;
 }
 
-// --- the two operations accounting.js calls ---
+// ---- the two operations accounting.js calls ----
 export async function createInvoice({ customer, amount, ref }) {
   const customerId = await ensureCustomer(customer || 'Customer');
   const itemId = await anyItemId();
@@ -84,8 +266,8 @@ export async function createInvoice({ customer, amount, ref }) {
     Line: [{
       DetailType: 'SalesItemLineDetail', Amount: Number(amount),
       Description: `Built Trailers order ${ref || ''}`.trim(),
-      SalesItemLineDetail: { ItemRef: { value: itemId }, Qty: 1, UnitPrice: Number(amount) }
-    }]
+      SalesItemLineDetail: { ItemRef: { value: itemId }, Qty: 1, UnitPrice: Number(amount) },
+    }],
   });
   return inv.Invoice.Id;
 }
@@ -98,8 +280,149 @@ export async function createBill({ vendor, amount, ref }) {
     Line: [{
       DetailType: 'AccountBasedExpenseLineDetail', Amount: Number(amount),
       Description: `Built Trailers PO ${ref || ''}`.trim(),
-      AccountBasedExpenseLineDetail: { AccountRef: { value: acctId } }
-    }]
+      AccountBasedExpenseLineDetail: { AccountRef: { value: acctId } },
+    }],
   });
   return bill.Bill.Id;
+}
+
+// ---- Pull sync: QB → Built Trailers ----
+
+async function paginate(entity, where = '') {
+  const rows = [];
+  let start = 1;
+  while (true) {
+    const sql = `SELECT * FROM ${entity}${where ? ' WHERE ' + where : ''} STARTPOSITION ${start} MAXRESULTS 1000`;
+    const r = await query(sql);
+    const batch = r[entity] || [];
+    rows.push(...batch);
+    if (batch.length < 1000) break;
+    start += 1000;
+  }
+  return rows;
+}
+
+export async function syncCustomersFromQBO() {
+  const custs = await paginate('Customer');
+  let created = 0, updated = 0;
+  for (const c of custs) {
+    if (c.Job) continue; // skip sub-customers (jobs)
+    const id = 'qbo_' + c.Id;
+    const name = c.DisplayName || c.CompanyName || c.FullyQualifiedName || 'Unknown';
+    const contact = c.PrimaryEmailAddr?.Address || null;
+    const phone = c.PrimaryPhone?.FreeFormNumber || null;
+    const exists = await one('SELECT id FROM customer WHERE id=$1', [id]);
+    if (exists) {
+      await q('UPDATE customer SET name=$1,contact=$2,phone=$3 WHERE id=$4', [name, contact, phone, id]);
+      updated++;
+    } else {
+      await q('INSERT INTO customer(id,name,kind,contact,phone) VALUES ($1,$2,$3,$4,$5)',
+        [id, name, 'Dealership', contact, phone]);
+      created++;
+    }
+  }
+  await setConfig('qbo_customers_synced_at', new Date().toISOString());
+  return { created, updated };
+}
+
+async function ensureVendorLocal(qbVendorRef) {
+  if (!qbVendorRef?.name) return null;
+  const existing = await one('SELECT id FROM vendor WHERE lower(name)=lower($1)', [qbVendorRef.name]);
+  if (existing) return existing.id;
+  const vid = 'qbo_v_' + qbVendorRef.value;
+  await q('INSERT INTO vendor(id,name,lead_days) VALUES ($1,$2,0) ON CONFLICT DO NOTHING',
+    [vid, qbVendorRef.name]);
+  return vid;
+}
+
+export async function previewItemsFromQBO() {
+  const items = await paginate('Item');
+  const existingParts = await all('SELECT id, name, cost FROM part', []);
+  const byQbId = new Map(existingParts.filter(p => p.id.startsWith('QB-')).map(p => [p.id, p]));
+  const byName  = new Map(existingParts.map(p => [p.name.toLowerCase(), p]));
+  return items
+    .filter(item => item.Type !== 'Group')
+    .map(item => {
+      const qbId = 'QB-' + item.Id;
+      const name = item.FullyQualifiedName || item.Name || 'Unknown';
+      const cost = Number(item.PurchaseCost ?? item.UnitPrice ?? 0);
+      const existing = byQbId.get(qbId) || byName.get(name.toLowerCase());
+      return {
+        qbId:          item.Id,
+        name,
+        itemType:      item.Type,
+        cost,
+        vendor:        item.PrefVendorRef?.name || null,
+        existingPartId: existing?.id || null,
+        existingCost:  existing ? Number(existing.cost) : null,
+        status:        existing ? 'update' : 'new',
+        skip:          item.Type === 'Service',
+      };
+    });
+}
+
+export async function syncItemsFromQBO(qbIds) {
+  // qbIds: optional array of QB item Ids to restrict the sync
+  const items = await paginate('Item');
+  const target = qbIds ? new Set(qbIds.map(String)) : null;
+  let created = 0, updated = 0, skipped = 0;
+  for (const item of items) {
+    if (item.Type === 'Group') { skipped++; continue; }
+    if (target && !target.has(String(item.Id))) { skipped++; continue; }
+    const id = 'QB-' + item.Id;
+    const name = item.FullyQualifiedName || item.Name || 'Unknown';
+    const cost = Number(item.PurchaseCost ?? item.UnitPrice ?? 0);
+    const vendorId = await ensureVendorLocal(item.PrefVendorRef);
+    const exists = await one('SELECT id FROM part WHERE id=$1', [id]);
+    if (exists) {
+      await q('UPDATE part SET name=$1,cost=$2,vendor_id=$3 WHERE id=$4', [name, cost, vendorId, id]);
+      updated++;
+    } else {
+      await q('INSERT INTO part(id,name,type,cost,vendor_id,on_hand,reorder,cushion,lot) VALUES ($1,$2,$3,$4,$5,0,0,0,1)',
+        [id, name, 'P', cost, vendorId]);
+      created++;
+    }
+  }
+  await setConfig('qbo_items_synced_at', new Date().toISOString());
+  return { created, updated, skipped };
+}
+
+export async function syncInvoicesFromQBO() {
+  const invoices = await paginate('Invoice');
+  const models = await all('SELECT id, name FROM model', []);
+  let created = 0, updated = 0;
+  for (const inv of invoices) {
+    const id = 'QBO-' + (inv.DocNumber || inv.Id);
+    const qboCustId = 'qbo_' + (inv.CustomerRef?.value || '');
+    const cust = await one('SELECT id FROM customer WHERE id=$1', [qboCustId])
+              || await one('SELECT id FROM customer WHERE lower(name)=lower($1)', [inv.CustomerRef?.name || '']);
+    const custId = cust?.id || null;
+
+    // match first line item name to a model id or name
+    const firstLine = (inv.Line || []).find(l => l.DetailType === 'SalesItemLineDetail');
+    const itemName = (firstLine?.SalesItemLineDetail?.ItemRef?.name || '').toLowerCase();
+    const matched = itemName
+      ? models.find(m =>
+          m.id.toLowerCase() === itemName ||
+          m.name.toLowerCase().includes(itemName) ||
+          itemName.includes(m.id.toLowerCase()))
+      : null;
+    const modelId = matched?.id || null;
+    const qty = Math.max(1, Math.round(firstLine?.SalesItemLineDetail?.Qty || 1));
+    const due = inv.DueDate || inv.TxnDate || null;
+
+    const exists = await one('SELECT id FROM sales_order WHERE id=$1', [id]);
+    if (exists) {
+      await q('UPDATE sales_order SET customer_id=$1,model_id=$2,due=$3 WHERE id=$4',
+        [custId, modelId, due, id]);
+      updated++;
+    } else {
+      await q(`INSERT INTO sales_order(id,customer_id,model_id,qty,stage,due,deposit,channel,consumed)
+               VALUES ($1,$2,$3,$4,'Ready / Shipped',$5,0,'QuickBooks',true)`,
+        [id, custId, modelId, qty, due]);
+      created++;
+    }
+  }
+  await setConfig('qbo_invoices_synced_at', new Date().toISOString());
+  return { created, updated };
 }

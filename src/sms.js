@@ -3,14 +3,63 @@
 // marked below.
 import { q, all, one } from './db.js';
 
+// Normalize any phone format to E.164 (+1XXXXXXXXXX for US numbers)
+export function normalizePhone(p) {
+  const d = (p || '').replace(/\D/g, '');
+  if (!d) return null;
+  if (d.length === 10) return '+1' + d;
+  if (d.length === 11 && d[0] === '1') return '+' + d;
+  return '+' + d;
+}
+
+// Record opt-in by phone; auto-links to customer / app_user records
+export async function recordOptin(phone, audience, method) {
+  await q(`INSERT INTO sms_optin(phone,audience,opted_in,opted_in_at,method)
+           VALUES ($1,$2,true,now(),$3)
+           ON CONFLICT(phone) DO UPDATE SET opted_in=true,opted_in_at=now(),opted_out_at=null,audience=$2,method=$3`,
+    [phone, audience || 'customer', method || 'webform']);
+  if (audience === 'employee') {
+    await q(`UPDATE app_user SET sms_consent=true,sms_consent_at=now()
+             WHERE regexp_replace(phone,'[^0-9]','','g') = regexp_replace($1,'[^0-9]','','g')`, [phone]);
+  } else {
+    await q(`UPDATE customer SET sms_consent=true,sms_consent_at=now()
+             WHERE regexp_replace(phone,'[^0-9]','','g') = regexp_replace($1,'[^0-9]','','g')`, [phone]);
+  }
+}
+
+// Record opt-out by phone; updates all matching records
+export async function recordOptout(phone) {
+  await q(`UPDATE sms_optin SET opted_in=false,opted_out_at=now() WHERE phone=$1`, [phone]);
+  await q(`UPDATE customer SET sms_consent=false
+           WHERE regexp_replace(phone,'[^0-9]','','g') = regexp_replace($1,'[^0-9]','','g')`, [phone]);
+  await q(`UPDATE app_user SET sms_consent=false
+           WHERE regexp_replace(phone,'[^0-9]','','g') = regexp_replace($1,'[^0-9]','','g')`, [phone]);
+}
+
+// Check if a phone number has a pending opt-in from keyword/webform
+export async function checkOptin(phone) {
+  return one(`SELECT * FROM sms_optin WHERE phone=$1 AND opted_in=true`, [phone]);
+}
+
 export function smsMode() { return process.env.SMS_MODE === 'twilio' ? 'twilio' : 'simulated'; }
 export function twilioConfigured() { return !!(process.env.TWILIO_SID && process.env.TWILIO_TOKEN && process.env.TWILIO_FROM); }
 
-async function deliver(/* to, body */) {
-  // TODO (production): POST to Twilio
-  //   https://api.twilio.com/2010-04-01/Accounts/{SID}/Messages.json  (From, To, Body)
-  // Return the message SID. Until wired, simulated mode records the message locally.
-  throw new Error('Twilio connector not wired');
+async function deliver(to, body) {
+  const sid = process.env.TWILIO_SID;
+  const token = process.env.TWILIO_TOKEN;
+  const from = process.env.TWILIO_FROM;
+  const url = `https://api.twilio.com/2010-04-01/Accounts/${sid}/Messages.json`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: {
+      Authorization: 'Basic ' + Buffer.from(`${sid}:${token}`).toString('base64'),
+      'Content-Type': 'application/x-www-form-urlencoded',
+    },
+    body: new URLSearchParams({ From: from, To: to, Body: body }),
+  });
+  if (!res.ok) throw new Error(`Twilio ${res.status}: ${await res.text()}`);
+  const j = await res.json();
+  return j.sid;
 }
 
 export async function send({ recipient, body, kind, ref }, userId) {
@@ -26,13 +75,14 @@ export async function send({ recipient, body, kind, ref }, userId) {
   return { status, mode };
 }
 
-// auto-text a customer when their order changes stage
+// auto-text a customer when their order changes stage — skipped if no phone or consent not given
 export async function notifyOrderStage(orderId, stage, userId) {
-  const o = await one(`SELECT o.qty, m.name AS model, c.name AS customer FROM sales_order o
+  const o = await one(`SELECT o.qty, m.name AS model, c.name AS customer, c.phone, c.sms_consent
+                         FROM sales_order o
                          LEFT JOIN model m ON m.id=o.model_id LEFT JOIN customer c ON c.id=o.customer_id
                         WHERE o.id=$1`, [orderId]);
-  if (!o) return;
-  await send({ recipient: o.customer || 'Customer', body: `Your ${o.qty}× ${o.model} (${orderId}) is now ${stage}.`, kind: 'order-status', ref: orderId }, userId);
+  if (!o || !o.phone || !o.sms_consent) return;
+  await send({ recipient: o.phone, body: `Built Trailers: Your ${o.qty}x ${o.model} (${orderId}) is now ${stage}. Reply STOP to opt out.`, kind: 'order-status', ref: orderId }, userId);
 }
 
 export async function notifications() {

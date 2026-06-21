@@ -9,9 +9,12 @@ import { modelRollup, modelsSummary, inventoryValuation, partUnitCost } from './
 import { STAGES, canSell, trailerTypes, customersWithTypes, allowedTypesFor, ordersFull, consumeInventory } from './orders.js';
 import { mrp, poList, createPO, receivePO } from './mrp.js';
 import { accountingMode, qboConfigured, ledger, totals, sync, scanInvoice, invoiceList } from './accounting.js';
+import { getAuthUrl, exchangeCode, syncCustomersFromQBO, syncItemsFromQBO, syncInvoicesFromQBO, previewItemsFromQBO, QBOAuthError, QBOFeatureError, qboErrorLog } from './qbo.js';
 import * as people from './people.js';
 import { forecast, workingCapital, scenario } from './forecast.js';
 import * as sms from './sms.js';
+import * as approvals from './approvals.js';
+import * as support from './support.js';
 
 function requireSales(req, res, next) {
   if (!canSell(req.user)) return res.status(403).json({ error: 'Order management is controlled by Sales' });
@@ -21,10 +24,76 @@ function requireSales(req, res, next) {
 const __dir = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
 app.use(express.json());
+app.use(express.urlencoded({ extended: false })); // needed for Twilio webhook
 
 async function audit(req, action, detail) {
   try { await q('INSERT INTO audit_log(user_id,action,detail) VALUES ($1,$2,$3)', [req.user?.id || null, action, detail]); } catch {}
 }
+
+// ---- Twilio inbound SMS webhook (unauthenticated — called by Twilio) ----
+app.post('/webhooks/sms', async (req, res) => {
+  const from  = sms.normalizePhone(req.body?.From || '');
+  const body  = (req.body?.Body || '').trim().toUpperCase().replace(/\s+/g, '');
+  let reply   = null;
+
+  const OPT_IN_KEYWORDS  = ['START','YES','IN','ENROLL'];
+  const OPT_OUT_KEYWORDS = ['STOP','STOPALL','UNSUBSCRIBE','CANCEL','END','QUIT'];
+  const OPT_IN_MSG = 'Built Trailers: You are now enrolled! Msg&data rates may apply. Msg frequency varies. Reply STOP to cancel, HELP for help. builttrailers.app/privacy';
+
+  try {
+    if (OPT_IN_KEYWORDS.includes(body)) {
+      // Determine audience: employee if phone matches an app_user, otherwise customer
+      const userMatch = await one(`SELECT id FROM app_user WHERE regexp_replace(phone,'[^0-9]','','g')=regexp_replace($1,'[^0-9]','','g')`, [from]);
+      const audience  = userMatch ? 'employee' : 'customer';
+      await sms.recordOptin(from, audience, 'keyword');
+      reply = OPT_IN_MSG;
+    } else if (OPT_OUT_KEYWORDS.includes(body)) {
+      await sms.recordOptout(from);
+      // Twilio sends its own STOP confirmation — no reply needed
+    } else if (body === 'UNSTOP') {
+      const existing = await one('SELECT audience FROM sms_optin WHERE phone=$1', [from]);
+      await sms.recordOptin(from, existing?.audience || 'customer', 'keyword');
+      reply = OPT_IN_MSG;
+    } else if (body === 'HELP') {
+      reply = `Built Trailers: Notifications svc. Text START, YES, IN, or ENROLL to subscribe. STOP to cancel. Msg&data rates may apply. Support: ${process.env.SUPPORT_EMAIL || 'info@builttrailers.com'}`;
+    } else {
+      reply = 'Built Trailers: Text START, YES, IN, or ENROLL to subscribe to notifications. STOP to cancel, HELP for help.';
+    }
+  } catch (e) { console.error('SMS webhook error:', e); }
+
+  const twiml = reply
+    ? `<?xml version="1.0" encoding="UTF-8"?><Response><Message>${reply}</Message></Response>`
+    : `<?xml version="1.0" encoding="UTF-8"?><Response></Response>`;
+  res.type('text/xml').send(twiml);
+});
+
+// ---- Public SMS opt-in via web form (unauthenticated) ----
+app.post('/api/sms/optin', async (req, res) => {
+  const { phone, audience } = req.body || {};
+  const normalized = sms.normalizePhone(phone);
+  if (!normalized) return res.status(400).json({ error: 'Valid phone number required' });
+  await sms.recordOptin(normalized, audience === 'employee' ? 'employee' : 'customer', 'webform');
+  const welcome = audience === 'employee'
+    ? 'Built Trailers: You\'re subscribed to approval notifications! Reply STOP to cancel, HELP for help.'
+    : 'Built Trailers: You\'re subscribed to order status updates! Up to 4 msgs/order. Msg&data rates may apply. Reply STOP to cancel, HELP for help.';
+  try { await sms.send({ recipient: normalized, body: welcome, kind: 'optin-welcome' }, null); }
+  catch (e) { console.error('Welcome SMS failed:', e.message); }
+  res.json({ ok: true });
+});
+
+// ---- Check if a phone number has an existing opt-in (used by add-customer / edit-user modals) ----
+app.get('/api/sms/optin-check', authMiddleware, async (req, res) => {
+  const phone = sms.normalizePhone(req.query.phone || '');
+  if (!phone) return res.json({ optedIn: false });
+  const row = await sms.checkOptin(phone);
+  res.json({ optedIn: !!row, audience: row?.audience || null });
+});
+
+// ---- Serve public opt-in, privacy, and terms pages ----
+app.get('/optin',   (_req, res) => res.sendFile(path.join(__dir, '..', 'public', 'optin.html')));
+app.get('/privacy', (_req, res) => res.sendFile(path.join(__dir, '..', 'public', 'privacy.html')));
+app.get('/terms',   (_req, res) => res.sendFile(path.join(__dir, '..', 'public', 'terms.html')));
+app.get('/t&cs',    (_req, res) => res.sendFile(path.join(__dir, '..', 'public', 'terms.html')));
 
 // ---- health ----
 app.get('/api/health', async (_req, res) => {
@@ -43,31 +112,116 @@ app.post('/api/auth/login', async (req, res) => {
 });
 app.get('/api/auth/me', authMiddleware, (req, res) => res.json({ user: req.user }));
 
+// ---- QBO connection diagnostic ----
+app.get('/api/qbo/test', authMiddleware, requireTier('admin'), async (_req, res) => {
+  const steps = [];
+  try {
+    // Step 1: refresh token present?
+    const rt = process.env.QBO_REFRESH_TOKEN;
+    steps.push({ step: 'refresh_token_in_env', ok: !!rt, value: rt ? rt.slice(0, 12) + '…' : null });
+    if (!rt) return res.json({ steps });
+
+    // Step 2: can we get an access token?
+    const TOKEN_URL = 'https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer';
+    const basic = Buffer.from(`${process.env.QBO_CLIENT_ID}:${process.env.QBO_CLIENT_SECRET}`).toString('base64');
+    const tokRes = await fetch(TOKEN_URL, {
+      method: 'POST',
+      headers: { Authorization: `Basic ${basic}`, 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' },
+      body: new URLSearchParams({ grant_type: 'refresh_token', refresh_token: rt }),
+    });
+    const tokBody = await tokRes.text();
+    steps.push({ step: 'token_refresh', status: tokRes.status, ok: tokRes.ok, body: tokRes.ok ? '(tokens received)' : tokBody });
+    if (!tokRes.ok) return res.json({ steps });
+    const tok = JSON.parse(tokBody);
+
+    // Step 3: can we hit the company info endpoint?
+    const API_BASE = process.env.QBO_ENV === 'production' ? 'https://quickbooks.api.intuit.com' : 'https://sandbox-quickbooks.api.intuit.com';
+    const infoRes = await fetch(`${API_BASE}/v3/company/${process.env.QBO_REALM_ID}/companyinfo/${process.env.QBO_REALM_ID}?minorversion=73`, {
+      headers: { Authorization: `Bearer ${tok.access_token}`, Accept: 'application/json' },
+    });
+    const infoBody = await infoRes.text();
+    steps.push({ step: 'company_info', status: infoRes.status, ok: infoRes.ok,
+      body: infoRes.ok ? JSON.parse(infoBody)?.CompanyInfo?.CompanyName : infoBody.slice(0, 400) });
+
+    res.json({ steps, env: process.env.QBO_ENV, realmId: process.env.QBO_REALM_ID });
+  } catch (e) {
+    res.json({ steps, error: e.message });
+  }
+});
+
+// ---- QBO OAuth flow (admin only — run once to get credentials) ----
+app.get('/api/auth/qbo', authMiddleware, requireTier('admin'), async (req, res) => {
+  if (!process.env.QBO_CLIENT_ID || !process.env.QBO_CLIENT_SECRET)
+    return res.status(400).json({ error: 'Set QBO_CLIENT_ID and QBO_CLIENT_SECRET in .env first' });
+  const redirect = `${req.protocol}://${req.get('host')}/api/auth/qbo/callback`;
+  const url = await getAuthUrl(redirect);
+  // JSON response lets the SPA open the URL itself; plain browser hits get a redirect
+  if (req.headers.accept?.includes('application/json')) return res.json({ url });
+  res.redirect(url);
+});
+app.get('/api/auth/qbo/callback', async (req, res) => {
+  const { code, realmId, state, error } = req.query;
+  if (error) return res.send(`<pre>QuickBooks error: ${error}\n\n<a href="/">← Home</a></pre>`);
+  if (!code) return res.status(400).send('<pre>No authorization code received from QuickBooks.</pre>');
+  const esc = s => String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  try {
+    const redirect = `${req.protocol}://${req.get('host')}/api/auth/qbo/callback`;
+    const { refreshToken } = await exchangeCode(String(code), redirect, String(state || ''));
+    await audit(req, 'qbo.oauth', `realm ${realmId}`);
+    res.send(`<!DOCTYPE html><html><head><title>QuickBooks Connected</title>
+<style>body{font-family:sans-serif;padding:2rem;max-width:740px}
+pre{background:#f5f5f5;padding:1rem;border-radius:6px;overflow-x:auto;white-space:pre-wrap;word-break:break-all}
+.ok{color:#1a7f37}.note{color:#666;font-size:.9em;margin-top:1rem}</style></head><body>
+<h2 class="ok">&#x2705; QuickBooks Authorization Complete</h2>
+<p>Add these to your <code>.env</code> (or Render environment variables) and restart the server:</p>
+<pre>ACCOUNTING_MODE=quickbooks
+QBO_ENV=production
+QBO_CLIENT_ID=${esc(process.env.QBO_CLIENT_ID)}
+QBO_CLIENT_SECRET=${esc(process.env.QBO_CLIENT_SECRET)}
+QBO_REALM_ID=${esc(realmId)}
+QBO_REFRESH_TOKEN=${esc(refreshToken)}</pre>
+<p class="note">The refresh token is also saved to the database automatically and will stay current
+as long as the server makes at least one QuickBooks API call every 101 days.</p>
+<p><a href="/">&#x2190; Back to Built Trailers</a></p>
+</body></html>`);
+  } catch (e) {
+    res.status(500).send(`<pre>Token exchange failed: ${esc(e.message)}\n\n<a href="/">&#x2190; Home</a></pre>`);
+  }
+});
+
 // ---- users (admin) ----
 app.get('/api/users', authMiddleware, async (_req, res) => {
-  res.json(await all('SELECT id,name,username,title,role,manager_id FROM app_user ORDER BY id', []));
+  res.json(await all('SELECT id,name,username,title,role,manager_id,phone,sms_consent,sms_consent_at FROM app_user ORDER BY id', []));
 });
 app.post('/api/users', authMiddleware, requireTier('admin'), async (req, res) => {
-  const { name, title, password } = req.body || {};
+  const { name, title, password, phone, smsConsent } = req.body || {};
   if (!name) return res.status(400).json({ error: 'name required' });
   const tier = (await one('SELECT tier FROM role WHERE name=$1', [title]))?.tier || 'viewer';
   const id = 'u' + Date.now();
   const base = name.trim().toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 12) || 'user';
-  await q('INSERT INTO app_user(id,name,username,password_hash,title,role,manager_id) VALUES ($1,$2,$3,$4,$5,$6,$7)',
-    [id, name, base, hashPassword(password || 'built2026'), title || null, tier, req.user.id]);
-  await audit(req, 'user.create', `${name} (${title})`);
+  const normalizedPhone = phone ? sms.normalizePhone(phone) : null;
+  const priorOptin = normalizedPhone ? await sms.checkOptin(normalizedPhone) : null;
+  const effectiveConsent = !!(smsConsent || priorOptin);
+  const consentAt = effectiveConsent ? new Date().toISOString() : null;
+  await q('INSERT INTO app_user(id,name,username,password_hash,title,role,manager_id,phone,sms_consent,sms_consent_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)',
+    [id, name, base, hashPassword(password || 'built2026'), title || null, tier, req.user.id, normalizedPhone || null, effectiveConsent, consentAt]);
+  await audit(req, 'user.create', `${name} (${title})${effectiveConsent ? ' [sms-consent]' : ''}`);
   res.json({ id, username: base });
 });
 app.patch('/api/users/:id', authMiddleware, requireTier('admin'), async (req, res) => {
-  const { title, role, manager_id, password, username } = req.body || {};
+  const { title, role, manager_id, password, username, phone, smsConsent } = req.body || {};
   const cur = await one('SELECT * FROM app_user WHERE id=$1', [req.params.id]);
   if (!cur) return res.status(404).json({ error: 'not found' });
   let tier = role;
   if (title) tier = (await one('SELECT tier FROM role WHERE name=$1', [title]))?.tier || cur.role;
-  await q('UPDATE app_user SET title=$1, role=$2, manager_id=$3, username=$4 WHERE id=$5',
-    [title ?? cur.title, tier ?? cur.role, manager_id ?? cur.manager_id, username ?? cur.username, req.params.id]);
+  const consentAt = (smsConsent === true && !cur.sms_consent) ? new Date().toISOString() : cur.sms_consent_at;
+  await q('UPDATE app_user SET title=$1,role=$2,manager_id=$3,username=$4,phone=$5,sms_consent=$6,sms_consent_at=$7 WHERE id=$8',
+    [title ?? cur.title, tier ?? cur.role, manager_id ?? cur.manager_id, username ?? cur.username,
+     phone !== undefined ? (phone || null) : cur.phone,
+     smsConsent !== undefined ? !!smsConsent : cur.sms_consent,
+     consentAt, req.params.id]);
   if (password) await q('UPDATE app_user SET password_hash=$1 WHERE id=$2', [hashPassword(password), req.params.id]);
-  await audit(req, 'user.update', req.params.id);
+  await audit(req, 'user.update', `${req.params.id}${smsConsent !== undefined ? (smsConsent ? ' [sms-consent granted]' : ' [sms-consent revoked]') : ''}`);
   res.json({ ok: true });
 });
 
@@ -133,13 +287,19 @@ app.post('/api/trailer-types', authMiddleware, requireSales, async (req, res) =>
 // ---- customers / dealers (Phase 2) ----
 app.get('/api/customers', authMiddleware, async (_req, res) => res.json(await customersWithTypes()));
 app.post('/api/customers', authMiddleware, requireSales, async (req, res) => {
-  const { name, kind, allowed } = req.body || {};
+  const { name, kind, allowed, phone, contact, smsConsent } = req.body || {};
   if (!name) return res.status(400).json({ error: 'name required' });
   const id = 'c' + Date.now();
-  await q('INSERT INTO customer(id,name,kind,rep_id) VALUES ($1,$2,$3,$4)', [id, name, kind || 'Dealership', req.user.id]);
+  const normalizedPhone = phone ? sms.normalizePhone(phone) : null;
+  // Auto-link if they already opted in via keyword or web form
+  const priorOptin = normalizedPhone ? await sms.checkOptin(normalizedPhone) : null;
+  const effectiveConsent = !!(smsConsent || priorOptin);
+  const consentAt = effectiveConsent ? new Date().toISOString() : null;
+  await q('INSERT INTO customer(id,name,kind,rep_id,phone,contact,sms_consent,sms_consent_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)',
+    [id, name, kind || 'Dealership', req.user.id, normalizedPhone || null, contact || null, effectiveConsent, consentAt]);
   for (const t of (allowed || [])) await q('INSERT INTO customer_allowed_type(customer_id,type) VALUES ($1,$2)', [id, t]);
-  await audit(req, 'customer.create', name);
-  res.json({ id });
+  await audit(req, 'customer.create', `${name}${effectiveConsent ? ' [sms-consent]' : ''}`);
+  res.json({ id, smsConsentAutoLinked: !!(priorOptin && !smsConsent) });
 });
 app.patch('/api/customers/:id/types', authMiddleware, requireSales, async (req, res) => {
   const { type, on } = req.body || {};
@@ -200,19 +360,124 @@ app.get('/api/po', authMiddleware, async (_req, res) => res.json(await poList())
 app.post('/api/po', authMiddleware, requireTier('editor'), async (req, res) => {
   try {
     const { partId, qty } = req.body || {};
-    const id = await createPO(partId, Math.max(1, Math.round(Number(qty) || 0)), req.user.id);
-    res.json({ id });
+    const result = await createPO(partId, Math.max(1, Math.round(Number(qty) || 0)), req.user.id);
+    res.json(result);
   } catch (e) { res.status(400).json({ error: String(e.message || e) }); }
 });
 app.post('/api/po/:id/receive', authMiddleware, requireTier('editor'), async (req, res) => {
-  const ok = await receivePO(req.params.id, req.user.id);
-  res.json({ ok });
+  try { const ok = await receivePO(req.params.id, req.user.id); res.json({ ok }); }
+  catch (e) { res.status(400).json({ error: String(e.message || e) }); }
+});
+app.get('/api/po/:id/approvals', authMiddleware, async (req, res) => {
+  res.json(await approvals.approvalStatusFor(req.params.id));
 });
 app.post('/api/mrp/auto', authMiddleware, requireTier('editor'), async (req, res) => {
   const rows = (await mrp()).filter(r => r.sev !== 'ok' && r.type === 'P');
   const created = [];
   for (const r of rows) created.push(await createPO(r.id, r.suggestQty, req.user.id));
-  res.json({ created: created.length, ids: created });
+  res.json({ created: created.length, ids: created.map(r => r.id || r) });
+});
+
+// ---- vendors ----
+app.get('/api/vendors', authMiddleware, async (_req, res) => res.json(await approvals.listVendors()));
+app.post('/api/vendors', authMiddleware, requireTier('admin'), async (req, res) => {
+  try {
+    const { name, leadDays, terms } = req.body || {};
+    if (!name) return res.status(400).json({ error: 'name required' });
+    const result = await approvals.createVendor({ name, leadDays, terms }, req.user.id);
+    await audit(req, 'vendor.create', `${name} → ${result.status}`);
+    res.json(result);
+  } catch (e) { res.status(400).json({ error: String(e.message || e) }); }
+});
+
+// ---- approval rules (admin) ----
+app.get('/api/approval-rules', authMiddleware, async (_req, res) => res.json(await approvals.listRules()));
+app.post('/api/approval-rules', authMiddleware, requireTier('admin'), async (req, res) => {
+  try { const id = await approvals.createRule(req.body || {}); await audit(req, 'approval.rule.create', id); res.json({ id }); }
+  catch (e) { res.status(400).json({ error: String(e.message || e) }); }
+});
+app.patch('/api/approval-rules/:id', authMiddleware, requireTier('admin'), async (req, res) => {
+  try { await approvals.updateRule(req.params.id, req.body || {}); res.json({ ok: true }); }
+  catch (e) { res.status(400).json({ error: String(e.message || e) }); }
+});
+app.delete('/api/approval-rules/:id', authMiddleware, requireTier('admin'), async (req, res) => {
+  await approvals.deleteRule(req.params.id); await audit(req, 'approval.rule.delete', req.params.id); res.json({ ok: true });
+});
+
+// ---- in-app approvals ----
+app.get('/api/approvals/pending', authMiddleware, async (req, res) => {
+  res.json(await approvals.pendingForUser(req.user.id));
+});
+app.get('/api/approvals/pending-count', authMiddleware, async (req, res) => {
+  res.json({ count: await approvals.pendingCount(req.user.id) });
+});
+app.post('/api/approvals/:token/decide', authMiddleware, async (req, res) => {
+  try {
+    const { decision, note } = req.body || {};
+    const result = await approvals.processDecision(req.params.token, decision, note, req.user.id);
+    await audit(req, `approval.${decision}`, `${req.params.token.slice(0,8)} → ${result.refId}`);
+    res.json(result);
+  } catch (e) { res.status(400).json({ error: String(e.message || e) }); }
+});
+
+// ---- public token-based approval page (no auth required) ----
+app.get('/approve/:token', async (req, res) => {
+  const req2 = await import('./db.js').then(m => m.one(
+    `SELECT ar.*, u.name AS approver_name, r2.name AS requester_name
+     FROM approval_request ar
+     LEFT JOIN app_user u ON u.id=ar.approver_id
+     LEFT JOIN app_user r2 ON r2.id=ar.requested_by
+     WHERE ar.token=$1`, [req.params.token]));
+  if (!req2) return res.status(404).send('<h2>Approval link not found or expired.</h2>');
+  const done = req2.status !== 'pending';
+  const esc = s => String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  const amtStr = req2.ref_amount ? `$${Number(req2.ref_amount).toLocaleString('en-US',{minimumFractionDigits:2})}` : '';
+  res.send(`<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Built Trailers — Approval</title>
+<style>*{box-sizing:border-box}body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;max-width:520px;margin:40px auto;padding:20px;color:#1a1a2e}
+h2{color:#f59e0b}p{margin:6px 0}.card{background:#f8f8fb;border-radius:10px;padding:20px;margin:16px 0}
+label{display:block;font-size:13px;color:#666;margin-bottom:4px}textarea{width:100%;border:1px solid #ccc;border-radius:6px;padding:8px;font-size:14px;resize:vertical}
+.btn{display:inline-block;padding:12px 28px;border:none;border-radius:7px;font-size:16px;font-weight:600;cursor:pointer;margin-right:10px;margin-top:12px}
+.approve{background:#22c55e;color:#fff}.reject{background:#ef4444;color:#fff}
+.badge{display:inline-block;padding:3px 10px;border-radius:20px;font-size:12px;font-weight:600}
+.ok{background:#dcfce7;color:#16a34a}.low{background:#fef3c7;color:#d97706}.bad{background:#fee2e2;color:#dc2626}
+</style></head><body>
+<h2>Built Trailers — ${esc(req2.type==='po'?'Purchase Order':'New Vendor')} Approval</h2>
+<div class="card">
+  <p><b>Reference:</b> ${esc(req2.ref_id)}</p>
+  ${amtStr ? `<p><b>Amount:</b> ${esc(amtStr)}</p>` : ''}
+  <p><b>Description:</b> ${esc(req2.ref_desc||req2.ref_id)}</p>
+  <p><b>Requested by:</b> ${esc(req2.requester_name||'System')}</p>
+  <p><b>For approver:</b> ${esc(req2.approver_name)}</p>
+  <p><b>Status:</b> <span class="badge ${req2.status==='approved'?'ok':req2.status==='pending'?'low':'bad'}">${esc(req2.status)}</span></p>
+</div>
+${done ? `<p style="color:#666;font-style:italic">This request has already been ${esc(req2.status)}${req2.note?` — "${esc(req2.note)}"`:''}</p>` : `
+<form method="POST" action="/approve/${esc(req.params.token)}">
+  <label>Note (optional)</label>
+  <textarea name="note" rows="3" placeholder="Add a note…"></textarea>
+  <div>
+    <button class="btn approve" type="submit" name="decision" value="approved">Approve</button>
+    <button class="btn reject" type="submit" name="decision" value="rejected">Reject</button>
+  </div>
+</form>`}
+</body></html>`);
+});
+app.post('/approve/:token', express.urlencoded({ extended: false }), async (req, res) => {
+  try {
+    const { decision, note } = req.body || {};
+    const result = await approvals.processDecision(req.params.token, decision, note, null);
+    const verb = result.outcome === 'rejected' ? 'rejected' : 'approved';
+    res.send(`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Done</title>
+<style>body{font-family:-apple-system,sans-serif;max-width:520px;margin:80px auto;padding:20px;text-align:center}
+h2{color:${verb==='approved'?'#22c55e':'#ef4444'}}</style></head><body>
+<h2>${verb === 'approved' ? 'Approved' : 'Rejected'}</h2>
+<p>${result.refId} has been <b>${verb}</b>.</p>
+${result.outcome==='fully_approved'?'<p>All approvals complete — the PO is now open.</p>':''}
+${result.outcome==='approved_next_seq'?'<p>Next approver has been notified.</p>':''}
+</body></html>`);
+  } catch (e) {
+    res.status(400).send(`<h2>Error</h2><p>${e.message}</p>`);
+  }
 });
 
 // ---- accounting / QuickBooks (Phase 4) ----
@@ -221,6 +486,48 @@ app.get('/api/accounting', authMiddleware, async (_req, res) => {
 });
 app.post('/api/accounting/sync', authMiddleware, requireTier('editor'), async (req, res) => {
   const r = await sync(); await audit(req, 'acct.sync', JSON.stringify(r)); res.json(r);
+});
+function qboErrRes(res, e) {
+  if (e instanceof QBOAuthError || e?.qboAuth)
+    return res.status(401).json({ error: e.message, qboReconnectRequired: true });
+  if (e instanceof QBOFeatureError || e?.qboFeature)
+    return res.status(402).json({ error: e.message, qboFeatureUnavailable: true, feature: e.feature || null });
+  return res.status(500).json({ error: String(e.message || e) });
+}
+app.get('/api/qbo/errors', authMiddleware, requireTier('admin'), async (req, res) => {
+  const rows = await qboErrorLog(Number(req.query.limit) || 100);
+  res.json(rows);
+});
+app.get('/api/qbo/errors/export', authMiddleware, requireTier('admin'), async (_req, res) => {
+  const rows = await qboErrorLog(1000);
+  const header = 'id,ts,method,endpoint,status,intuit_tid,error_type,message\n';
+  const csv = rows.map(r =>
+    [r.id, r.ts, r.method, `"${(r.endpoint||'').replace(/"/g,'""')}"`, r.status,
+     r.intuit_tid || '', r.error_type, `"${(r.message||'').replace(/"/g,'""')}"`].join(',')
+  ).join('\n');
+  res.setHeader('Content-Type', 'text/csv');
+  res.setHeader('Content-Disposition', `attachment; filename="qbo-errors-${new Date().toISOString().slice(0,10)}.csv"`);
+  res.send(header + csv);
+});
+app.get('/api/qbo/preview/items', authMiddleware, requireTier('editor'), async (_req, res) => {
+  if (!qboConfigured()) return res.status(400).json({ error: 'QuickBooks not configured' });
+  try { res.json(await previewItemsFromQBO()); }
+  catch (e) { qboErrRes(res, e); }
+});
+app.post('/api/qbo/pull', authMiddleware, requireTier('admin'), async (req, res) => {
+  if (!qboConfigured()) return res.status(400).json({ error: 'QuickBooks not configured' });
+  const what   = req.body?.what   || ['customers', 'items', 'invoices'];
+  const itemIds = req.body?.itemIds || null;
+  const results = {};
+  try {
+    if (what.includes('customers')) results.customers = await syncCustomersFromQBO();
+    if (what.includes('items'))     results.items     = await syncItemsFromQBO(itemIds);
+    if (what.includes('invoices'))  results.invoices  = await syncInvoicesFromQBO();
+    await audit(req, 'qbo.pull', JSON.stringify(results));
+    res.json({ ok: true, results });
+  } catch (e) {
+    qboErrRes(res, e);
+  }
 });
 app.get('/api/invoices', authMiddleware, async (_req, res) => res.json(await invoiceList()));
 app.post('/api/invoices/scan', authMiddleware, requireTier('editor'), async (req, res) => {
@@ -290,20 +597,87 @@ app.post('/api/scenario', authMiddleware, async (req, res) => res.json(await sce
 // ---- notifications / SMS (Phase 6) ----
 app.get('/api/notifications', authMiddleware, async (_req, res) => res.json({ mode: sms.smsMode(), configured: sms.twilioConfigured(), items: await sms.notifications() }));
 app.post('/api/notifications/send', authMiddleware, requireTier('editor'), async (req, res) => {
-  const r = await sms.send(req.body || {}, req.user.id); await audit(req, 'sms.send', JSON.stringify(req.body?.kind || 'manual')); res.json(r);
+  const payload = { ...(req.body || {}) };
+  if (payload.body && !/STOP/i.test(payload.body))
+    payload.body = payload.body.trim() + ' Reply STOP to opt out.';
+  const r = await sms.send(payload, req.user.id);
+  await audit(req, 'sms.send', JSON.stringify(req.body?.kind || 'manual'));
+  res.json(r);
 });
 
 // ---- audit ----
 app.get('/api/audit', authMiddleware, requireTier('admin'), async (_req, res) =>
   res.json(await all('SELECT * FROM audit_log ORDER BY id DESC LIMIT 100', [])));
 
-// ---- static UI ----
+// ---- Support system ----
+app.post('/api/support/tickets', authMiddleware, async (req, res) => {
+  try {
+    const { type, title, firstMessage } = req.body || {};
+    if (!title) return res.status(400).json({ error: 'title required' });
+    const id = await support.createTicket(req.user.id, { type, title, firstMessage });
+    res.json({ id });
+  } catch (e) { res.status(500).json({ error: String(e.message || e) }); }
+});
+app.get('/api/support/tickets', authMiddleware, async (req, res) => {
+  try {
+    const isAdm = req.user.role === 'admin';
+    const rows = await support.listTickets({
+      status: req.query.status || undefined,
+      type:   req.query.type   || undefined,
+      userId: isAdm ? undefined : req.user.id,
+    });
+    res.json(rows);
+  } catch (e) { res.status(500).json({ error: String(e.message || e) }); }
+});
+app.get('/api/support/tickets/:id', authMiddleware, async (req, res) => {
+  try {
+    const t = await support.getTicket(req.params.id);
+    if (!t) return res.status(404).json({ error: 'Not found' });
+    if (req.user.role !== 'admin' && t.user_id !== req.user.id)
+      return res.status(403).json({ error: 'Forbidden' });
+    res.json(t);
+  } catch (e) { res.status(500).json({ error: String(e.message || e) }); }
+});
+app.post('/api/support/tickets/:id/chat', authMiddleware, async (req, res) => {
+  try {
+    const { message } = req.body || {};
+    if (!message) return res.status(400).json({ error: 'message required' });
+    const t = await support.getTicket(req.params.id);
+    if (!t) return res.status(404).json({ error: 'Not found' });
+    if (req.user.role !== 'admin' && t.user_id !== req.user.id)
+      return res.status(403).json({ error: 'Forbidden' });
+    const result = await support.chat(req.params.id, message, { userName: req.user.name, userRole: req.user.role });
+    res.json(result);
+  } catch (e) { res.status(500).json({ error: String(e.message || e) }); }
+});
+app.patch('/api/support/tickets/:id', authMiddleware, async (req, res) => {
+  try {
+    const { status, adminNote, type } = req.body || {};
+    if (req.user.role !== 'admin' && status !== 'escalated')
+      return res.status(403).json({ error: 'Forbidden' });
+    await support.updateTicket(req.params.id, { status, adminNote });
+    if (type) await support.escalate(req.params.id, type);
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: String(e.message || e) }); }
+});
+app.post('/api/support/tickets/:id/escalate', authMiddleware, async (req, res) => {
+  try {
+    const { type } = req.body || {};
+    await support.escalate(req.params.id, type || 'bug');
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: String(e.message || e) }); }
+});
+app.delete('/api/support/tickets/:id', authMiddleware, requireTier('admin'), async (req, res) => {
+  try { await support.deleteTicket(req.params.id); res.json({ ok: true }); }
+  catch (e) { res.status(500).json({ error: String(e.message || e) }); }
+});
+
+// ---- static UI (must be last) ----
 app.use(express.static(path.join(__dir, '..', 'public')));
 app.get('*', (_req, res) => res.sendFile(path.join(__dir, '..', 'public', 'index.html')));
 
 const PORT = process.env.PORT || 3000;
 const kind = await initDb();
-// auto-create schema on boot if empty (handy for first deploy)
 try {
   const has = await one("SELECT to_regclass('public.part') AS t", []).catch(() => null);
   if (!has || !has.t) console.log('Note: run `npm run init-db` to create schema + seed.');

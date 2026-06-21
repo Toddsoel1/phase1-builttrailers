@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <rect width="512" height="512" rx="96" fill="#1a1d27"/>
+  <rect x="40" y="40" width="432" height="432" rx="72" fill="#ffb347" opacity="0.12"/>
+  <text x="256" y="330" font-family="Arial Black,Arial" font-weight="900"
+        font-size="228" fill="#ffb347" text-anchor="middle" letter-spacing="-8">BT</text>
+</svg>
