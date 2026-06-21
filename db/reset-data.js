@@ -34,7 +34,7 @@ async function run() {
     await q(`DELETE FROM ${table}`);
     console.log(`  ✓ ${table}`);
   }
-  // Delete all users except the primary admin (tsoelberg / u1)
+  // Remove all non-admin seed users (no activity exists after wiping above)
   const deleted = await q(`DELETE FROM app_user WHERE username != 'tsoelberg' RETURNING username`);
   console.log(`  ✓ app_user — removed ${deleted.rows.length} test accounts`);
   console.log('Done. Ready for real data.');

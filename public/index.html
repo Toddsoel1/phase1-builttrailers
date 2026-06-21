@@ -316,13 +316,13 @@ async function viewUsers(){
   const byId=Object.fromEntries(users.map(u=>[u.id,u]));
   $('content').innerHTML=`<div class="card"><h3>Users (${users.length})</h3>
    <table><thead><tr><th>Name</th><th>Username</th><th>Role</th><th class="center">Tier</th><th>Manager</th><th>Phone</th><th>SMS Consent</th><th></th></tr></thead><tbody>
-   ${users.map(u=>`<tr>
-     <td><b>${u.name}</b></td><td>${u.username}</td><td>${u.title||''}</td>
+   ${users.map(u=>`<tr style="${u.active===false?'opacity:0.5':''}">
+     <td><b>${u.name}</b>${u.active===false?' <span class="pill" style="background:#888;font-size:10px">Inactive</span>':''}</td><td>${u.username}</td><td>${u.title||''}</td>
      <td class="center"><span class="pill ${u.role}">${u.role}</span></td>
      <td class="muted">${u.manager_id?byId[u.manager_id]?.name||'':'—'}</td>
      <td class="muted" style="font-size:12px">${u.phone||'—'}</td>
      <td style="font-size:12px">${u.sms_consent?'<span style="color:#4caf50">✓ Consented</span>':'<span class="muted">—</span>'}</td>
-     <td style="display:flex;gap:6px">${isAdmin()?`<button class="btn" style="padding:3px 10px;font-size:12px" onclick="editUserSms('${u.id}')">Edit</button>`:''}<button class="btn sec" style="padding:3px 10px;font-size:12px" onclick="changePassword('${u.id}','${u.name}')">Password</button>${isAdmin()&&u.id!==ME.id?`<button class="btn" style="padding:3px 10px;font-size:12px;background:var(--danger,#c0392b)" onclick="deleteUser('${u.id}','${u.name}')">Delete</button>`:''}</td>
+     <td style="display:flex;gap:6px;flex-wrap:wrap">${isAdmin()&&u.active!==false?`<button class="btn" style="padding:3px 10px;font-size:12px" onclick="editUserSms('${u.id}')">Edit</button>`:''}<button class="btn sec" style="padding:3px 10px;font-size:12px" onclick="changePassword('${u.id}','${u.name}')">Password</button>${isAdmin()&&u.id!==ME.id?u.active===false?`<button class="btn" style="padding:3px 10px;font-size:12px" onclick="reactivateUser('${u.id}','${u.name}')">Reactivate</button>`:`<button class="btn" style="padding:3px 10px;font-size:12px;background:var(--danger,#c0392b)" onclick="deleteUser('${u.id}','${u.name}')">Remove</button>`:''}</td>
    </tr>`).join('')}
    </tbody></table>
    <p class="muted" style="font-size:12px;margin-top:8px">Passwords are bcrypt-hashed; permission tiers are enforced on every API call. SMS consent is required before any text message is sent to an employee.</p></div>`;
@@ -379,8 +379,16 @@ function changePassword(id,name){
     </div>`);
 }
 async function deleteUser(id,name){
-  if(!confirm(`Delete ${name}? This cannot be undone.`))return;
-  try{await api('/api/users/'+id,{method:'DELETE'});toast(name+' deleted');viewUsers();}catch(e){toast(e.message);}
+  if(!confirm(`Remove ${name}? If they have activity in the system they will be deactivated; otherwise permanently deleted.`))return;
+  try{
+    const r=await api('/api/users/'+id,{method:'DELETE'});
+    toast(r.deactivated?name+' deactivated':name+' deleted');
+    viewUsers();
+  }catch(e){toast(e.message);}
+}
+async function reactivateUser(id,name){
+  if(!confirm(`Reactivate ${name}?`))return;
+  try{await api('/api/users/'+id+'/reactivate',{method:'PATCH'});toast(name+' reactivated');viewUsers();}catch(e){toast(e.message);}
 }
 async function savePassword(id){
   const pw=($('cpPw').value||'').trim();

@@ -107,6 +107,7 @@ app.post('/api/auth/login', async (req, res) => {
   const u = await one('SELECT * FROM app_user WHERE lower(username)=lower($1)', [username || '']);
   if (!u || !checkPassword(password || '', u.password_hash))
     return res.status(401).json({ error: 'Invalid username or password' });
+  if (u.active === false) return res.status(403).json({ error: 'Account is inactive. Contact your administrator.' });
   const safe = { id: u.id, name: u.name, username: u.username, title: u.title, role: u.role, manager_id: u.manager_id };
   res.json({ token: signToken(u), user: safe });
 });
@@ -191,7 +192,7 @@ as long as the server makes at least one QuickBooks API call every 101 days.</p>
 
 // ---- users (admin) ----
 app.get('/api/users', authMiddleware, async (_req, res) => {
-  res.json(await all('SELECT id,name,username,title,role,manager_id,phone,sms_consent,sms_consent_at FROM app_user ORDER BY id', []));
+  res.json(await all('SELECT id,name,username,title,role,manager_id,phone,sms_consent,sms_consent_at,active FROM app_user ORDER BY active DESC,id', []));
 });
 app.post('/api/users', authMiddleware, requireTier('admin'), async (req, res) => {
   const { name, title, password, phone, smsConsent } = req.body || {};
@@ -235,8 +236,27 @@ app.delete('/api/users/:id', authMiddleware, requireTier('admin'), async (req, r
   if (req.params.id === req.user.id) return res.status(400).json({ error: 'Cannot delete your own account' });
   const cur = await one('SELECT name FROM app_user WHERE id=$1', [req.params.id]);
   if (!cur) return res.status(404).json({ error: 'not found' });
-  await q('DELETE FROM app_user WHERE id=$1', [req.params.id]);
-  await audit(req, 'user.delete', cur.name);
+  // Check for any transactions by this user across key tables
+  const hasActivity = await one(
+    `SELECT 1 FROM audit_log WHERE user_id=$1 LIMIT 1
+     UNION ALL SELECT 1 FROM sales_order WHERE created_by=$1 LIMIT 1
+     UNION ALL SELECT 1 FROM purchase_order WHERE created_by=$1 LIMIT 1
+     UNION ALL SELECT 1 FROM win WHERE by_user=$1 LIMIT 1
+     UNION ALL SELECT 1 FROM approval_request WHERE requested_by=$1 OR decided_by=$1 LIMIT 1
+     LIMIT 1`, [req.params.id]);
+  if (hasActivity) {
+    await q('UPDATE app_user SET active=false WHERE id=$1', [req.params.id]);
+    await audit(req, 'user.deactivate', cur.name);
+    res.json({ ok: true, deactivated: true });
+  } else {
+    await q('DELETE FROM app_user WHERE id=$1', [req.params.id]);
+    await audit(req, 'user.delete', cur.name);
+    res.json({ ok: true, deleted: true });
+  }
+});
+app.patch('/api/users/:id/reactivate', authMiddleware, requireTier('admin'), async (req, res) => {
+  await q('UPDATE app_user SET active=true WHERE id=$1', [req.params.id]);
+  await audit(req, 'user.reactivate', req.params.id);
   res.json({ ok: true });
 });
 
@@ -712,6 +732,7 @@ if (kind === 'postgres') {
     `ALTER TABLE app_user ADD COLUMN IF NOT EXISTS sms_consent_at TIMESTAMPTZ`,
     `ALTER TABLE sales_order ADD COLUMN IF NOT EXISTS subscription_tier TEXT NOT NULL DEFAULT 'standard'`,
     `ALTER TABLE sales_order ADD COLUMN IF NOT EXISTS ai_credits_used INTEGER NOT NULL DEFAULT 0`,
+    `ALTER TABLE app_user ADD COLUMN IF NOT EXISTS active BOOLEAN NOT NULL DEFAULT TRUE`,
   ];
   for (const m of colMigrations) {
     await q(m).catch(e => console.warn('col migration:', e.message));
