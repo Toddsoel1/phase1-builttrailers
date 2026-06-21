@@ -231,6 +231,14 @@ app.patch('/api/users/:id', authMiddleware, requireTier('admin'), async (req, re
   await audit(req, 'user.update', `${req.params.id}${smsConsent !== undefined ? (smsConsent ? ' [sms-consent granted]' : ' [sms-consent revoked]') : ''}`);
   res.json({ ok: true });
 });
+app.delete('/api/users/:id', authMiddleware, requireTier('admin'), async (req, res) => {
+  if (req.params.id === req.user.id) return res.status(400).json({ error: 'Cannot delete your own account' });
+  const cur = await one('SELECT name FROM app_user WHERE id=$1', [req.params.id]);
+  if (!cur) return res.status(404).json({ error: 'not found' });
+  await q('DELETE FROM app_user WHERE id=$1', [req.params.id]);
+  await audit(req, 'user.delete', cur.name);
+  res.json({ ok: true });
+});
 
 // ---- parts master ----
 app.get('/api/parts', authMiddleware, async (_req, res) => {

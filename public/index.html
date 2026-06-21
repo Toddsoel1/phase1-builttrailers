@@ -322,7 +322,7 @@ async function viewUsers(){
      <td class="muted">${u.manager_id?byId[u.manager_id]?.name||'':'—'}</td>
      <td class="muted" style="font-size:12px">${u.phone||'—'}</td>
      <td style="font-size:12px">${u.sms_consent?'<span style="color:#4caf50">✓ Consented</span>':'<span class="muted">—</span>'}</td>
-     <td style="display:flex;gap:6px">${isAdmin()?`<button class="btn" style="padding:3px 10px;font-size:12px" onclick="editUserSms('${u.id}')">Edit</button>`:''}<button class="btn sec" style="padding:3px 10px;font-size:12px" onclick="changePassword('${u.id}','${u.name}')">Password</button></td>
+     <td style="display:flex;gap:6px">${isAdmin()?`<button class="btn" style="padding:3px 10px;font-size:12px" onclick="editUserSms('${u.id}')">Edit</button>`:''}<button class="btn sec" style="padding:3px 10px;font-size:12px" onclick="changePassword('${u.id}','${u.name}')">Password</button>${isAdmin()&&u.id!==ME.id?`<button class="btn" style="padding:3px 10px;font-size:12px;background:var(--danger,#c0392b)" onclick="deleteUser('${u.id}','${u.name}')">Delete</button>`:''}</td>
    </tr>`).join('')}
    </tbody></table>
    <p class="muted" style="font-size:12px;margin-top:8px">Passwords are bcrypt-hashed; permission tiers are enforced on every API call. SMS consent is required before any text message is sent to an employee.</p></div>`;
@@ -377,6 +377,10 @@ function changePassword(id,name){
       <button class="btn" onclick="savePassword('${id}')">Save</button>
       <button class="btn sec" onclick="closeModal()">Cancel</button>
     </div>`);
+}
+async function deleteUser(id,name){
+  if(!confirm(`Delete ${name}? This cannot be undone.`))return;
+  try{await api('/api/users/'+id,{method:'DELETE'});toast(name+' deleted');viewUsers();}catch(e){toast(e.message);}
 }
 async function savePassword(id){
   const pw=($('cpPw').value||'').trim();

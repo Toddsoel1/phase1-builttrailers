@@ -34,7 +34,10 @@ async function run() {
     await q(`DELETE FROM ${table}`);
     console.log(`  ✓ ${table}`);
   }
-  console.log('Done. All business data cleared.');
+  // Delete all users except the primary admin (tsoelberg / u1)
+  const deleted = await q(`DELETE FROM app_user WHERE username != 'tsoelberg' RETURNING username`);
+  console.log(`  ✓ app_user — removed ${deleted.rows.length} test accounts`);
+  console.log('Done. Ready for real data.');
   process.exit(0);
 }
 
