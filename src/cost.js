@@ -23,7 +23,7 @@ export async function modelRollup(modelId, rates) {
     `SELECT b.part_id, b.qty, p.name, p.type, p.cost
        FROM bom_line b JOIN part p ON p.id=b.part_id
       WHERE b.model_id=$1 ORDER BY p.type DESC, p.id`, [modelId]);
-  const labor = await all('SELECT ws, hours FROM model_labor WHERE model_id=$1', [modelId]);
+  const labor = await all('SELECT ws, hours, rate FROM model_labor WHERE model_id=$1', [modelId]);
   let material = 0;
   const bom = lines.map(l => {
     const unit = Number(l.cost) || 0, ext = unit * Number(l.qty);
@@ -31,7 +31,8 @@ export async function modelRollup(modelId, rates) {
     return { partId: l.part_id, name: l.name, type: l.type, qty: Number(l.qty), unitCost: unit, ext };
   });
   const laborHrs = labor.reduce((s, l) => s + Number(l.hours), 0);
-  const laborCost = labor.reduce((s, l) => s + Number(l.hours) * (rates[l.ws] ?? LABOR_RATE), 0);
+  // Prefer the rate stored on the labor step; fall back to employee roster rate then env constant
+  const laborCost = labor.reduce((s, l) => s + Number(l.hours) * (Number(l.rate) || rates[l.ws] || LABOR_RATE), 0);
   const totalCost = material + laborCost;
   const price = Number(m.price);
   return {
@@ -39,7 +40,7 @@ export async function modelRollup(modelId, rates) {
     material, laborHrs, laborCost, totalCost,
     margin: price > 0 ? (price - totalCost) / price : 0,
     marginDollars: price - totalCost,
-    bom, labor: labor.map(l => { const rate = rates[l.ws] ?? LABOR_RATE; return { ws: l.ws, hours: Number(l.hours), rate, ext: Number(l.hours) * rate }; })
+    bom, labor: labor.map(l => { const rate = Number(l.rate) || rates[l.ws] || LABOR_RATE; return { ws: l.ws, hours: Number(l.hours), rate, ext: Number(l.hours) * rate }; })
   };
 }
 

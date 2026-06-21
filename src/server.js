@@ -390,16 +390,75 @@ app.delete('/api/models/:id/bom/:partId', authMiddleware, requireTier('admin'), 
 app.post('/api/models/:id/labor', authMiddleware, requireTier('admin'), async (req, res) => {
   const { ws, hours, rate } = req.body || {};
   if (!ws || !hours) return res.status(400).json({ error: 'ws and hours required' });
-  await q('INSERT INTO model_labor(model_id,workstation,hours,rate) VALUES ($1,$2,$3,$4) ON CONFLICT(model_id,workstation) DO UPDATE SET hours=$3,rate=$4',
+  await q('INSERT INTO model_labor(model_id,ws,hours,rate) VALUES ($1,$2,$3,$4) ON CONFLICT(model_id,ws) DO UPDATE SET hours=$3,rate=$4',
     [req.params.id, ws, Number(hours), Number(rate) || 35]);
   await audit(req, 'labor.update', `${req.params.id} ${ws} ${hours}h`);
   res.json({ ok: true });
 });
 app.delete('/api/models/:id/labor/:ws', authMiddleware, requireTier('admin'), async (req, res) => {
-  await q('DELETE FROM model_labor WHERE model_id=$1 AND workstation=$2', [req.params.id, req.params.ws]);
+  await q('DELETE FROM model_labor WHERE model_id=$1 AND ws=$2', [req.params.id, req.params.ws]);
   await audit(req, 'labor.delete', `${req.params.id} ${req.params.ws}`);
   res.json({ ok: true });
 });
+// ---- BOM change requests (accounting approval workflow) ----
+app.post('/api/bom-change-requests', authMiddleware, requireTier('editor'), async (req, res) => {
+  const { modelId, modelName, op, payload } = req.body || {};
+  if (!modelId || !op || !payload) return res.status(400).json({ error: 'modelId, op, and payload required' });
+  const u = req.user;
+  const r = await one(
+    `INSERT INTO bom_change_request(model_id,model_name,requested_by,requester_name,op,payload) VALUES($1,$2,$3,$4,$5,$6) RETURNING id`,
+    [modelId, modelName || modelId, u.id, u.name, op, JSON.stringify(payload)]
+  );
+  await audit(req, 'bom.change_request', `CR#${r.id} ${modelId} op=${op}`);
+  res.json({ id: r.id });
+});
+
+app.get('/api/bom-change-requests', authMiddleware, async (req, res) => {
+  const { modelId, status } = req.query;
+  let sql = 'SELECT * FROM bom_change_request WHERE 1=1';
+  const params = [];
+  if (modelId) { params.push(modelId); sql += ` AND model_id=$${params.length}`; }
+  if (status)  { params.push(status);  sql += ` AND status=$${params.length}`; }
+  res.json(await all(sql + ' ORDER BY created_at DESC', params));
+});
+
+app.post('/api/bom-change-requests/:id/approve', authMiddleware, requireTier('admin'), async (req, res) => {
+  const cr = await one('SELECT * FROM bom_change_request WHERE id=$1', [Number(req.params.id)]);
+  if (!cr) return res.status(404).json({ error: 'not found' });
+  if (cr.status !== 'pending') return res.status(400).json({ error: 'already reviewed' });
+  const p = cr.payload;
+  switch (cr.op) {
+    case 'update_qty':
+      await q('UPDATE bom_line SET qty=$1 WHERE model_id=$2 AND part_id=$3', [p.newQty, cr.model_id, p.partId]); break;
+    case 'add_part':
+      await q('INSERT INTO bom_line(model_id,part_id,qty) VALUES($1,$2,$3) ON CONFLICT(model_id,part_id) DO UPDATE SET qty=$3', [cr.model_id, p.partId, p.qty]); break;
+    case 'remove_part':
+      await q('DELETE FROM bom_line WHERE model_id=$1 AND part_id=$2', [cr.model_id, p.partId]); break;
+    case 'update_labor':
+      await q('UPDATE model_labor SET hours=$1,rate=$2 WHERE model_id=$3 AND ws=$4', [p.newHours, p.newRate, cr.model_id, p.ws]); break;
+    case 'add_labor':
+      await q('INSERT INTO model_labor(model_id,ws,hours,rate) VALUES($1,$2,$3,$4) ON CONFLICT(model_id,ws) DO UPDATE SET hours=$3,rate=$4', [cr.model_id, p.ws, p.hours, p.rate]); break;
+    case 'remove_labor':
+      await q('DELETE FROM model_labor WHERE model_id=$1 AND ws=$2', [cr.model_id, p.ws]); break;
+    default: return res.status(400).json({ error: 'unknown op' });
+  }
+  const u = req.user;
+  await q(`UPDATE bom_change_request SET status='approved',reviewed_by=$1,reviewer_name=$2,reviewed_at=now() WHERE id=$3`, [u.id, u.name, cr.id]);
+  await audit(req, 'bom.approved', `CR#${cr.id} ${cr.model_id} ${cr.op}`);
+  res.json({ ok: true });
+});
+
+app.post('/api/bom-change-requests/:id/reject', authMiddleware, requireTier('admin'), async (req, res) => {
+  const { note } = req.body || {};
+  const cr = await one('SELECT * FROM bom_change_request WHERE id=$1', [Number(req.params.id)]);
+  if (!cr) return res.status(404).json({ error: 'not found' });
+  if (cr.status !== 'pending') return res.status(400).json({ error: 'already reviewed' });
+  const u = req.user;
+  await q(`UPDATE bom_change_request SET status='rejected',reviewed_by=$1,reviewer_name=$2,reviewed_at=now(),review_note=$3 WHERE id=$4`, [u.id, u.name, note || null, cr.id]);
+  await audit(req, 'bom.rejected', `CR#${cr.id} ${cr.model_id} ${cr.op}`);
+  res.json({ ok: true });
+});
+
 app.get('/api/roles', authMiddleware, async (_req, res) => {
   const roles = await all('SELECT name,tier FROM role ORDER BY tier,name', []);
   for (const r of roles) {
@@ -899,6 +958,10 @@ if (kind === 'postgres') {
     `ALTER TABLE app_user ADD COLUMN IF NOT EXISTS active BOOLEAN NOT NULL DEFAULT TRUE`,
     `CREATE TABLE IF NOT EXISTS role_section (role_name TEXT NOT NULL REFERENCES role(name) ON DELETE CASCADE, section TEXT NOT NULL, PRIMARY KEY (role_name, section))`,
     `CREATE TABLE IF NOT EXISTS user_title (user_id TEXT NOT NULL REFERENCES app_user(id) ON DELETE CASCADE, role_name TEXT NOT NULL REFERENCES role(name) ON DELETE CASCADE, PRIMARY KEY (user_id, role_name))`,
+    `ALTER TABLE model_labor ADD COLUMN IF NOT EXISTS rate NUMERIC(8,2) NOT NULL DEFAULT 35`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS idx_bom_line_uq ON bom_line(model_id,part_id)`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS idx_ml_ws_uq ON model_labor(model_id,ws)`,
+    `CREATE TABLE IF NOT EXISTS bom_change_request (id SERIAL PRIMARY KEY, model_id TEXT NOT NULL, model_name TEXT, requested_by TEXT NOT NULL, requester_name TEXT, created_at TIMESTAMPTZ NOT NULL DEFAULT now(), op TEXT NOT NULL, payload JSONB NOT NULL, status TEXT NOT NULL DEFAULT 'pending', reviewed_by TEXT, reviewer_name TEXT, reviewed_at TIMESTAMPTZ, review_note TEXT)`,
   ];
   // Migrate existing app_user.title into user_title junction (idempotent)
   await q(`INSERT INTO user_title(user_id,role_name)

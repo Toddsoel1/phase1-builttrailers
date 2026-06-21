@@ -275,7 +275,7 @@ async function receive(id){
   toast('Received '+v+' '+id+'.');render();
 }
 
-let _bomModels=[];
+let _bomModels=[], _currentBomId=null;
 async function viewBoms(){
   $('pTitle').textContent='BOMs & Cost';$('pSub').textContent='Per-model bill of materials with live cost rollup';$('pActions').innerHTML='';
   _bomModels=await api('/api/models');
@@ -283,83 +283,130 @@ async function viewBoms(){
   $('content').innerHTML=`<div style="max-width:460px;margin-bottom:14px"><select id="bomSel" onchange="showBom(this.value)" style="width:100%">
     ${cats.map(c=>`<optgroup label="${c}">${_bomModels.filter(m=>m.category===c).map(m=>`<option value="${m.id}">${m.id} — ${m.name}</option>`).join('')}</optgroup>`).join('')}
    </select></div><div id="bomBody"></div>`;
-  showBom(_bomModels[0].id);
+  const targetId=(_currentBomId&&_bomModels.find(m=>m.id===_currentBomId))?_currentBomId:_bomModels[0]?.id;
+  if(targetId){$('bomSel').value=targetId;showBom(targetId);}
 }
 async function showBom(id){
-  const [m,parts]=await Promise.all([api('/api/models/'+id),api('/api/parts')]);
-  const partOpts=parts.map(p=>`<option value="${p.id}">${p.id} — ${p.name}</option>`).join('');
+  _currentBomId=id;
+  const [m,parts,crs]=await Promise.all([api('/api/models/'+id),api('/api/parts'),api('/api/bom-change-requests?modelId='+encodeURIComponent(id)+'&status=pending')]);
+  const partOpts=parts.map(p=>`<option value="${esc(p.id)}">${esc(p.id)} — ${esc(p.name)}</option>`).join('');
+  const pendingSec=crs.length?`<div class="card" style="margin-top:14px;border-color:var(--accent)">
+   <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px"><h3 style="margin:0">Pending Changes</h3><span class="badge b-low">${crs.length}</span></div>
+   <p class="muted" style="font-size:12px;margin-bottom:10px">These changes are queued for accounting review. Approve to apply them to the live BOM.</p>
+   <table><thead><tr><th>Proposed Change</th><th>Requested by</th><th>Date</th>${isAdmin()?'<th></th>':''}</tr></thead><tbody>
+   ${crs.map(cr=>`<tr>
+     <td>${bomCrDesc(cr)}</td>
+     <td class="muted" style="font-size:12px">${esc(cr.requester_name||'')}</td>
+     <td class="muted" style="font-size:12px">${new Date(cr.created_at).toLocaleDateString()}</td>
+     ${isAdmin()?`<td style="display:flex;gap:4px"><button class="btn sm" onclick="approveBomCR(${cr.id})">✓ Approve</button><button class="btn sm sec" onclick="rejectBomCR(${cr.id})">✕ Reject</button></td>`:''}
+   </tr>`).join('')}
+   </tbody></table></div>`:'';
   $('bomBody').innerHTML=`
    <div class="grid g4" style="margin-bottom:14px">
-    ${kpi('Material',money(m.material),'parts')}
-    ${kpi('Labor',money(m.laborCost),m.laborHrs.toFixed(1)+' hrs @ $'+(m.labor[0]?.rate||35))}
+    ${kpi('Material',money(m.material),'from parts master')}
+    ${kpi('Labor',money(m.laborCost),m.laborHrs.toFixed(1)+' hrs')}
     ${kpi('Total cost',money(m.totalCost),'per unit')}
     ${kpi('Margin',(m.margin*100).toFixed(1)+'%',money(m.marginDollars)+' on '+money(m.price))}
    </div>
-   <div class="card"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px"><h3 style="margin:0">${m.name} — Bill of Materials</h3>${isAdmin()?`<button class="btn sm" onclick="addBomLine('${id}')">+ Add Part</button>`:''}</div>
+   <div class="card"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px"><h3 style="margin:0">${esc(m.name)} — Bill of Materials</h3>${isAdmin()?`<button class="btn sm" onclick="addBomLine('${id}')">+ Propose Part</button>`:''}</div>
    <table><thead><tr><th>Part</th><th class="right">Qty</th><th class="right">Unit cost</th><th class="right">Ext.</th>${isAdmin()?'<th></th>':''}</tr></thead><tbody>
    ${m.bom.map(b=>`<tr>
-     <td>${b.name}${b.type==='M'?' <span class="badge b-mfg">MAKE</span>':''}</td>
-     <td class="right"><input type="number" value="${b.qty}" min="0.01" step="0.01" style="width:70px;text-align:right" onchange="saveBomQty('${id}','${b.partId||b.id}',this.value,this)" ${isAdmin()?'':'disabled'}></td>
+     <td>${esc(b.name)}${b.type==='M'?' <span class="badge b-mfg">MAKE</span>':''}</td>
+     <td class="right"><input type="number" value="${b.qty}" min="0.01" step="0.01" style="width:70px;text-align:right" onchange="saveBomQty('${id}','${b.partId||b.id}',${JSON.stringify(b.name)},${b.qty},this.value,this)" ${isAdmin()?'':'disabled'}></td>
      <td class="right">${money2(b.unitCost)}</td>
      <td class="right">${money2(b.ext)}</td>
-     ${isAdmin()?`<td><button class="btn" style="padding:2px 8px;font-size:11px;background:var(--danger,#c0392b)" onclick="delBomLine('${id}','${b.partId||b.id}','${b.name}')">✕</button></td>`:''}
+     ${isAdmin()?`<td><button class="btn" style="padding:2px 8px;font-size:11px;background:var(--danger,#c0392b)" title="Propose removal" onclick="delBomLine('${id}','${b.partId||b.id}',${JSON.stringify(b.name)})">✕</button></td>`:''}
    </tr>`).join('')}
    <tr><td colspan="${isAdmin()?4:3}" class="right"><b>Material</b></td><td class="right"><b>${money2(m.material)}</b></td></tr>
    </tbody></table></div>
-   <div class="card" style="margin-top:14px"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px"><h3 style="margin:0">Labor routing</h3>${isAdmin()?`<button class="btn sm" onclick="addLaborStep('${id}')">+ Add Step</button>`:''}</div>
+   <div class="card" style="margin-top:14px"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px"><h3 style="margin:0">Labor routing</h3>${isAdmin()?`<button class="btn sm" onclick="addLaborStep('${id}')">+ Propose Step</button>`:''}</div>
    <table><thead><tr><th>Workstation</th><th class="right">Hours</th><th class="right">$/hr</th><th class="right">Ext.</th>${isAdmin()?'<th></th>':''}</tr></thead><tbody>
    ${m.labor.map(l=>`<tr>
-     <td>${l.ws}</td>
-     <td class="right"><input type="number" value="${l.hours}" min="0.01" step="0.01" style="width:70px;text-align:right" onchange="saveLaborHrs('${id}','${encodeURIComponent(l.ws)}',this.value,${l.rate},this)" ${isAdmin()?'':'disabled'}></td>
-     <td class="right"><input type="number" value="${l.rate}" min="1" step="1" style="width:70px;text-align:right" onchange="saveLaborHrs('${id}','${encodeURIComponent(l.ws)}',${l.hours},this.value,this)" ${isAdmin()?'':'disabled'}></td>
+     <td>${esc(l.ws)}</td>
+     <td class="right"><input type="number" value="${l.hours}" min="0.01" step="0.01" style="width:70px;text-align:right" onchange="saveLaborChange('${id}','${encodeURIComponent(l.ws)}',${l.hours},${l.rate},this.value,${l.rate},this)" ${isAdmin()?'':'disabled'}></td>
+     <td class="right"><input type="number" value="${l.rate}" min="1" step="1" style="width:70px;text-align:right" onchange="saveLaborChange('${id}','${encodeURIComponent(l.ws)}',${l.hours},${l.rate},${l.hours},this.value,this)" ${isAdmin()?'':'disabled'}></td>
      <td class="right">${money2(l.ext)}</td>
-     ${isAdmin()?`<td><button class="btn" style="padding:2px 8px;font-size:11px;background:var(--danger,#c0392b)" onclick="delLaborStep('${id}','${encodeURIComponent(l.ws)}','${l.ws}')">✕</button></td>`:''}
+     ${isAdmin()?`<td><button class="btn" style="padding:2px 8px;font-size:11px;background:var(--danger,#c0392b)" title="Propose removal" onclick="delLaborStep('${id}','${encodeURIComponent(l.ws)}',${JSON.stringify(l.ws)})">✕</button></td>`:''}
    </tr>`).join('')}
    <tr><td colspan="${isAdmin()?4:3}" class="right"><b>Labor</b></td><td class="right"><b>${money2(m.laborCost)}</b></td></tr>
    </tbody></table></div>
+   ${pendingSec}
    <div id="bomPartOpts" style="display:none">${partOpts}</div>`;
 }
-async function saveBomQty(modelId,partId,qty,el){
-  try{await api('/api/models/'+modelId+'/bom/'+partId,{method:'PATCH',body:JSON.stringify({qty:Number(qty)})});toast('Qty updated');showBom(modelId);}
+function bomCrDesc(cr){
+  const p=cr.payload||{};
+  switch(cr.op){
+    case 'update_qty':  return `Change <b>${esc(p.partName||p.partId)}</b> qty: ${p.oldQty} → <b>${p.newQty}</b>`;
+    case 'add_part':    return `Add part <b>${esc(p.partName||p.partId)}</b> × ${p.qty}`;
+    case 'remove_part': return `Remove <b>${esc(p.partName||p.partId)}</b> from BOM`;
+    case 'update_labor':return `Change <b>${esc(p.ws)}</b>: ${p.oldHours}h@$${p.oldRate} → ${p.newHours}h@$${p.newRate}`;
+    case 'add_labor':   return `Add labor step <b>${esc(p.ws)}</b>: ${p.hours}h @ $${p.rate}/hr`;
+    case 'remove_labor':return `Remove labor step <b>${esc(p.ws)}</b>`;
+    default: return esc(cr.op);
+  }
+}
+async function approveBomCR(id){
+  try{await api('/api/bom-change-requests/'+id+'/approve',{method:'POST'});toast('Change approved and applied');if(page==='boms')showBom(_currentBomId);else viewAccounting();}
   catch(e){toast(e.message);}
 }
-async function delBomLine(modelId,partId,name){
-  if(!confirm('Remove '+name+' from this BOM?'))return;
-  try{await api('/api/models/'+modelId+'/bom/'+partId,{method:'DELETE'});toast('Removed');showBom(modelId);}
+async function rejectBomCR(id){
+  const note=prompt('Reason for rejection (optional):');if(note===null)return;
+  try{await api('/api/bom-change-requests/'+id+'/reject',{method:'POST',body:JSON.stringify({note:note||''})});toast('Change rejected');if(page==='boms')showBom(_currentBomId);else viewAccounting();}
+  catch(e){toast(e.message);}
+}
+async function saveBomQty(modelId,partId,partName,oldQty,newQty,el){
+  const m=_bomModels.find(x=>x.id===modelId);
+  try{
+    await api('/api/bom-change-requests',{method:'POST',body:JSON.stringify({modelId,modelName:m?.name,op:'update_qty',payload:{partId,partName,oldQty:Number(oldQty),newQty:Number(newQty)}})});
+    toast('Change submitted for accounting review');showBom(modelId);
+  }catch(e){toast(e.message);el.value=oldQty;}
+}
+async function delBomLine(modelId,partId,partName){
+  if(!confirm('Propose removal of '+partName+' from this BOM? Accounting must approve before it takes effect.'))return;
+  const m=_bomModels.find(x=>x.id===modelId);
+  try{await api('/api/bom-change-requests',{method:'POST',body:JSON.stringify({modelId,modelName:m?.name,op:'remove_part',payload:{partId,partName}})});toast('Removal proposed — pending accounting review');showBom(modelId);}
   catch(e){toast(e.message);}
 }
 async function addBomLine(modelId){
   const opts=$('bomPartOpts').innerHTML;
-  modal('Add Part to BOM',`
+  modal('Propose Part Addition',`
     <div class="field"><label>Part</label><select id="abPart" class="inp">${opts}</select></div>
     <div class="field"><label>Quantity</label><input id="abQty" type="number" class="inp" value="1" min="0.01" step="0.01"></div>
+    <p class="muted" style="font-size:12px;margin-top:4px">This change will be queued for accounting review before being applied.</p>
     <div class="row" style="gap:8px;margin-top:8px">
-      <button class="btn" onclick="saveNewBomLine('${modelId}')">Add</button>
+      <button class="btn" onclick="saveNewBomLine('${modelId}')">Submit for review</button>
       <button class="btn sec" onclick="closeModal()">Cancel</button>
     </div>`);
 }
 async function saveNewBomLine(modelId){
   const partId=$('abPart').value,qty=Number($('abQty').value);
+  const partName=$('abPart').options[$('abPart').selectedIndex]?.text||partId;
   if(!qty||qty<=0)return toast('Enter a valid quantity');
-  try{await api('/api/models/'+modelId+'/bom',{method:'POST',body:JSON.stringify({partId,qty})});closeModal();toast('Part added');showBom(modelId);}
+  const m=_bomModels.find(x=>x.id===modelId);
+  try{await api('/api/bom-change-requests',{method:'POST',body:JSON.stringify({modelId,modelName:m?.name,op:'add_part',payload:{partId,partName,qty}})});closeModal();toast('Change submitted for accounting review');showBom(modelId);}
   catch(e){toast(e.message);}
 }
-async function saveLaborHrs(modelId,ws,hours,rate,el){
-  try{await api('/api/models/'+modelId+'/labor',{method:'POST',body:JSON.stringify({ws:decodeURIComponent(ws),hours:Number(hours),rate:Number(rate)})});toast('Labor updated');showBom(modelId);}
-  catch(e){toast(e.message);}
+async function saveLaborChange(modelId,ws,oldHours,oldRate,newHours,newRate,el){
+  const m=_bomModels.find(x=>x.id===modelId);
+  try{
+    await api('/api/bom-change-requests',{method:'POST',body:JSON.stringify({modelId,modelName:m?.name,op:'update_labor',payload:{ws:decodeURIComponent(ws),oldHours:Number(oldHours),oldRate:Number(oldRate),newHours:Number(newHours),newRate:Number(newRate)}})});
+    toast('Change submitted for accounting review');showBom(modelId);
+  }catch(e){toast(e.message);el.value=el.dataset.orig||oldHours;}
 }
-async function delLaborStep(modelId,ws,name){
-  if(!confirm('Remove "'+name+'" labor step?'))return;
-  try{await api('/api/models/'+modelId+'/labor/'+ws,{method:'DELETE'});toast('Removed');showBom(modelId);}
+async function delLaborStep(modelId,ws,wsName){
+  if(!confirm('Propose removal of "'+wsName+'" labor step? Accounting must approve before it takes effect.'))return;
+  const m=_bomModels.find(x=>x.id===modelId);
+  try{await api('/api/bom-change-requests',{method:'POST',body:JSON.stringify({modelId,modelName:m?.name,op:'remove_labor',payload:{ws:decodeURIComponent(ws)}})});toast('Removal proposed — pending accounting review');showBom(modelId);}
   catch(e){toast(e.message);}
 }
 async function addLaborStep(modelId){
-  modal('Add Labor Step',`
+  modal('Propose Labor Step',`
     <div class="field"><label>Workstation name</label><input id="alWs" class="inp" placeholder="e.g. Welding, Paint, Assembly"></div>
     <div class="field"><label>Hours</label><input id="alHrs" type="number" class="inp" value="1" min="0.01" step="0.01"></div>
     <div class="field"><label>Rate ($/hr)</label><input id="alRate" type="number" class="inp" value="35" min="1"></div>
+    <p class="muted" style="font-size:12px;margin-top:4px">This change will be queued for accounting review before being applied.</p>
     <div class="row" style="gap:8px;margin-top:8px">
-      <button class="btn" onclick="saveNewLaborStep('${modelId}')">Add</button>
+      <button class="btn" onclick="saveNewLaborStep('${modelId}')">Submit for review</button>
       <button class="btn sec" onclick="closeModal()">Cancel</button>
     </div>`);
 }
@@ -367,7 +414,8 @@ async function saveNewLaborStep(modelId){
   const ws=($('alWs').value||'').trim(),hours=Number($('alHrs').value),rate=Number($('alRate').value)||35;
   if(!ws)return toast('Enter a workstation name');
   if(!hours||hours<=0)return toast('Enter valid hours');
-  try{await api('/api/models/'+modelId+'/labor',{method:'POST',body:JSON.stringify({ws,hours,rate})});closeModal();toast('Step added');showBom(modelId);}
+  const m=_bomModels.find(x=>x.id===modelId);
+  try{await api('/api/bom-change-requests',{method:'POST',body:JSON.stringify({modelId,modelName:m?.name,op:'add_labor',payload:{ws,hours,rate}})});closeModal();toast('Change submitted for accounting review');showBom(modelId);}
   catch(e){toast(e.message);}
 }
 
@@ -943,12 +991,25 @@ async function saveNewVendor(){
 async function viewAccounting(){
   $('pTitle').textContent='Accounting';$('pSub').textContent='QuickBooks sync — invoices on ship, bills on PO receipt; OCR invoice intake updates costs';
   $('pActions').innerHTML=canEdit()?`<button class="btn" onclick="pullFromQB()">⬇ Pull from QuickBooks</button>&nbsp;<button class="btn sec" onclick="syncQB()">⟳ Push pending</button>`:'';
-  const [acct,invoices,custs]=await Promise.all([api('/api/accounting'),api('/api/invoices'),api('/api/customers').catch(()=>[])]);
+  const [acct,invoices,custs,bomCRs]=await Promise.all([api('/api/accounting'),api('/api/invoices'),api('/api/customers').catch(()=>[]),api('/api/bom-change-requests?status=pending')]);
   const t=acct.totals;
   const modeBadge=acct.mode==='quickbooks'?(acct.configured?'<span class="badge b-ok">QuickBooks connected</span>':'<span class="badge b-low">QuickBooks selected — credentials pending</span>'):'<span class="badge b-buy">Simulated mode</span>';
   // vendor list for scan
   const vendors=[...new Map((await api('/api/parts')).map(p=>[p.vendor,p.vendor])).keys()].filter(Boolean);
   $('content').innerHTML=`
+   ${bomCRs.length?`<div class="card" style="margin-bottom:16px;border-color:var(--accent)">
+     <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px"><h3 style="margin:0">BOM Change Requests</h3><span class="badge b-low">${bomCRs.length} pending</span></div>
+     <p class="muted" style="font-size:12px;margin-bottom:10px">These BOM edits are waiting for accounting approval before they take effect.</p>
+     <table><thead><tr><th>Model</th><th>Proposed Change</th><th>Requested by</th><th>Date</th>${isAdmin()?'<th></th>':''}</tr></thead><tbody>
+     ${bomCRs.map(cr=>`<tr>
+       <td><b>${esc(cr.model_name||cr.model_id)}</b></td>
+       <td>${bomCrDesc(cr)}</td>
+       <td class="muted" style="font-size:12px">${esc(cr.requester_name||'')}</td>
+       <td class="muted" style="font-size:12px">${new Date(cr.created_at).toLocaleDateString()}</td>
+       ${isAdmin()?`<td style="display:flex;gap:4px"><button class="btn sm" onclick="approveBomCR(${cr.id})">✓ Approve</button><button class="btn sm sec" onclick="rejectBomCR(${cr.id})">✕ Reject</button></td>`:''}
+     </tr>`).join('')}
+     </tbody></table>
+   </div>`:''}
    <div class="banner">${modeBadge} &nbsp; Invoices post automatically when an order ships; bills post when a PO is received. ${acct.mode==='simulated'?'Set <code>ACCOUNTING_MODE=quickbooks</code> + QBO credentials to push live.':acct.configured?'<button class="btn sec" style="margin-left:12px;padding:2px 10px;font-size:12px" onclick="qboReauth()">Re-authorize</button>':''}</div>
    <div class="grid g4" style="margin-bottom:16px">
      ${kpi('Invoices posted',t.invoices,money(t.invoiceAmt)+' billed to customers')}
