@@ -321,3 +321,16 @@ CREATE TABLE IF NOT EXISTS sms_optin (
   opted_out_at TIMESTAMPTZ,
   method       TEXT   -- keyword / webform
 );
+
+-- ===== Role-based section access & multi-title users =====
+CREATE TABLE IF NOT EXISTS role_section (
+  role_name TEXT NOT NULL REFERENCES role(name) ON DELETE CASCADE,
+  section   TEXT NOT NULL,
+  PRIMARY KEY (role_name, section)
+);
+
+CREATE TABLE IF NOT EXISTS user_title (
+  user_id   TEXT NOT NULL REFERENCES app_user(id) ON DELETE CASCADE,
+  role_name TEXT NOT NULL REFERENCES role(name) ON DELETE CASCADE,
+  PRIMARY KEY (user_id, role_name)
+);

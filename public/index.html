@@ -151,11 +151,20 @@ $('liPass').addEventListener('keydown',e=>{if(e.key==='Enter')login();});
 
 // ---- nav/render ----
 const NAV=[['dashboard','📊 Dashboard'],['orders','📋 Orders & Fulfillment'],['neworder','➕ New Order'],['customers','🏬 Customers & Dealers'],['parts','📦 Parts Master'],['predict','🤖 Predictive Ordering'],['pos','🧾 Purchase Orders'],['boms','🧩 BOMs & Cost'],['inventory','📈 Inventory Value'],['accounting','💵 Accounting'],['team','👷 Team & Payroll'],['timeoff','📅 Schedule & Time Off'],['outcomes','🎯 Goals & Outcomes'],['wins','🎉 Wins'],['forecast','🔮 Forecasting & Planning'],['notify','💬 Notifications'],['support','🆘 Support'],['users','👤 Users & Roles']];
-function navVisible(n){ if(n[0]==='users') return isAdmin(); if(n[0]==='neworder') return canSell(); return true; }
+function canSee(section){
+  if(isAdmin()) return true;
+  if(!ME.sections) return true; // null = all sections (admin)
+  return ME.sections.includes(section);
+}
+function navVisible(n){
+  if(n[0]==='users') return isAdmin();
+  if(n[0]==='neworder') return canSell()&&canSee('neworder');
+  return canSee(n[0]);
+}
 function renderNav(){
   $('nav').innerHTML=NAV.filter(navVisible).map(n=>`<button class="${page===n[0]?'active':''}" onclick="go('${n[0]}')">${n[1]}</button>`).join('');
   $('whoName').textContent=ME.name;
-  $('whoPill').innerHTML=`<span class="pill ${ME.role}">${ME.title||ME.role}</span>`;
+  $('whoPill').innerHTML=`<span class="pill ${ME.role}">${(ME.titles||[ME.title]).filter(Boolean).join(', ')||ME.role}</span>`;
 }
 function go(p){page=p;render();}
 async function render(){
@@ -388,7 +397,8 @@ async function viewUsers(){
    ${users.map(u=>`<tr style="${u.active===false?'opacity:0.45':''}">
      <td><b>${u.name}</b>${u.active===false?' <span class="pill" style="background:#888;font-size:10px">Inactive</span>':''}</td>
      <td class="muted">${u.username}</td>
-     <td>${u.title||'—'}</td>
+     <td>${(u.titles&&u.titles.length?u.titles:[u.title]).filter(Boolean).map(t=>`<span class="pill viewer" style="font-size:11px;margin:1px">${t}</span>`).join(' ')||'—'}
+       ${isAdmin()&&u.active!==false?`<button class="btn sm sec" style="margin-left:4px;padding:1px 6px;font-size:11px" onclick="manageTitles('${u.id}','${u.name}')">＋</button>`:''}</td>
      <td class="center"><span class="pill ${tierColor[u.role]||'viewer'}">${u.role}</span></td>
      <td class="muted">${u.manager_id?byId[u.manager_id]?.name||'—':'—'}</td>
      <td class="muted" style="font-size:12px">${u.phone||'—'}</td>
@@ -401,12 +411,13 @@ async function viewUsers(){
    <h3 style="margin:0">Job Titles &amp; Permissions</h3>
    <button class="btn sm" onclick="addRoleModal()">+ Add Title</button>
    </div>
-   <table><thead><tr><th>Job Title</th><th>Permission Tier</th><th style="width:60px"></th></tr></thead><tbody>
+   <table><thead><tr><th>Job Title</th><th>Permission Tier</th><th>Sections</th><th></th></tr></thead><tbody>
    ${roles.map(r=>`<tr>
      <td>${r.name}</td>
      <td><select onchange="saveRoleTier('${r.name}',this.value)" style="padding:3px 8px;border-radius:6px;border:1px solid var(--border)">
        ${['admin','editor','viewer'].map(t=>`<option value="${t}" ${r.tier===t?'selected':''}>${t}</option>`).join('')}
      </select></td>
+     <td><span class="muted" style="font-size:12px">${(r.sections||[]).length} of ${NAV.length}</span> <button class="btn sm sec" onclick='editRoleSections("${r.name}",${JSON.stringify(r.sections||[])})'>Edit access</button></td>
      <td><button class="btn sm" style="background:var(--danger,#c0392b)" onclick="deleteRole('${r.name}')">✕</button></td>
    </tr>`).join('')}
    </tbody></table>
@@ -478,6 +489,46 @@ async function saveNewUser(){
 }
 async function saveRoleTier(name,tier){
   try{await api('/api/roles/'+encodeURIComponent(name),{method:'PATCH',body:JSON.stringify({tier})});toast(name+' → '+tier);}
+  catch(e){toast(e.message);}
+}
+async function manageTitles(userId,userName){
+  const [users,roles]=await Promise.all([api('/api/users'),api('/api/roles')]);
+  const u=users.find(x=>x.id===userId);
+  const assigned=new Set(u?.titles||[]);
+  modal(`Job Titles — ${userName}`,`
+    <p class="muted" style="font-size:13px;margin-bottom:12px">Check the titles this person holds. Their access is the union of all assigned titles.</p>
+    <div style="display:flex;flex-direction:column;gap:6px;max-height:320px;overflow-y:auto">
+    ${roles.map(r=>`<label style="display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:6px;border:1px solid var(--border);cursor:pointer">
+      <input type="checkbox" ${assigned.has(r.name)?'checked':''} onchange="toggleUserTitle('${userId}','${r.name}',this.checked)">
+      <span><b>${r.name}</b> <span class="pill ${r.tier}" style="font-size:10px">${r.tier}</span></span>
+    </label>`).join('')}
+    </div>
+    <div style="margin-top:12px"><button class="btn sec" onclick="closeModal();viewUsers()">Done</button></div>`);
+}
+async function toggleUserTitle(userId,roleName,add){
+  try{
+    if(add) await api('/api/users/'+userId+'/titles',{method:'POST',body:JSON.stringify({roleName})});
+    else await api('/api/users/'+userId+'/titles/'+encodeURIComponent(roleName),{method:'DELETE'});
+  }catch(e){toast(e.message);}
+}
+async function editRoleSections(name,currentSections){
+  modal(`Access — ${name}`,`
+    <p class="muted" style="font-size:13px;margin-bottom:12px">Select which sections of the app this job title can see.</p>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;max-height:360px;overflow-y:auto">
+    ${NAV.map(([key,label])=>`<label style="display:flex;align-items:center;gap:8px;padding:5px 8px;border-radius:6px;border:1px solid var(--border);cursor:pointer">
+      <input type="checkbox" value="${key}" ${(currentSections||[]).includes(key)?'checked':''}>
+      <span style="font-size:13px">${label}</span>
+    </label>`).join('')}
+    </div>
+    <div class="row" style="gap:8px;margin-top:12px">
+      <button class="btn" onclick="saveRoleSections('${name}')">Save</button>
+      <button class="btn sec" onclick="closeModal()">Cancel</button>
+    </div>`);
+}
+async function saveRoleSections(name){
+  const checks=[...$('modalBg').querySelectorAll('input[type=checkbox]')];
+  const sections=checks.filter(c=>c.checked).map(c=>c.value);
+  try{await api('/api/roles/'+encodeURIComponent(name),{method:'PATCH',body:JSON.stringify({sections})});closeModal();toast('Access updated');viewUsers();}
   catch(e){toast(e.message);}
 }
 function addRoleModal(){

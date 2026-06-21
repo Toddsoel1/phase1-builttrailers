@@ -108,7 +108,10 @@ app.post('/api/auth/login', async (req, res) => {
   if (!u || !checkPassword(password || '', u.password_hash))
     return res.status(401).json({ error: 'Invalid username or password' });
   if (u.active === false) return res.status(403).json({ error: 'Account is inactive. Contact your administrator.' });
-  const safe = { id: u.id, name: u.name, username: u.username, title: u.title, role: u.role, manager_id: u.manager_id };
+  const sectionRows = u.role === 'admin' ? null :
+    await all(`SELECT DISTINCT rs.section FROM user_title ut JOIN role_section rs ON rs.role_name=ut.role_name WHERE ut.user_id=$1`, [u.id]);
+  const sections = sectionRows ? sectionRows.map(r => r.section) : null;
+  const safe = { id: u.id, name: u.name, username: u.username, title: u.title, role: u.role, manager_id: u.manager_id, sections };
   res.json({ token: signToken(u), user: safe });
 });
 app.get('/api/auth/me', authMiddleware, (req, res) => res.json({ user: req.user }));
@@ -201,7 +204,12 @@ as long as the server makes at least one QuickBooks API call every 101 days.</p>
 
 // ---- users (admin) ----
 app.get('/api/users', authMiddleware, async (_req, res) => {
-  res.json(await all('SELECT id,name,username,title,role,manager_id,phone,sms_consent,sms_consent_at,active FROM app_user ORDER BY active DESC,id', []));
+  const users = await all('SELECT id,name,username,title,role,manager_id,phone,sms_consent,sms_consent_at,active FROM app_user ORDER BY active DESC,id', []);
+  for (const u of users) {
+    const rows = await all('SELECT role_name FROM user_title WHERE user_id=$1', [u.id]);
+    u.titles = rows.map(r => r.role_name);
+  }
+  res.json(users);
 });
 app.post('/api/users', authMiddleware, requireTier('admin'), async (req, res) => {
   const { name, title, password, phone, smsConsent } = req.body || {};
@@ -351,28 +359,72 @@ app.delete('/api/models/:id/labor/:ws', authMiddleware, requireTier('admin'), as
   res.json({ ok: true });
 });
 app.get('/api/roles', authMiddleware, async (_req, res) => {
-  res.json(await all('SELECT name,tier FROM role ORDER BY tier,name', []));
+  const roles = await all('SELECT name,tier FROM role ORDER BY tier,name', []);
+  for (const r of roles) {
+    const rows = await all('SELECT section FROM role_section WHERE role_name=$1', [r.name]);
+    r.sections = rows.map(x => x.section);
+  }
+  res.json(roles);
 });
 app.post('/api/roles', authMiddleware, requireTier('admin'), async (req, res) => {
-  const { name, tier } = req.body || {};
+  const { name, tier, sections } = req.body || {};
   if (!name || !name.trim()) return res.status(400).json({ error: 'name required' });
   if (!['admin','editor','viewer'].includes(tier)) return res.status(400).json({ error: 'invalid tier' });
   await q('INSERT INTO role(name,tier) VALUES ($1,$2) ON CONFLICT(name) DO UPDATE SET tier=$2', [name.trim(), tier]);
+  if (sections) {
+    await q('DELETE FROM role_section WHERE role_name=$1', [name.trim()]);
+    for (const s of sections) await q('INSERT INTO role_section(role_name,section) VALUES($1,$2) ON CONFLICT DO NOTHING', [name.trim(), s]);
+  }
   await audit(req, 'role.create', `${name.trim()}→${tier}`);
   res.json({ ok: true });
 });
 app.patch('/api/roles/:name', authMiddleware, requireTier('admin'), async (req, res) => {
-  const { tier } = req.body || {};
-  if (!['admin','editor','viewer'].includes(tier)) return res.status(400).json({ error: 'invalid tier' });
-  await q('INSERT INTO role(name,tier) VALUES ($1,$2) ON CONFLICT(name) DO UPDATE SET tier=$2', [req.params.name, tier]);
-  await audit(req, 'role.update', `${req.params.name}→${tier}`);
+  const { tier, sections } = req.body || {};
+  if (tier) {
+    if (!['admin','editor','viewer'].includes(tier)) return res.status(400).json({ error: 'invalid tier' });
+    await q('INSERT INTO role(name,tier) VALUES ($1,$2) ON CONFLICT(name) DO UPDATE SET tier=$2', [req.params.name, tier]);
+    await audit(req, 'role.update', `${req.params.name}→${tier}`);
+  }
+  if (sections !== undefined) {
+    await q('DELETE FROM role_section WHERE role_name=$1', [req.params.name]);
+    for (const s of sections) await q('INSERT INTO role_section(role_name,section) VALUES($1,$2) ON CONFLICT DO NOTHING', [req.params.name, s]);
+    await audit(req, 'role.sections', `${req.params.name}: ${sections.join(',')}`);
+  }
   res.json({ ok: true });
 });
 app.delete('/api/roles/:name', authMiddleware, requireTier('admin'), async (req, res) => {
-  const inUse = await one('SELECT 1 FROM app_user WHERE title=$1 LIMIT 1', [req.params.name]);
+  const inUse = await one('SELECT 1 FROM user_title WHERE role_name=$1 LIMIT 1', [req.params.name]);
   if (inUse) return res.status(409).json({ error: 'This title is assigned to one or more users. Reassign them first.' });
   await q('DELETE FROM role WHERE name=$1', [req.params.name]);
   await audit(req, 'role.delete', req.params.name);
+  res.json({ ok: true });
+});
+app.get('/api/users/:id/titles', authMiddleware, async (req, res) => {
+  res.json(await all('SELECT role_name FROM user_title WHERE user_id=$1', [req.params.id]));
+});
+app.post('/api/users/:id/titles', authMiddleware, requireTier('admin'), async (req, res) => {
+  const { roleName } = req.body || {};
+  if (!roleName) return res.status(400).json({ error: 'roleName required' });
+  await q('INSERT INTO user_title(user_id,role_name) VALUES($1,$2) ON CONFLICT DO NOTHING', [req.params.id, roleName]);
+  // Upgrade user's permission tier if new role has higher tier
+  const r = await one('SELECT tier FROM role WHERE name=$1', [roleName]);
+  if (r) {
+    const RANK = { viewer:0, editor:1, admin:2 };
+    const cur = await one('SELECT role FROM app_user WHERE id=$1', [req.params.id]);
+    if (cur && RANK[r.tier] > RANK[cur.role]) await q('UPDATE app_user SET role=$1,title=$2 WHERE id=$3', [r.tier, roleName, req.params.id]);
+  }
+  await audit(req, 'user.title.add', `${req.params.id}+${roleName}`);
+  res.json({ ok: true });
+});
+app.delete('/api/users/:id/titles/:roleName', authMiddleware, requireTier('admin'), async (req, res) => {
+  await q('DELETE FROM user_title WHERE user_id=$1 AND role_name=$2', [req.params.id, req.params.roleName]);
+  // Recalculate user's tier from remaining titles
+  const remaining = await all('SELECT r.tier FROM user_title ut JOIN role r ON r.name=ut.role_name WHERE ut.user_id=$1', [req.params.id]);
+  const RANK = { viewer:0, editor:1, admin:2 };
+  const topTier = remaining.reduce((best,r) => RANK[r.tier]>RANK[best]?r.tier:best, 'viewer');
+  const topTitle = (await one('SELECT role_name FROM user_title WHERE user_id=$1 LIMIT 1', [req.params.id]))?.role_name || null;
+  await q('UPDATE app_user SET role=$1,title=$2 WHERE id=$3', [topTier, topTitle, req.params.id]);
+  await audit(req, 'user.title.remove', `${req.params.id}-${req.params.roleName}`);
   res.json({ ok: true });
 });
 
@@ -803,7 +855,23 @@ if (kind === 'postgres') {
     `ALTER TABLE sales_order ADD COLUMN IF NOT EXISTS subscription_tier TEXT NOT NULL DEFAULT 'standard'`,
     `ALTER TABLE sales_order ADD COLUMN IF NOT EXISTS ai_credits_used INTEGER NOT NULL DEFAULT 0`,
     `ALTER TABLE app_user ADD COLUMN IF NOT EXISTS active BOOLEAN NOT NULL DEFAULT TRUE`,
+    `CREATE TABLE IF NOT EXISTS role_section (role_name TEXT NOT NULL REFERENCES role(name) ON DELETE CASCADE, section TEXT NOT NULL, PRIMARY KEY (role_name, section))`,
+    `CREATE TABLE IF NOT EXISTS user_title (user_id TEXT NOT NULL REFERENCES app_user(id) ON DELETE CASCADE, role_name TEXT NOT NULL REFERENCES role(name) ON DELETE CASCADE, PRIMARY KEY (user_id, role_name))`,
   ];
+  // Migrate existing app_user.title into user_title junction (idempotent)
+  await q(`INSERT INTO user_title(user_id,role_name)
+    SELECT u.id, u.title FROM app_user u JOIN role r ON r.name=u.title
+    WHERE u.title IS NOT NULL ON CONFLICT DO NOTHING`).catch(()=>{});
+  // Seed default sections for roles that have none yet
+  const ALL_SECTIONS = ['dashboard','orders','neworder','customers','parts','predict','pos','boms','inventory','accounting','team','timeoff','outcomes','wins','forecast','notify','support','users'];
+  const EDITOR_SECTIONS = ALL_SECTIONS.filter(s=>s!=='users');
+  const VIEWER_SECTIONS = ['dashboard','orders','customers','inventory','notify','support'];
+  const rolesWithoutSections = await all(`SELECT r.name,r.tier FROM role r WHERE NOT EXISTS (SELECT 1 FROM role_section rs WHERE rs.role_name=r.name)`, []);
+  for (const r of rolesWithoutSections) {
+    const secs = r.tier==='admin' ? ALL_SECTIONS : r.tier==='editor' ? EDITOR_SECTIONS : VIEWER_SECTIONS;
+    for (const s of secs) await q(`INSERT INTO role_section(role_name,section) VALUES($1,$2) ON CONFLICT DO NOTHING`, [r.name, s]);
+  }
+  const unusedMigrations = [];
   for (const m of colMigrations) {
     await q(m).catch(e => console.warn('col migration:', e.message));
   }
