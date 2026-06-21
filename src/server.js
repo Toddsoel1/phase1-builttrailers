@@ -208,6 +208,13 @@ app.post('/api/users', authMiddleware, requireTier('admin'), async (req, res) =>
   await audit(req, 'user.create', `${name} (${title})${effectiveConsent ? ' [sms-consent]' : ''}`);
   res.json({ id, username: base });
 });
+app.post('/api/users/me/password', authMiddleware, async (req, res) => {
+  const { password } = req.body || {};
+  if (!password || password.length < 8) return res.status(400).json({ error: 'Password must be at least 8 characters' });
+  await q('UPDATE app_user SET password_hash=$1 WHERE id=$2', [hashPassword(password), req.user.id]);
+  await audit(req, 'user.password', 'self-change');
+  res.json({ ok: true });
+});
 app.patch('/api/users/:id', authMiddleware, requireTier('admin'), async (req, res) => {
   const { title, role, manager_id, password, username, phone, smsConsent } = req.body || {};
   const cur = await one('SELECT * FROM app_user WHERE id=$1', [req.params.id]);

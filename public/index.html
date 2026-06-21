@@ -322,7 +322,7 @@ async function viewUsers(){
      <td class="muted">${u.manager_id?byId[u.manager_id]?.name||'':'—'}</td>
      <td class="muted" style="font-size:12px">${u.phone||'—'}</td>
      <td style="font-size:12px">${u.sms_consent?'<span style="color:#4caf50">✓ Consented</span>':'<span class="muted">—</span>'}</td>
-     <td>${isAdmin()?`<button class="btn" style="padding:3px 10px;font-size:12px" onclick="editUserSms('${u.id}')">Edit</button>`:''}</td>
+     <td style="display:flex;gap:6px">${isAdmin()?`<button class="btn" style="padding:3px 10px;font-size:12px" onclick="editUserSms('${u.id}')">Edit</button>`:''}<button class="btn sec" style="padding:3px 10px;font-size:12px" onclick="changePassword('${u.id}','${u.name}')">Password</button></td>
    </tr>`).join('')}
    </tbody></table>
    <p class="muted" style="font-size:12px;margin-top:8px">Passwords are bcrypt-hashed; permission tiers are enforced on every API call. SMS consent is required before any text message is sent to an employee.</p></div>`;
@@ -367,6 +367,27 @@ async function saveUserSms(id){
 async function revokeUserSms(id){
   if(!confirm('Revoke SMS consent? This employee will no longer receive SMS notifications.'))return;
   try{await api('/api/users/'+id,{method:'PATCH',body:JSON.stringify({smsConsent:false})});closeModal();toast('Consent revoked');viewUsers();}catch(e){toast(e.message);}
+}
+function changePassword(id,name){
+  if(!isAdmin()&&ME.id!==id)return toast('Not authorized');
+  modal(`Change password — ${name}`,`
+    <div class="field"><label>New password</label><input id="cpPw" type="password" class="inp" placeholder="Min 8 characters" autocomplete="new-password"></div>
+    <div class="field"><label>Confirm password</label><input id="cpPw2" type="password" class="inp" placeholder="Repeat password" autocomplete="new-password"></div>
+    <div class="row" style="gap:8px;margin-top:8px">
+      <button class="btn" onclick="savePassword('${id}')">Save</button>
+      <button class="btn sec" onclick="closeModal()">Cancel</button>
+    </div>`);
+}
+async function savePassword(id){
+  const pw=($('cpPw').value||'').trim();
+  const pw2=($('cpPw2').value||'').trim();
+  if(pw.length<8)return toast('Password must be at least 8 characters');
+  if(pw!==pw2)return toast('Passwords do not match');
+  const isSelf=ME.id===id;
+  const url=isSelf?'/api/users/me/password':'/api/users/'+id;
+  const body=isSelf?{password:pw}:{password:pw};
+  const method=isSelf?'POST':'PATCH';
+  try{await api(url,{method,body:JSON.stringify(body)});closeModal();toast('Password updated');}catch(e){toast(e.message);}
 }
 
 // ============ PHASE 2: ORDERS / FULFILLMENT / DEALERS ============
