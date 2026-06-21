@@ -264,34 +264,100 @@ async function receive(id){
   toast('Received '+v+' '+id+'.');render();
 }
 
+let _bomModels=[];
 async function viewBoms(){
   $('pTitle').textContent='BOMs & Cost';$('pSub').textContent='Per-model bill of materials with live cost rollup';$('pActions').innerHTML='';
-  const models=await api('/api/models');
-  const cats=[...new Set(models.map(m=>m.category))];
+  _bomModels=await api('/api/models');
+  const cats=[...new Set(_bomModels.map(m=>m.category))];
   $('content').innerHTML=`<div style="max-width:460px;margin-bottom:14px"><select id="bomSel" onchange="showBom(this.value)" style="width:100%">
-    ${cats.map(c=>`<optgroup label="${c}">${models.filter(m=>m.category===c).map(m=>`<option value="${m.id}">${m.id} — ${m.name}</option>`).join('')}</optgroup>`).join('')}
+    ${cats.map(c=>`<optgroup label="${c}">${_bomModels.filter(m=>m.category===c).map(m=>`<option value="${m.id}">${m.id} — ${m.name}</option>`).join('')}</optgroup>`).join('')}
    </select></div><div id="bomBody"></div>`;
-  showBom(models[0].id);
+  showBom(_bomModels[0].id);
 }
 async function showBom(id){
-  const m=await api('/api/models/'+id);
+  const [m,parts]=await Promise.all([api('/api/models/'+id),api('/api/parts')]);
+  const partOpts=parts.map(p=>`<option value="${p.id}">${p.id} — ${p.name}</option>`).join('');
   $('bomBody').innerHTML=`
    <div class="grid g4" style="margin-bottom:14px">
     ${kpi('Material',money(m.material),'parts')}
-    ${kpi('Labor',money(m.laborCost),m.laborHrs.toFixed(1)+' hrs @ $'+m.labor[0]?.rate)}
+    ${kpi('Labor',money(m.laborCost),m.laborHrs.toFixed(1)+' hrs @ $'+(m.labor[0]?.rate||35))}
     ${kpi('Total cost',money(m.totalCost),'per unit')}
     ${kpi('Margin',(m.margin*100).toFixed(1)+'%',money(m.marginDollars)+' on '+money(m.price))}
    </div>
-   <div class="card"><h3>${m.name} — Bill of Materials</h3>
-   <table><thead><tr><th>Part</th><th class="right">Qty</th><th class="right">Unit</th><th class="right">Ext.</th></tr></thead><tbody>
-   ${m.bom.map(b=>`<tr><td>${b.name} ${b.type==='M'?'<span class="badge b-mfg">MAKE</span>':''}</td><td class="right">${b.qty}</td><td class="right">${money2(b.unitCost)}</td><td class="right">${money2(b.ext)}</td></tr>`).join('')}
-   <tr><td colspan="3" class="right"><b>Material</b></td><td class="right"><b>${money2(m.material)}</b></td></tr>
+   <div class="card"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px"><h3 style="margin:0">${m.name} — Bill of Materials</h3>${isAdmin()?`<button class="btn sm" onclick="addBomLine('${id}')">+ Add Part</button>`:''}</div>
+   <table><thead><tr><th>Part</th><th class="right">Qty</th><th class="right">Unit cost</th><th class="right">Ext.</th>${isAdmin()?'<th></th>':''}</tr></thead><tbody>
+   ${m.bom.map(b=>`<tr>
+     <td>${b.name}${b.type==='M'?' <span class="badge b-mfg">MAKE</span>':''}</td>
+     <td class="right"><input type="number" value="${b.qty}" min="0.01" step="0.01" style="width:70px;text-align:right" onchange="saveBomQty('${id}','${b.partId||b.id}',this.value,this)" ${isAdmin()?'':'disabled'}></td>
+     <td class="right">${money2(b.unitCost)}</td>
+     <td class="right">${money2(b.ext)}</td>
+     ${isAdmin()?`<td><button class="btn" style="padding:2px 8px;font-size:11px;background:var(--danger,#c0392b)" onclick="delBomLine('${id}','${b.partId||b.id}','${b.name}')">✕</button></td>`:''}
+   </tr>`).join('')}
+   <tr><td colspan="${isAdmin()?4:3}" class="right"><b>Material</b></td><td class="right"><b>${money2(m.material)}</b></td></tr>
    </tbody></table></div>
-   <div class="card" style="margin-top:14px"><h3>Labor routing</h3>
-   <table><thead><tr><th>Workstation</th><th class="right">Hours</th><th class="right">$/hr</th><th class="right">Ext.</th></tr></thead><tbody>
-   ${m.labor.map(l=>`<tr><td>${l.ws}</td><td class="right">${l.hours}</td><td class="right">${money2(l.rate)}</td><td class="right">${money2(l.ext)}</td></tr>`).join('')}
-   <tr><td colspan="3" class="right"><b>Labor</b></td><td class="right"><b>${money2(m.laborCost)}</b></td></tr>
-   </tbody></table></div>`;
+   <div class="card" style="margin-top:14px"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px"><h3 style="margin:0">Labor routing</h3>${isAdmin()?`<button class="btn sm" onclick="addLaborStep('${id}')">+ Add Step</button>`:''}</div>
+   <table><thead><tr><th>Workstation</th><th class="right">Hours</th><th class="right">$/hr</th><th class="right">Ext.</th>${isAdmin()?'<th></th>':''}</tr></thead><tbody>
+   ${m.labor.map(l=>`<tr>
+     <td>${l.ws}</td>
+     <td class="right"><input type="number" value="${l.hours}" min="0.01" step="0.01" style="width:70px;text-align:right" onchange="saveLaborHrs('${id}','${encodeURIComponent(l.ws)}',this.value,${l.rate},this)" ${isAdmin()?'':'disabled'}></td>
+     <td class="right"><input type="number" value="${l.rate}" min="1" step="1" style="width:70px;text-align:right" onchange="saveLaborHrs('${id}','${encodeURIComponent(l.ws)}',${l.hours},this.value,this)" ${isAdmin()?'':'disabled'}></td>
+     <td class="right">${money2(l.ext)}</td>
+     ${isAdmin()?`<td><button class="btn" style="padding:2px 8px;font-size:11px;background:var(--danger,#c0392b)" onclick="delLaborStep('${id}','${encodeURIComponent(l.ws)}','${l.ws}')">✕</button></td>`:''}
+   </tr>`).join('')}
+   <tr><td colspan="${isAdmin()?4:3}" class="right"><b>Labor</b></td><td class="right"><b>${money2(m.laborCost)}</b></td></tr>
+   </tbody></table></div>
+   <div id="bomPartOpts" style="display:none">${partOpts}</div>`;
+}
+async function saveBomQty(modelId,partId,qty,el){
+  try{await api('/api/models/'+modelId+'/bom/'+partId,{method:'PATCH',body:JSON.stringify({qty:Number(qty)})});toast('Qty updated');showBom(modelId);}
+  catch(e){toast(e.message);}
+}
+async function delBomLine(modelId,partId,name){
+  if(!confirm('Remove '+name+' from this BOM?'))return;
+  try{await api('/api/models/'+modelId+'/bom/'+partId,{method:'DELETE'});toast('Removed');showBom(modelId);}
+  catch(e){toast(e.message);}
+}
+async function addBomLine(modelId){
+  const opts=$('bomPartOpts').innerHTML;
+  modal('Add Part to BOM',`
+    <div class="field"><label>Part</label><select id="abPart" class="inp">${opts}</select></div>
+    <div class="field"><label>Quantity</label><input id="abQty" type="number" class="inp" value="1" min="0.01" step="0.01"></div>
+    <div class="row" style="gap:8px;margin-top:8px">
+      <button class="btn" onclick="saveNewBomLine('${modelId}')">Add</button>
+      <button class="btn sec" onclick="closeModal()">Cancel</button>
+    </div>`);
+}
+async function saveNewBomLine(modelId){
+  const partId=$('abPart').value,qty=Number($('abQty').value);
+  if(!qty||qty<=0)return toast('Enter a valid quantity');
+  try{await api('/api/models/'+modelId+'/bom',{method:'POST',body:JSON.stringify({partId,qty})});closeModal();toast('Part added');showBom(modelId);}
+  catch(e){toast(e.message);}
+}
+async function saveLaborHrs(modelId,ws,hours,rate,el){
+  try{await api('/api/models/'+modelId+'/labor',{method:'POST',body:JSON.stringify({ws:decodeURIComponent(ws),hours:Number(hours),rate:Number(rate)})});toast('Labor updated');showBom(modelId);}
+  catch(e){toast(e.message);}
+}
+async function delLaborStep(modelId,ws,name){
+  if(!confirm('Remove "'+name+'" labor step?'))return;
+  try{await api('/api/models/'+modelId+'/labor/'+ws,{method:'DELETE'});toast('Removed');showBom(modelId);}
+  catch(e){toast(e.message);}
+}
+async function addLaborStep(modelId){
+  modal('Add Labor Step',`
+    <div class="field"><label>Workstation name</label><input id="alWs" class="inp" placeholder="e.g. Welding, Paint, Assembly"></div>
+    <div class="field"><label>Hours</label><input id="alHrs" type="number" class="inp" value="1" min="0.01" step="0.01"></div>
+    <div class="field"><label>Rate ($/hr)</label><input id="alRate" type="number" class="inp" value="35" min="1"></div>
+    <div class="row" style="gap:8px;margin-top:8px">
+      <button class="btn" onclick="saveNewLaborStep('${modelId}')">Add</button>
+      <button class="btn sec" onclick="closeModal()">Cancel</button>
+    </div>`);
+}
+async function saveNewLaborStep(modelId){
+  const ws=($('alWs').value||'').trim(),hours=Number($('alHrs').value),rate=Number($('alRate').value)||35;
+  if(!ws)return toast('Enter a workstation name');
+  if(!hours||hours<=0)return toast('Enter valid hours');
+  try{await api('/api/models/'+modelId+'/labor',{method:'POST',body:JSON.stringify({ws,hours,rate})});closeModal();toast('Step added');showBom(modelId);}
+  catch(e){toast(e.message);}
 }
 
 async function viewInv(){
@@ -311,21 +377,74 @@ async function viewInv(){
 }
 
 async function viewUsers(){
-  $('pTitle').textContent='Users & Roles';$('pSub').textContent='Accounts, permission tiers and reporting hierarchy';$('pActions').innerHTML='';
-  const users=await api('/api/users');
+  $('pTitle').textContent='Users & Roles';$('pSub').textContent='Accounts, permission tiers and reporting hierarchy';
+  if(isAdmin()) $('pActions').innerHTML=`<button class="btn" onclick="addUserModal()">+ Add User</button>`;
+  const [users,roles]=await Promise.all([api('/api/users'),api('/api/roles')]);
   const byId=Object.fromEntries(users.map(u=>[u.id,u]));
-  $('content').innerHTML=`<div class="card"><h3>Users (${users.length})</h3>
-   <table><thead><tr><th>Name</th><th>Username</th><th>Role</th><th class="center">Tier</th><th>Manager</th><th>Phone</th><th>SMS Consent</th><th></th></tr></thead><tbody>
-   ${users.map(u=>`<tr style="${u.active===false?'opacity:0.5':''}">
-     <td><b>${u.name}</b>${u.active===false?' <span class="pill" style="background:#888;font-size:10px">Inactive</span>':''}</td><td>${u.username}</td><td>${u.title||''}</td>
-     <td class="center"><span class="pill ${u.role}">${u.role}</span></td>
-     <td class="muted">${u.manager_id?byId[u.manager_id]?.name||'':'—'}</td>
+  const tierColor={admin:'admin',editor:'editor',viewer:'viewer'};
+  $('content').innerHTML=`
+  <div class="card" style="margin-bottom:14px"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px"><h3 style="margin:0">Users (${users.filter(u=>u.active!==false).length} active)</h3></div>
+   <table><thead><tr><th>Name</th><th>Username</th><th>Job Title</th><th class="center">Permission</th><th>Reports to</th><th>Phone</th><th></th></tr></thead><tbody>
+   ${users.map(u=>`<tr style="${u.active===false?'opacity:0.45':''}">
+     <td><b>${u.name}</b>${u.active===false?' <span class="pill" style="background:#888;font-size:10px">Inactive</span>':''}</td>
+     <td class="muted">${u.username}</td>
+     <td>${u.title||'—'}</td>
+     <td class="center"><span class="pill ${tierColor[u.role]||'viewer'}">${u.role}</span></td>
+     <td class="muted">${u.manager_id?byId[u.manager_id]?.name||'—':'—'}</td>
      <td class="muted" style="font-size:12px">${u.phone||'—'}</td>
-     <td style="font-size:12px">${u.sms_consent?'<span style="color:#4caf50">✓ Consented</span>':'<span class="muted">—</span>'}</td>
-     <td style="display:flex;gap:6px;flex-wrap:wrap">${isAdmin()&&u.active!==false?`<button class="btn" style="padding:3px 10px;font-size:12px" onclick="editUserSms('${u.id}')">Edit</button>`:''}<button class="btn sec" style="padding:3px 10px;font-size:12px" onclick="changePassword('${u.id}','${u.name}')">Password</button>${isAdmin()&&u.id!==ME.id?u.active===false?`<button class="btn" style="padding:3px 10px;font-size:12px" onclick="reactivateUser('${u.id}','${u.name}')">Reactivate</button>`:`<button class="btn" style="padding:3px 10px;font-size:12px;background:var(--danger,#c0392b)" onclick="deleteUser('${u.id}','${u.name}')">Remove</button>`:''}</td>
+     <td style="display:flex;gap:5px;flex-wrap:wrap">
+       ${isAdmin()&&u.active!==false?`<button class="btn sm" onclick="editUserSms('${u.id}')">SMS</button>`:''}<button class="btn sm sec" onclick="changePassword('${u.id}','${u.name}')">Password</button>${isAdmin()&&u.id!==ME.id?u.active===false?`<button class="btn sm" onclick="reactivateUser('${u.id}','${u.name}')">Reactivate</button>`:`<button class="btn sm" style="background:var(--danger,#c0392b)" onclick="deleteUser('${u.id}','${u.name}')">Remove</button>`:''}
+     </td>
    </tr>`).join('')}
+   </tbody></table></div>
+  ${isAdmin()?`<div class="card"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px"><h3 style="margin:0">Permission Tiers by Job Title</h3><span class="muted" style="font-size:12px">Changes apply to new logins</span></div>
+   <table><thead><tr><th>Job Title</th><th>Permission Tier</th></tr></thead><tbody>
+   ${roles.map(r=>`<tr><td>${r.name}</td><td>
+     <select onchange="saveRoleTier('${r.name}',this.value)" style="padding:3px 8px;border-radius:6px;border:1px solid var(--border)">
+       ${['admin','editor','viewer'].map(t=>`<option value="${t}" ${r.tier===t?'selected':''}>${t}</option>`).join('')}
+     </select>
+   </td></tr>`).join('')}
    </tbody></table>
-   <p class="muted" style="font-size:12px;margin-top:8px">Passwords are bcrypt-hashed; permission tiers are enforced on every API call. SMS consent is required before any text message is sent to an employee.</p></div>`;
+   <p class="muted" style="font-size:12px;margin-top:8px"><b>admin</b> — full access including user management · <b>editor</b> — create orders, POs, receive inventory · <b>viewer</b> — read-only</p>
+   </div>`:''}`;
+}
+async function addUserModal(){
+  const [users,roles]=await Promise.all([api('/api/users'),api('/api/roles')]);
+  const activeUsers=users.filter(u=>u.active!==false);
+  modal('Add User',`
+    <div class="field"><label>Full name</label><input id="nuName" class="inp" placeholder="Jane Smith"></div>
+    <div class="field"><label>Job title</label><select id="nuTitle" class="inp">
+      <option value="">— select —</option>
+      ${roles.map(r=>`<option value="${r.name}">${r.name} (${r.tier})</option>`).join('')}
+    </select></div>
+    <div class="field"><label>Reports to</label><select id="nuMgr" class="inp">
+      <option value="">— none —</option>
+      ${activeUsers.map(u=>`<option value="${u.id}">${u.name} — ${u.title||u.role}</option>`).join('')}
+    </select></div>
+    <div class="field"><label>Temporary password</label><input id="nuPw" type="password" class="inp" placeholder="Leave blank to use built2026" autocomplete="new-password"></div>
+    <div class="row" style="gap:8px;margin-top:8px">
+      <button class="btn" onclick="saveNewUser()">Create user</button>
+      <button class="btn sec" onclick="closeModal()">Cancel</button>
+    </div>`);
+}
+async function saveNewUser(){
+  const name=($('nuName').value||'').trim();
+  const title=$('nuTitle').value;
+  const manager_id=$('nuMgr').value||null;
+  const password=($('nuPw').value||'').trim()||'built2026';
+  if(!name)return toast('Name is required');
+  if(!title)return toast('Select a job title');
+  try{
+    const r=await api('/api/users',{method:'POST',body:JSON.stringify({name,title,manager_id,password})});
+    closeModal();
+    toast(`${name} created — username: ${r.username}, password: ${password==='built2026'?'built2026':'(as set)'}`);
+    viewUsers();
+  }catch(e){toast(e.message);}
+}
+async function saveRoleTier(name,tier){
+  try{await api('/api/roles/'+encodeURIComponent(name),{method:'PATCH',body:JSON.stringify({tier})});toast(name+' → '+tier);}
+  catch(e){toast(e.message);}
+}
 }
 async function editUserSms(id){
   const users=await api('/api/users');

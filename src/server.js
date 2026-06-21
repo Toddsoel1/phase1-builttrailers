@@ -305,6 +305,49 @@ app.get('/api/models/:id', authMiddleware, async (req, res) => {
   if (!r) return res.status(404).json({ error: 'not found' });
   res.json(r);
 });
+app.post('/api/models/:id/bom', authMiddleware, requireTier('admin'), async (req, res) => {
+  const { partId, qty } = req.body || {};
+  if (!partId || !qty) return res.status(400).json({ error: 'partId and qty required' });
+  await q('INSERT INTO bom_line(model_id,part_id,qty) VALUES ($1,$2,$3) ON CONFLICT(model_id,part_id) DO UPDATE SET qty=$3',
+    [req.params.id, partId, Number(qty)]);
+  await audit(req, 'bom.update', `${req.params.id}+${partId} qty=${qty}`);
+  res.json({ ok: true });
+});
+app.patch('/api/models/:id/bom/:partId', authMiddleware, requireTier('admin'), async (req, res) => {
+  const { qty } = req.body || {};
+  if (!qty) return res.status(400).json({ error: 'qty required' });
+  await q('UPDATE bom_line SET qty=$1 WHERE model_id=$2 AND part_id=$3', [Number(qty), req.params.id, req.params.partId]);
+  await audit(req, 'bom.update', `${req.params.id} ${req.params.partId} qty=${qty}`);
+  res.json({ ok: true });
+});
+app.delete('/api/models/:id/bom/:partId', authMiddleware, requireTier('admin'), async (req, res) => {
+  await q('DELETE FROM bom_line WHERE model_id=$1 AND part_id=$2', [req.params.id, req.params.partId]);
+  await audit(req, 'bom.delete', `${req.params.id} ${req.params.partId}`);
+  res.json({ ok: true });
+});
+app.post('/api/models/:id/labor', authMiddleware, requireTier('admin'), async (req, res) => {
+  const { ws, hours, rate } = req.body || {};
+  if (!ws || !hours) return res.status(400).json({ error: 'ws and hours required' });
+  await q('INSERT INTO model_labor(model_id,workstation,hours,rate) VALUES ($1,$2,$3,$4) ON CONFLICT(model_id,workstation) DO UPDATE SET hours=$3,rate=$4',
+    [req.params.id, ws, Number(hours), Number(rate) || 35]);
+  await audit(req, 'labor.update', `${req.params.id} ${ws} ${hours}h`);
+  res.json({ ok: true });
+});
+app.delete('/api/models/:id/labor/:ws', authMiddleware, requireTier('admin'), async (req, res) => {
+  await q('DELETE FROM model_labor WHERE model_id=$1 AND workstation=$2', [req.params.id, req.params.ws]);
+  await audit(req, 'labor.delete', `${req.params.id} ${req.params.ws}`);
+  res.json({ ok: true });
+});
+app.get('/api/roles', authMiddleware, async (_req, res) => {
+  res.json(await all('SELECT name,tier FROM role ORDER BY tier,name', []));
+});
+app.patch('/api/roles/:name', authMiddleware, requireTier('admin'), async (req, res) => {
+  const { tier } = req.body || {};
+  if (!['admin','editor','viewer'].includes(tier)) return res.status(400).json({ error: 'invalid tier' });
+  await q('INSERT INTO role(name,tier) VALUES ($1,$2) ON CONFLICT(name) DO UPDATE SET tier=$2', [req.params.name, tier]);
+  await audit(req, 'role.update', `${req.params.name}→${tier}`);
+  res.json({ ok: true });
+});
 
 // ---- inventory ----
 app.get('/api/inventory/summary', authMiddleware, async (_req, res) => res.json(await inventoryValuation()));

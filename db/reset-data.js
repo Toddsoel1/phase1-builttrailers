@@ -34,6 +34,9 @@ async function run() {
     await q(`DELETE FROM ${table}`);
     console.log(`  ✓ ${table}`);
   }
+  // Zero out all inventory on-hand quantities
+  await q(`UPDATE part SET on_hand=0`);
+  console.log('  ✓ part.on_hand — zeroed out');
   // Remove all non-admin seed users (no activity exists after wiping above)
   const deleted = await q(`DELETE FROM app_user WHERE username != 'tsoelberg' RETURNING username`);
   console.log(`  ✓ app_user — removed ${deleted.rows.length} test accounts`);
