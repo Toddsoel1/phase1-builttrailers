@@ -353,11 +353,26 @@ app.delete('/api/models/:id/labor/:ws', authMiddleware, requireTier('admin'), as
 app.get('/api/roles', authMiddleware, async (_req, res) => {
   res.json(await all('SELECT name,tier FROM role ORDER BY tier,name', []));
 });
+app.post('/api/roles', authMiddleware, requireTier('admin'), async (req, res) => {
+  const { name, tier } = req.body || {};
+  if (!name || !name.trim()) return res.status(400).json({ error: 'name required' });
+  if (!['admin','editor','viewer'].includes(tier)) return res.status(400).json({ error: 'invalid tier' });
+  await q('INSERT INTO role(name,tier) VALUES ($1,$2) ON CONFLICT(name) DO UPDATE SET tier=$2', [name.trim(), tier]);
+  await audit(req, 'role.create', `${name.trim()}→${tier}`);
+  res.json({ ok: true });
+});
 app.patch('/api/roles/:name', authMiddleware, requireTier('admin'), async (req, res) => {
   const { tier } = req.body || {};
   if (!['admin','editor','viewer'].includes(tier)) return res.status(400).json({ error: 'invalid tier' });
   await q('INSERT INTO role(name,tier) VALUES ($1,$2) ON CONFLICT(name) DO UPDATE SET tier=$2', [req.params.name, tier]);
   await audit(req, 'role.update', `${req.params.name}→${tier}`);
+  res.json({ ok: true });
+});
+app.delete('/api/roles/:name', authMiddleware, requireTier('admin'), async (req, res) => {
+  const inUse = await one('SELECT 1 FROM app_user WHERE title=$1 LIMIT 1', [req.params.name]);
+  if (inUse) return res.status(409).json({ error: 'This title is assigned to one or more users. Reassign them first.' });
+  await q('DELETE FROM role WHERE name=$1', [req.params.name]);
+  await audit(req, 'role.delete', req.params.name);
   res.json({ ok: true });
 });
 

@@ -397,16 +397,24 @@ async function viewUsers(){
      </td>
    </tr>`).join('')}
    </tbody></table></div>
-  ${isAdmin()?`<div class="card"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px"><h3 style="margin:0">Permission Tiers by Job Title</h3><span class="muted" style="font-size:12px">Changes apply to new logins</span></div>
-   <table><thead><tr><th>Job Title</th><th>Permission Tier</th></tr></thead><tbody>
-   ${roles.map(r=>`<tr><td>${r.name}</td><td>
-     <select onchange="saveRoleTier('${r.name}',this.value)" style="padding:3px 8px;border-radius:6px;border:1px solid var(--border)">
+  ${isAdmin()?`<div class="card"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+   <h3 style="margin:0">Job Titles &amp; Permissions</h3>
+   <button class="btn sm" onclick="addRoleModal()">+ Add Title</button>
+   </div>
+   <table><thead><tr><th>Job Title</th><th>Permission Tier</th><th style="width:60px"></th></tr></thead><tbody>
+   ${roles.map(r=>`<tr>
+     <td>${r.name}</td>
+     <td><select onchange="saveRoleTier('${r.name}',this.value)" style="padding:3px 8px;border-radius:6px;border:1px solid var(--border)">
        ${['admin','editor','viewer'].map(t=>`<option value="${t}" ${r.tier===t?'selected':''}>${t}</option>`).join('')}
-     </select>
-   </td></tr>`).join('')}
+     </select></td>
+     <td><button class="btn sm" style="background:var(--danger,#c0392b)" onclick="deleteRole('${r.name}')">✕</button></td>
+   </tr>`).join('')}
    </tbody></table>
-   <p class="muted" style="font-size:12px;margin-top:8px"><b>admin</b> — full access including user management · <b>editor</b> — create orders, POs, receive inventory · <b>viewer</b> — read-only</p>
-   </div>`:''}`;
+   <p class="muted" style="font-size:12px;margin-top:10px">
+     <b>admin</b> — full access including user management &nbsp;·&nbsp;
+     <b>editor</b> — create orders, POs, update inventory &nbsp;·&nbsp;
+     <b>viewer</b> — read-only access to all data
+   </p></div>`:''}`;
 }
 async function editUser(id){
   const [users,roles]=await Promise.all([api('/api/users'),api('/api/roles')]);
@@ -470,6 +478,33 @@ async function saveNewUser(){
 }
 async function saveRoleTier(name,tier){
   try{await api('/api/roles/'+encodeURIComponent(name),{method:'PATCH',body:JSON.stringify({tier})});toast(name+' → '+tier);}
+  catch(e){toast(e.message);}
+}
+function addRoleModal(){
+  modal('Add Job Title',`
+    <div class="field"><label>Job title name</label><input id="arName" class="inp" placeholder="e.g. Production Supervisor"></div>
+    <div class="field"><label>Permission tier</label>
+      <select id="arTier" class="inp">
+        <option value="viewer">viewer — read-only</option>
+        <option value="editor">editor — create orders, POs, update inventory</option>
+        <option value="admin">admin — full access including user management</option>
+      </select>
+    </div>
+    <div class="row" style="gap:8px;margin-top:8px">
+      <button class="btn" onclick="saveNewRole()">Add</button>
+      <button class="btn sec" onclick="closeModal()">Cancel</button>
+    </div>`);
+}
+async function saveNewRole(){
+  const name=($('arName').value||'').trim();
+  const tier=$('arTier').value;
+  if(!name)return toast('Enter a job title');
+  try{await api('/api/roles',{method:'POST',body:JSON.stringify({name,tier})});closeModal();toast(name+' added');viewUsers();}
+  catch(e){toast(e.message);}
+}
+async function deleteRole(name){
+  if(!confirm(`Delete job title "${name}"? Users with this title must be reassigned first.`))return;
+  try{await api('/api/roles/'+encodeURIComponent(name),{method:'DELETE'});toast(name+' deleted');viewUsers();}
   catch(e){toast(e.message);}
 }
 async function editUserSms(id){
