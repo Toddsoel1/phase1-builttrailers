@@ -293,12 +293,12 @@ async function showBom(id){
   const pendingSec=crs.length?`<div class="card" style="margin-top:14px;border-color:var(--accent)">
    <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px"><h3 style="margin:0">Pending Changes</h3><span class="badge b-low">${crs.length}</span></div>
    <p class="muted" style="font-size:12px;margin-bottom:10px">These changes are queued for accounting review. Approve to apply them to the live BOM.</p>
-   <table><thead><tr><th>Proposed Change</th><th>Requested by</th><th>Date</th>${isAdmin()?'<th></th>':''}</tr></thead><tbody>
+   <table><thead><tr><th>Proposed Change</th><th>Requested by</th><th>Date</th>${canSee('accounting')?'<th></th>':''}</tr></thead><tbody>
    ${crs.map(cr=>`<tr>
      <td>${bomCrDesc(cr)}</td>
      <td class="muted" style="font-size:12px">${esc(cr.requester_name||'')}</td>
      <td class="muted" style="font-size:12px">${new Date(cr.created_at).toLocaleDateString()}</td>
-     ${isAdmin()?`<td style="display:flex;gap:4px"><button class="btn sm" onclick="approveBomCR(${cr.id})">✓ Approve</button><button class="btn sm sec" onclick="rejectBomCR(${cr.id})">✕ Reject</button></td>`:''}
+     ${canSee('accounting')?`<td style="display:flex;gap:4px"><button class="btn sm" onclick="approveBomCR(${cr.id})">✓ Approve</button><button class="btn sm sec" onclick="rejectBomCR(${cr.id})">✕ Reject</button></td>`:''}
    </tr>`).join('')}
    </tbody></table></div>`:'';
   $('bomBody').innerHTML=`
@@ -1000,13 +1000,13 @@ async function viewAccounting(){
    ${bomCRs.length?`<div class="card" style="margin-bottom:16px;border-color:var(--accent)">
      <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px"><h3 style="margin:0">BOM Change Requests</h3><span class="badge b-low">${bomCRs.length} pending</span></div>
      <p class="muted" style="font-size:12px;margin-bottom:10px">These BOM edits are waiting for accounting approval before they take effect.</p>
-     <table><thead><tr><th>Model</th><th>Proposed Change</th><th>Requested by</th><th>Date</th>${isAdmin()?'<th></th>':''}</tr></thead><tbody>
+     <table><thead><tr><th>Model</th><th>Proposed Change</th><th>Requested by</th><th>Date</th>${canSee('accounting')?'<th></th>':''}</tr></thead><tbody>
      ${bomCRs.map(cr=>`<tr>
        <td><b>${esc(cr.model_name||cr.model_id)}</b></td>
        <td>${bomCrDesc(cr)}</td>
        <td class="muted" style="font-size:12px">${esc(cr.requester_name||'')}</td>
        <td class="muted" style="font-size:12px">${new Date(cr.created_at).toLocaleDateString()}</td>
-       ${isAdmin()?`<td style="display:flex;gap:4px"><button class="btn sm" onclick="approveBomCR(${cr.id})">✓ Approve</button><button class="btn sm sec" onclick="rejectBomCR(${cr.id})">✕ Reject</button></td>`:''}
+       ${canSee('accounting')?`<td style="display:flex;gap:4px"><button class="btn sm" onclick="approveBomCR(${cr.id})">✓ Approve</button><button class="btn sm sec" onclick="rejectBomCR(${cr.id})">✕ Reject</button></td>`:''}
      </tr>`).join('')}
      </tbody></table>
    </div>`:''}

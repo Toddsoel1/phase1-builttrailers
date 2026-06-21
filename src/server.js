@@ -30,6 +30,14 @@ function requireSales(req, res, next) {
   if (!canSell(req.user)) return res.status(403).json({ error: 'Order management is controlled by Sales' });
   next();
 }
+// Admins have all sections; other users must have the section explicitly assigned
+function requireSection(section) {
+  return (req, res, next) => {
+    if (req.user?.role === 'admin') return next();
+    if (req.user?.sections?.includes(section)) return next();
+    return res.status(403).json({ error: `Requires access to the ${section} section` });
+  };
+}
 
 // Validate Twilio webhook signatures to block spoofed SMS events
 function twilioSignatureValid(req) {
@@ -422,7 +430,7 @@ app.get('/api/bom-change-requests', authMiddleware, async (req, res) => {
   res.json(await all(sql + ' ORDER BY created_at DESC', params));
 });
 
-app.post('/api/bom-change-requests/:id/approve', authMiddleware, requireTier('admin'), async (req, res) => {
+app.post('/api/bom-change-requests/:id/approve', authMiddleware, requireSection('accounting'), async (req, res) => {
   const cr = await one('SELECT * FROM bom_change_request WHERE id=$1', [Number(req.params.id)]);
   if (!cr) return res.status(404).json({ error: 'not found' });
   if (cr.status !== 'pending') return res.status(400).json({ error: 'already reviewed' });
@@ -448,7 +456,7 @@ app.post('/api/bom-change-requests/:id/approve', authMiddleware, requireTier('ad
   res.json({ ok: true });
 });
 
-app.post('/api/bom-change-requests/:id/reject', authMiddleware, requireTier('admin'), async (req, res) => {
+app.post('/api/bom-change-requests/:id/reject', authMiddleware, requireSection('accounting'), async (req, res) => {
   const { note } = req.body || {};
   const cr = await one('SELECT * FROM bom_change_request WHERE id=$1', [Number(req.params.id)]);
   if (!cr) return res.status(404).json({ error: 'not found' });
