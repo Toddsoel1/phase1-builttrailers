@@ -445,7 +445,6 @@ async function saveRoleTier(name,tier){
   try{await api('/api/roles/'+encodeURIComponent(name),{method:'PATCH',body:JSON.stringify({tier})});toast(name+' → '+tier);}
   catch(e){toast(e.message);}
 }
-}
 async function editUserSms(id){
   const users=await api('/api/users');
   const u=users.find(x=>x.id===id);if(!u)return;
