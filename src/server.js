@@ -160,6 +160,15 @@ app.get('/api/auth/qbo', authMiddleware, requireTier('admin'), async (req, res) 
   if (req.headers.accept?.includes('application/json')) return res.json({ url });
   res.redirect(url);
 });
+app.get('/api/auth/qbo/disconnect', async (req, res) => {
+  try {
+    const { setConfig } = await import('./qbo.js').then(m => ({ setConfig: m.setConfig })).catch(() => null) || {};
+    // Clear the stored refresh token so qboConfigured() returns false
+    await q("DELETE FROM app_config WHERE key='qbo_refresh_token'").catch(() => {});
+    await audit(req, 'qbo.disconnect', 'QBO access revoked');
+  } catch {}
+  res.redirect('/');
+});
 app.get('/api/auth/qbo/callback', async (req, res) => {
   const { code, realmId, state, error } = req.query;
   if (error) return res.send(`<pre>QuickBooks error: ${error}\n\n<a href="/">← Home</a></pre>`);
