@@ -393,7 +393,7 @@ async function viewUsers(){
      <td class="muted">${u.manager_id?byId[u.manager_id]?.name||'—':'—'}</td>
      <td class="muted" style="font-size:12px">${u.phone||'—'}</td>
      <td style="display:flex;gap:5px;flex-wrap:wrap">
-       ${isAdmin()&&u.active!==false?`<button class="btn sm" onclick="editUserSms('${u.id}')">SMS</button>`:''}<button class="btn sm sec" onclick="changePassword('${u.id}','${u.name}')">Password</button>${isAdmin()&&u.id!==ME.id?u.active===false?`<button class="btn sm" onclick="reactivateUser('${u.id}','${u.name}')">Reactivate</button>`:`<button class="btn sm" style="background:var(--danger,#c0392b)" onclick="deleteUser('${u.id}','${u.name}')">Remove</button>`:''}
+       ${isAdmin()&&u.active!==false?`<button class="btn sm" onclick="editUser('${u.id}')">Edit</button>`:''}<button class="btn sm sec" onclick="changePassword('${u.id}','${u.name}')">Password</button>${isAdmin()&&u.active!==false?`<button class="btn sm sec" onclick="editUserSms('${u.id}')">SMS</button>`:''} ${isAdmin()&&u.id!==ME.id?u.active===false?`<button class="btn sm" onclick="reactivateUser('${u.id}','${u.name}')">Reactivate</button>`:`<button class="btn sm" style="background:var(--danger,#c0392b)" onclick="deleteUser('${u.id}','${u.name}')">Remove</button>`:''}
      </td>
    </tr>`).join('')}
    </tbody></table></div>
@@ -407,6 +407,33 @@ async function viewUsers(){
    </tbody></table>
    <p class="muted" style="font-size:12px;margin-top:8px"><b>admin</b> — full access including user management · <b>editor</b> — create orders, POs, receive inventory · <b>viewer</b> — read-only</p>
    </div>`:''}`;
+}
+async function editUser(id){
+  const [users,roles]=await Promise.all([api('/api/users'),api('/api/roles')]);
+  const u=users.find(x=>x.id===id);if(!u)return;
+  const activeUsers=users.filter(x=>x.active!==false&&x.id!==id);
+  modal(`Edit — ${u.name}`,`
+    <div class="field"><label>Full name</label><input id="euName" class="inp" value="${u.name}"></div>
+    <div class="field"><label>Job title</label><select id="euTitle" class="inp">
+      <option value="">— none —</option>
+      ${roles.map(r=>`<option value="${r.name}" ${u.title===r.name?'selected':''}>${r.name} (${r.tier})</option>`).join('')}
+    </select></div>
+    <div class="field"><label>Reports to</label><select id="euMgrEdit" class="inp">
+      <option value="">— none —</option>
+      ${activeUsers.map(x=>`<option value="${x.id}" ${u.manager_id===x.id?'selected':''}>${x.name} — ${x.title||x.role}</option>`).join('')}
+    </select></div>
+    <div class="row" style="gap:8px;margin-top:8px">
+      <button class="btn" onclick="saveEditUser('${id}')">Save</button>
+      <button class="btn sec" onclick="closeModal()">Cancel</button>
+    </div>`);
+}
+async function saveEditUser(id){
+  const name=($('euName').value||'').trim();
+  const title=$('euTitle').value||null;
+  const manager_id=$('euMgrEdit').value||null;
+  if(!name)return toast('Name is required');
+  try{await api('/api/users/'+id,{method:'PATCH',body:JSON.stringify({name,title,manager_id})});closeModal();toast('User updated');viewUsers();}
+  catch(e){toast(e.message);}
 }
 async function addUserModal(){
   const [users,roles]=await Promise.all([api('/api/users'),api('/api/roles')]);

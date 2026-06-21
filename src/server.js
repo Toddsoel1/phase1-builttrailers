@@ -232,8 +232,11 @@ app.patch('/api/users/:id', authMiddleware, requireTier('admin'), async (req, re
   let tier = role;
   if (title) tier = (await one('SELECT tier FROM role WHERE name=$1', [title]))?.tier || cur.role;
   const consentAt = (smsConsent === true && !cur.sms_consent) ? new Date().toISOString() : cur.sms_consent_at;
-  await q('UPDATE app_user SET title=$1,role=$2,manager_id=$3,username=$4,phone=$5,sms_consent=$6,sms_consent_at=$7 WHERE id=$8',
-    [title ?? cur.title, tier ?? cur.role, manager_id ?? cur.manager_id, username ?? cur.username,
+  const { name } = req.body || {};
+  await q('UPDATE app_user SET name=$1,title=$2,role=$3,manager_id=$4,username=$5,phone=$6,sms_consent=$7,sms_consent_at=$8 WHERE id=$9',
+    [name ?? cur.name, title ?? cur.title, tier ?? cur.role,
+     manager_id !== undefined ? (manager_id || null) : cur.manager_id,
+     username ?? cur.username,
      phone !== undefined ? (phone || null) : cur.phone,
      smsConsent !== undefined ? !!smsConsent : cur.sms_consent,
      consentAt, req.params.id]);
