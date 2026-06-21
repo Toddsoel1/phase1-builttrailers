@@ -678,6 +678,32 @@ app.get('*', (_req, res) => res.sendFile(path.join(__dir, '..', 'public', 'index
 
 const PORT = process.env.PORT || 3000;
 const kind = await initDb();
+
+// Run idempotent migrations: create missing tables + add missing columns.
+// Safe to re-run on every boot (all statements are IF NOT EXISTS).
+if (kind === 'postgres') {
+  const { readFileSync } = await import('fs');
+  const { fileURLToPath: ftu } = await import('url');
+  const schemaPath = new URL('../db/schema.sql', import.meta.url);
+  const schemaSql = readFileSync(ftu(schemaPath), 'utf8');
+  // Run each statement separately so one failure doesn't block others
+  for (const stmt of schemaSql.split(';').map(s => s.trim()).filter(Boolean)) {
+    await q(stmt).catch(e => console.warn('schema migration:', e.message));
+  }
+  // Column-level migrations (ALTER TABLE IF NOT EXISTS is supported in PG 9.6+)
+  const colMigrations = [
+    `ALTER TABLE app_user ADD COLUMN IF NOT EXISTS phone TEXT`,
+    `ALTER TABLE app_user ADD COLUMN IF NOT EXISTS sms_consent BOOLEAN NOT NULL DEFAULT FALSE`,
+    `ALTER TABLE app_user ADD COLUMN IF NOT EXISTS sms_consent_at TIMESTAMPTZ`,
+    `ALTER TABLE sales_order ADD COLUMN IF NOT EXISTS subscription_tier TEXT NOT NULL DEFAULT 'standard'`,
+    `ALTER TABLE sales_order ADD COLUMN IF NOT EXISTS ai_credits_used INTEGER NOT NULL DEFAULT 0`,
+  ];
+  for (const m of colMigrations) {
+    await q(m).catch(e => console.warn('col migration:', e.message));
+  }
+  console.log('Migrations applied.');
+}
+
 try {
   const has = await one("SELECT to_regclass('public.part') AS t", []).catch(() => null);
   if (!has || !has.t) console.log('Note: run `npm run init-db` to create schema + seed.');
