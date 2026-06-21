@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "builttrailers-app",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["-e", "const http=require('http'),fs=require('fs'),path=require('path');const dir=path.join(__dirname,'../public');http.createServer((req,res)=>{let f=path.join(dir,req.url==='/'?'index.html':req.url);if(!fs.existsSync(f))f=path.join(dir,'index.html');const ext=path.extname(f);const t={'.html':'text/html','.js':'text/javascript','.json':'application/json','.png':'image/png','.svg':'image/svg+xml'};res.writeHead(200,{'Content-Type':t[ext]||'text/plain'});fs.createReadStream(f).pipe(res);}).listen(4300,()=>console.log('http://localhost:4300'))"],
+      "port": 4300
+    }
+  ]
+}
