@@ -114,6 +114,8 @@ let TOKEN = null, ME = null, page = 'dashboard';
 const $ = id => document.getElementById(id);
 const money = n => '$' + Math.round(n).toLocaleString();
 const money2 = n => '$' + (Math.round(n*100)/100).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});
+// Escape user-supplied strings before inserting into innerHTML
+function esc(s){ const d=document.createElement('div');d.textContent=String(s??'');return d.innerHTML; }
 function toast(m){const t=document.createElement('div');t.className='toast';t.textContent=m;$('toast').appendChild(t);setTimeout(()=>t.remove(),3000);}
 async function api(path, opts={}){
   const h = {'Content-Type':'application/json'};
@@ -201,9 +203,9 @@ async function viewParts(){
    <div class="card"><h3>Parts (${parts.length})</h3>
    <table><thead><tr><th>Part</th><th>Type</th><th>Vendor</th><th class="right">On hand</th><th class="right">Reorder</th><th class="right">Unit cost</th><th class="right">Ext. value</th><th class="center">Status</th>${canEdit()?'<th></th>':''}</tr></thead><tbody>
    ${parts.map(p=>`<tr>
-     <td><b>${p.id}</b><br><span class="muted" style="font-size:11px">${p.name}</span></td>
+     <td><b>${esc(p.id)}</b><br><span class="muted" style="font-size:11px">${esc(p.name)}</span></td>
      <td>${p.type==='M'?'<span class="badge b-mfg">MAKE</span>':'<span class="badge b-buy">BUY</span>'}</td>
-     <td style="font-size:12px">${p.vendor||''}</td>
+     <td style="font-size:12px">${esc(p.vendor||'')}</td>
      <td class="right">${p.onHand}</td><td class="right">${p.reorder}</td>
      <td class="right">${canEdit()?`<a class="lnk" onclick="editCost('${p.id}',${p.cost})">${money2(p.cost)}</a>`:money2(p.cost)}</td>
      <td class="right">${money(p.extValue)}</td>
@@ -381,7 +383,7 @@ async function viewInv(){
    </div>
    <div class="card" style="margin-top:16px"><h3>Top 15 parts by value on hand</h3>
    <table><thead><tr><th>Part</th><th class="right">On hand</th><th class="right">Unit cost</th><th class="right">Ext. value</th></tr></thead><tbody>
-   ${top.map(p=>`<tr><td><b>${p.id}</b> ${p.name}</td><td class="right">${p.onHand}</td><td class="right">${money2(p.cost)}</td><td class="right">${money(p.extValue)}</td></tr>`).join('')}
+   ${top.map(p=>`<tr><td><b>${esc(p.id)}</b> ${esc(p.name)}</td><td class="right">${p.onHand}</td><td class="right">${money2(p.cost)}</td><td class="right">${money(p.extValue)}</td></tr>`).join('')}
    </tbody></table></div>`;
 }
 
@@ -395,15 +397,15 @@ async function viewUsers(){
   <div class="card" style="margin-bottom:14px"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px"><h3 style="margin:0">Users (${users.filter(u=>u.active!==false).length} active)</h3></div>
    <table><thead><tr><th>Name</th><th>Username</th><th>Job Title</th><th class="center">Permission</th><th>Reports to</th><th>Phone</th><th></th></tr></thead><tbody>
    ${users.map(u=>`<tr style="${u.active===false?'opacity:0.45':''}">
-     <td><b>${u.name}</b>${u.active===false?' <span class="pill" style="background:#888;font-size:10px">Inactive</span>':''}</td>
-     <td class="muted">${u.username}</td>
-     <td>${(u.titles&&u.titles.length?u.titles:[u.title]).filter(Boolean).map(t=>`<span class="pill viewer" style="font-size:11px;margin:1px">${t}</span>`).join(' ')||'—'}
-       ${isAdmin()&&u.active!==false?`<button class="btn sm sec" style="margin-left:4px;padding:1px 6px;font-size:11px" onclick="manageTitles('${u.id}','${u.name}')">＋</button>`:''}</td>
-     <td class="center"><span class="pill ${tierColor[u.role]||'viewer'}">${u.role}</span></td>
-     <td class="muted">${u.manager_id?byId[u.manager_id]?.name||'—':'—'}</td>
-     <td class="muted" style="font-size:12px">${u.phone||'—'}</td>
+     <td><b>${esc(u.name)}</b>${u.active===false?' <span class="pill" style="background:#888;font-size:10px">Inactive</span>':''}</td>
+     <td class="muted">${esc(u.username)}</td>
+     <td>${(u.titles&&u.titles.length?u.titles:[u.title]).filter(Boolean).map(t=>`<span class="pill viewer" style="font-size:11px;margin:1px">${esc(t)}</span>`).join(' ')||'—'}
+       ${isAdmin()&&u.active!==false?`<button class="btn sm sec" style="margin-left:4px;padding:1px 6px;font-size:11px" onclick="manageTitles('${u.id}','${esc(u.name)}')">＋</button>`:''}</td>
+     <td class="center"><span class="pill ${tierColor[u.role]||'viewer'}">${esc(u.role)}</span></td>
+     <td class="muted">${u.manager_id?esc(byId[u.manager_id]?.name||'—'):'—'}</td>
+     <td class="muted" style="font-size:12px">${esc(u.phone||'—')}</td>
      <td style="display:flex;gap:5px;flex-wrap:wrap">
-       ${isAdmin()&&u.active!==false?`<button class="btn sm" onclick="editUser('${u.id}')">Edit</button>`:''}<button class="btn sm sec" onclick="changePassword('${u.id}','${u.name}')">Password</button>${isAdmin()&&u.active!==false?`<button class="btn sm sec" onclick="editUserSms('${u.id}')">SMS</button>`:''} ${isAdmin()&&u.id!==ME.id?u.active===false?`<button class="btn sm" onclick="reactivateUser('${u.id}','${u.name}')">Reactivate</button>`:`<button class="btn sm" style="background:var(--danger,#c0392b)" onclick="deleteUser('${u.id}','${u.name}')">Remove</button>`:''}
+       ${isAdmin()&&u.active!==false?`<button class="btn sm" onclick="editUser('${u.id}')">Edit</button>`:''}<button class="btn sm sec" onclick="changePassword('${u.id}','${esc(u.name)}')">Password</button>${isAdmin()&&u.active!==false?`<button class="btn sm sec" onclick="editUserSms('${u.id}')">SMS</button>`:''} ${isAdmin()&&u.id!==ME.id?u.active===false?`<button class="btn sm" onclick="reactivateUser('${u.id}','${esc(u.name)}')">Reactivate</button>`:`<button class="btn sm" style="background:var(--danger,#c0392b)" onclick="deleteUser('${u.id}','${esc(u.name)}')">Remove</button>`:''}
      </td>
    </tr>`).join('')}
    </tbody></table></div>
@@ -413,12 +415,12 @@ async function viewUsers(){
    </div>
    <table><thead><tr><th>Job Title</th><th>Permission Tier</th><th>Sections</th><th></th></tr></thead><tbody>
    ${roles.map(r=>`<tr>
-     <td>${r.name}</td>
-     <td><select onchange="saveRoleTier('${r.name}',this.value)" style="padding:3px 8px;border-radius:6px;border:1px solid var(--border)">
+     <td>${esc(r.name)}</td>
+     <td><select onchange="saveRoleTier('${esc(r.name)}',this.value)" style="padding:3px 8px;border-radius:6px;border:1px solid var(--border)">
        ${['admin','editor','viewer'].map(t=>`<option value="${t}" ${r.tier===t?'selected':''}>${t}</option>`).join('')}
      </select></td>
-     <td><span class="muted" style="font-size:12px">${(r.sections||[]).length} of ${NAV.length}</span> <button class="btn sm sec" onclick='editRoleSections("${r.name}",${JSON.stringify(r.sections||[])})'>Edit access</button></td>
-     <td><button class="btn sm" style="background:var(--danger,#c0392b)" onclick="deleteRole('${r.name}')">✕</button></td>
+     <td><span class="muted" style="font-size:12px">${(r.sections||[]).length} of ${NAV.length}</span> <button class="btn sm sec" onclick='editRoleSections(${JSON.stringify(r.name)},${JSON.stringify(r.sections||[])})'>Edit access</button></td>
+     <td><button class="btn sm" style="background:var(--danger,#c0392b)" onclick="deleteRole(${JSON.stringify(r.name)})">✕</button></td>
    </tr>`).join('')}
    </tbody></table>
    <p class="muted" style="font-size:12px;margin-top:10px">
@@ -431,15 +433,15 @@ async function editUser(id){
   const [users,roles]=await Promise.all([api('/api/users'),api('/api/roles')]);
   const u=users.find(x=>x.id===id);if(!u)return;
   const activeUsers=users.filter(x=>x.active!==false&&x.id!==id);
-  modal(`Edit — ${u.name}`,`
-    <div class="field"><label>Full name</label><input id="euName" class="inp" value="${u.name}"></div>
+  modal(`Edit — ${esc(u.name)}`,`
+    <div class="field"><label>Full name</label><input id="euName" class="inp" value="${esc(u.name)}"></div>
     <div class="field"><label>Job title</label><select id="euTitle" class="inp">
       <option value="">— none —</option>
-      ${roles.map(r=>`<option value="${r.name}" ${u.title===r.name?'selected':''}>${r.name} (${r.tier})</option>`).join('')}
+      ${roles.map(r=>`<option value="${esc(r.name)}" ${u.title===r.name?'selected':''}>${esc(r.name)} (${r.tier})</option>`).join('')}
     </select></div>
     <div class="field"><label>Reports to</label><select id="euMgrEdit" class="inp">
       <option value="">— none —</option>
-      ${activeUsers.map(x=>`<option value="${x.id}" ${u.manager_id===x.id?'selected':''}>${x.name} — ${x.title||x.role}</option>`).join('')}
+      ${activeUsers.map(x=>`<option value="${x.id}" ${u.manager_id===x.id?'selected':''}>${esc(x.name)} — ${esc(x.title||x.role)}</option>`).join('')}
     </select></div>
     <div class="row" style="gap:8px;margin-top:8px">
       <button class="btn" onclick="saveEditUser('${id}')">Save</button>
@@ -461,11 +463,11 @@ async function addUserModal(){
     <div class="field"><label>Full name</label><input id="nuName" class="inp" placeholder="Jane Smith"></div>
     <div class="field"><label>Job title</label><select id="nuTitle" class="inp">
       <option value="">— select —</option>
-      ${roles.map(r=>`<option value="${r.name}">${r.name} (${r.tier})</option>`).join('')}
+      ${roles.map(r=>`<option value="${esc(r.name)}">${esc(r.name)} (${r.tier})</option>`).join('')}
     </select></div>
     <div class="field"><label>Reports to</label><select id="nuMgr" class="inp">
       <option value="">— none —</option>
-      ${activeUsers.map(u=>`<option value="${u.id}">${u.name} — ${u.title||u.role}</option>`).join('')}
+      ${activeUsers.map(u=>`<option value="${u.id}">${esc(u.name)} — ${esc(u.title||u.role)}</option>`).join('')}
     </select></div>
     <div class="field"><label>Temporary password</label><input id="nuPw" type="password" class="inp" placeholder="Leave blank to use built2026" autocomplete="new-password"></div>
     <div class="row" style="gap:8px;margin-top:8px">
@@ -495,12 +497,12 @@ async function manageTitles(userId,userName){
   const [users,roles]=await Promise.all([api('/api/users'),api('/api/roles')]);
   const u=users.find(x=>x.id===userId);
   const assigned=new Set(u?.titles||[]);
-  modal(`Job Titles — ${userName}`,`
+  modal(`Job Titles — ${esc(userName)}`,`
     <p class="muted" style="font-size:13px;margin-bottom:12px">Check the titles this person holds. Their access is the union of all assigned titles.</p>
     <div style="display:flex;flex-direction:column;gap:6px;max-height:320px;overflow-y:auto">
     ${roles.map(r=>`<label style="display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:6px;border:1px solid var(--border);cursor:pointer">
-      <input type="checkbox" ${assigned.has(r.name)?'checked':''} onchange="toggleUserTitle('${userId}','${r.name}',this.checked)">
-      <span><b>${r.name}</b> <span class="pill ${r.tier}" style="font-size:10px">${r.tier}</span></span>
+      <input type="checkbox" ${assigned.has(r.name)?'checked':''} onchange="toggleUserTitle('${userId}',${JSON.stringify(r.name)},this.checked)">
+      <span><b>${esc(r.name)}</b> <span class="pill ${r.tier}" style="font-size:10px">${r.tier}</span></span>
     </label>`).join('')}
     </div>
     <div style="margin-top:12px"><button class="btn sec" onclick="closeModal();viewUsers()">Done</button></div>`);
@@ -512,16 +514,16 @@ async function toggleUserTitle(userId,roleName,add){
   }catch(e){toast(e.message);}
 }
 async function editRoleSections(name,currentSections){
-  modal(`Access — ${name}`,`
+  modal(`Access — ${esc(name)}`,`
     <p class="muted" style="font-size:13px;margin-bottom:12px">Select which sections of the app this job title can see.</p>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;max-height:360px;overflow-y:auto">
     ${NAV.map(([key,label])=>`<label style="display:flex;align-items:center;gap:8px;padding:5px 8px;border-radius:6px;border:1px solid var(--border);cursor:pointer">
       <input type="checkbox" value="${key}" ${(currentSections||[]).includes(key)?'checked':''}>
-      <span style="font-size:13px">${label}</span>
+      <span style="font-size:13px">${esc(label)}</span>
     </label>`).join('')}
     </div>
     <div class="row" style="gap:8px;margin-top:12px">
-      <button class="btn" onclick="saveRoleSections('${name}')">Save</button>
+      <button class="btn" onclick="saveRoleSections(${JSON.stringify(name)})">Save</button>
       <button class="btn sec" onclick="closeModal()">Cancel</button>
     </div>`);
 }
@@ -561,7 +563,7 @@ async function deleteRole(name){
 async function editUserSms(id){
   const users=await api('/api/users');
   const u=users.find(x=>x.id===id);if(!u)return;
-  modal(`SMS consent — ${u.name}`,`
+  modal(`SMS consent — ${esc(u.name)}`,`
     <div style="background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:12px;margin-bottom:14px;font-size:12px;color:var(--muted);line-height:1.6">
       <b style="color:var(--text)">Self opt-in options:</b><br>
       Text <b style="color:var(--accent)">APPROVE</b> to <b>+1 (435) 900-8198</b><br>
@@ -729,12 +731,12 @@ async function viewCustomers(){
   const [custs,types]=await Promise.all([api('/api/customers'),api('/api/trailer-types')]);
   $('content').innerHTML=`<div class="card"><h3>Dealerships & authorized trailer types</h3>
    <table><thead><tr><th>Customer</th><th>Type</th><th>Phone</th><th>SMS</th><th>Rep</th><th>Authorized trailer types</th></tr></thead><tbody>
-   ${custs.map(c=>`<tr><td><b>${c.name}</b><br><span class="muted" style="font-size:11px">${c.contact||''}</span></td>
-     <td><span class="badge ${c.kind==='Retail'?'b-low':'b-buy'}">${c.kind}</span></td>
-     <td class="muted" style="font-size:12px">${c.phone||'—'}</td>
+   ${custs.map(c=>`<tr><td><b>${esc(c.name)}</b><br><span class="muted" style="font-size:11px">${esc(c.contact||'')}</span></td>
+     <td><span class="badge ${c.kind==='Retail'?'b-low':'b-buy'}">${esc(c.kind)}</span></td>
+     <td class="muted" style="font-size:12px">${esc(c.phone||'—')}</td>
      <td style="font-size:12px">${c.smsConsent?'<span style="color:#4caf50">✓ Consented</span>':'<span class="muted">—</span>'}</td>
-     <td class="muted" style="font-size:12px">${c.rep||'—'}</td>
-     <td>${types.map(t=>{const on=c.allowed.includes(t);return `<span class="chip" onclick="${canSell()?`toggleType('${c.id}','${t}',${!on})`:''}" style="cursor:${canSell()?'pointer':'default'};border-color:${on?'var(--accent)':'var(--line)'};color:${on?'#ffb347':'var(--muted)'}">${on?'✓ ':''}${t}</span>`;}).join('')}</td></tr>`).join('')}
+     <td class="muted" style="font-size:12px">${esc(c.rep||'—')}</td>
+     <td>${types.map(t=>{const on=c.allowed.includes(t);return `<span class="chip" onclick="${canSell()?`toggleType('${c.id}',${JSON.stringify(t)},${!on})`:''}" style="cursor:${canSell()?'pointer':'default'};border-color:${on?'var(--accent)':'var(--line)'};color:${on?'#ffb347':'var(--muted)'}">${on?'✓ ':''}${esc(t)}</span>`;}).join('')}</td></tr>`).join('')}
    </tbody></table>
    <p class="muted" style="font-size:12px;margin-top:8px">These authorizations drive the New Order form — reps can only sell what each dealer is approved for.</p></div>`;
 }
@@ -874,7 +876,7 @@ async function viewPOs(){
         <div class="field"><label>Type</label><select id="ruleType"><option value="po">PO</option><option value="vendor">New Vendor</option></select></div>
         <div class="field"><label>Min $ (blank=any)</label><input id="ruleMin" type="number" placeholder="e.g. 500"></div>
         <div class="field"><label>Max $ (blank=none)</label><input id="ruleMax" type="number" placeholder="e.g. 4999"></div>
-        <div class="field"><label>Approver</label><select id="ruleApprover">${users.filter(u=>u.role!=='viewer').map(u=>`<option value="${u.id}">${u.name} (${u.title||''})</option>`).join('')}</select></div>
+        <div class="field"><label>Approver</label><select id="ruleApprover">${users.filter(u=>u.role!=='viewer').map(u=>`<option value="${u.id}">${esc(u.name)} (${esc(u.title||'')})</option>`).join('')}</select></div>
         <div class="field"><label>Step (seq)</label><input id="ruleSeq" type="number" value="1" min="1"></div>
         <div class="field"><label>Notify</label><select id="ruleNotify"><option value="app">App only</option><option value="sms">SMS only</option><option value="both">App + SMS</option></select></div>
         <div class="field"><label>Label</label><input id="ruleLabel" placeholder="e.g. GM approval"></div>
@@ -1128,7 +1130,7 @@ async function viewOutcomes(){
     <div class="row" style="margin-top:8px"><div class="field" style="flex:3;margin:0"><input id="sgText" placeholder="e.g. Master the powder-coat line"></div><div class="field" style="flex:1;margin:0"><select id="sgH"><option>Day</option><option>Week</option><option selected>Month</option><option>Quarter</option><option>Year</option></select></div><button class="btn" onclick="addGoal()">Add</button></div></div>`;
   if(manageable.length){
     html+=`<div class="card" style="margin-top:16px"><h3>${isAdmin()?'Set outcomes — team':'My team — set their outcomes'}</h3>
-     ${manageable.map(u=>`<div style="border:1px solid var(--line);border-radius:10px;padding:12px;margin-bottom:10px"><div style="display:flex;justify-content:space-between;margin-bottom:8px"><b>${u.name}</b> <button class="btn sm" onclick="saveOut('${u.id}')">Save</button></div>
+     ${manageable.map(u=>`<div style="border:1px solid var(--line);border-radius:10px;padding:12px;margin-bottom:10px"><div style="display:flex;justify-content:space-between;margin-bottom:8px"><b>${esc(u.name)}</b> <button class="btn sm" onclick="saveOut('${u.id}')">Save</button></div>
        <div class="row"><div class="field" style="margin:0"><label>Daily</label><textarea id="o_${u.id}_d" rows="2"></textarea></div><div class="field" style="margin:0"><label>Weekly</label><textarea id="o_${u.id}_w" rows="2"></textarea></div><div class="field" style="margin:0"><label>Monthly</label><textarea id="o_${u.id}_m" rows="2"></textarea></div></div></div>`).join('')}</div>`;
   }
   $('content').innerHTML=html;
@@ -1171,7 +1173,7 @@ function postWin(){
 }
 async function winTargets(){
   const scope=$('wScope').value;let opts='';
-  if(scope==='individual'){const us=await api('/api/users');opts=us.filter(u=>u.title!=='External Viewer').map(u=>`<option value="${u.id}">${u.name} — ${u.title||''}</option>`).join('');}
+  if(scope==='individual'){const us=await api('/api/users');opts=us.filter(u=>u.title!=='External Viewer').map(u=>`<option value="${u.id}">${esc(u.name)} — ${esc(u.title||'')}</option>`).join('');}
   else if(scope==='workstation')opts=(winMeta.workstations||[]).map(w=>`<option>${w}</option>`).join('');
   else opts=(winMeta.departments||[]).map(d=>`<option>${d}</option>`).join('');
   $('wTarget').innerHTML=opts;

@@ -3,6 +3,10 @@ import 'dotenv/config';
 import express from 'express';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import helmet from 'helmet';
+import cors from 'cors';
+import rateLimit from 'express-rate-limit';
+import { createHmac, timingSafeEqual } from 'crypto';
 import { initDb, dbKind, q, all, one } from './db.js';
 import { authMiddleware, requireTier, signToken, checkPassword, hashPassword } from './auth.js';
 import { modelRollup, modelsSummary, inventoryValuation, partUnitCost } from './cost.js';
@@ -16,13 +20,50 @@ import * as sms from './sms.js';
 import * as approvals from './approvals.js';
 import * as support from './support.js';
 
+// Crash fast if JWT_SECRET is unset in production — predictable fallback is a critical vuln
+if (!process.env.JWT_SECRET) {
+  console.error('FATAL: JWT_SECRET environment variable is not set. Set it in Render → Environment.');
+  process.exit(1);
+}
+
 function requireSales(req, res, next) {
   if (!canSell(req.user)) return res.status(403).json({ error: 'Order management is controlled by Sales' });
   next();
 }
 
+// Validate Twilio webhook signatures to block spoofed SMS events
+function twilioSignatureValid(req) {
+  const token = process.env.TWILIO_TOKEN;
+  if (!token) return true; // skip if not configured yet
+  const sig = req.headers['x-twilio-signature'] || '';
+  const url = `https://${req.headers.host || 'app.builttrailers.app'}/webhooks/sms`;
+  const params = req.body || {};
+  const sorted = Object.keys(params).sort().reduce((s, k) => s + k + params[k], url);
+  const expected = createHmac('sha1', token).update(sorted).digest('base64');
+  try { return timingSafeEqual(Buffer.from(sig), Buffer.from(expected)); } catch { return false; }
+}
+
 const __dir = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
+
+// Security headers (CSP disabled — app uses inline scripts/styles)
+app.use(helmet({ contentSecurityPolicy: false, crossOriginEmbedderPolicy: false }));
+
+// CORS — only allow requests from the app's own domains
+app.use(cors({
+  origin: ['https://app.builttrailers.app', 'https://builttrailers.app'],
+  credentials: true,
+}));
+
+// Rate limiting — 10 login attempts per 15 min per IP
+const loginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many login attempts. Try again in 15 minutes.' },
+});
+
 app.use(express.json());
 app.use(express.urlencoded({ extended: false })); // needed for Twilio webhook
 
@@ -30,8 +71,9 @@ async function audit(req, action, detail) {
   try { await q('INSERT INTO audit_log(user_id,action,detail) VALUES ($1,$2,$3)', [req.user?.id || null, action, detail]); } catch {}
 }
 
-// ---- Twilio inbound SMS webhook (unauthenticated — called by Twilio) ----
+// ---- Twilio inbound SMS webhook ----
 app.post('/webhooks/sms', async (req, res) => {
+  if (!twilioSignatureValid(req)) return res.status(403).send('Forbidden');
   const from  = sms.normalizePhone(req.body?.From || '');
   const body  = (req.body?.Body || '').trim().toUpperCase().replace(/\s+/g, '');
   let reply   = null;
@@ -102,7 +144,7 @@ app.get('/api/health', async (_req, res) => {
 });
 
 // ---- auth ----
-app.post('/api/auth/login', async (req, res) => {
+app.post('/api/auth/login', loginLimiter, async (req, res) => {
   const { username, password } = req.body || {};
   const u = await one('SELECT * FROM app_user WHERE lower(username)=lower($1)', [username || '']);
   if (!u || !checkPassword(password || '', u.password_hash))
