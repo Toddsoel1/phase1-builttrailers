@@ -1,0 +1,307 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Built Trailers — Dealer Portal</title>
+<link rel="icon" type="image/png" sizes="192x192" href="/icons/icon-192.png">
+<style>
+:root{--accent:#ff7a18;--ink:#1a2230;--muted:#6b7785;--line:#e2e7ec;--bg:#f4f6f8;--ok:#1a7f4b;--warn:#b26a00;--err:#c0392b;--blue:#2a6df0}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;background:var(--bg);color:var(--ink);line-height:1.5}
+.top{background:#0f1419;color:#fff;padding:16px 20px}
+.top .wrap{max-width:720px;margin:0 auto;display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap}
+.top h1{font-size:18px;letter-spacing:.5px}.top h1 b{color:var(--accent)}
+.top .sub{font-size:13px;color:#9fb0c0}
+.top .who{font-size:13px;color:#cdd8e2;display:flex;align-items:center;gap:10px}
+.wrap{max-width:720px;margin:0 auto;padding:20px}
+.tabs{display:flex;gap:6px;margin:18px 0;flex-wrap:wrap}
+.tabs button{flex:0 1 auto;background:#fff;border:1px solid var(--line);color:var(--muted);padding:9px 14px;border-radius:9px;font-size:13px;font-weight:600;cursor:pointer}
+.tabs button.active{background:var(--accent);color:#1a1206;border-color:var(--accent)}
+.card{background:#fff;border:1px solid var(--line);border-radius:14px;padding:20px;margin-bottom:16px;box-shadow:0 1px 2px rgba(0,0,0,.03)}
+.card h2{font-size:17px;margin-bottom:4px}.card .lead{font-size:13px;color:var(--muted);margin-bottom:14px}
+label{display:block;font-size:12.5px;font-weight:600;margin:12px 0 4px}.req::after{content:" *";color:var(--err)}
+input,select,textarea{width:100%;border:1px solid var(--line);border-radius:9px;padding:12px;font-size:16px;font-family:inherit;background:#fff;color:var(--ink)}
+input:focus,textarea:focus,select:focus{outline:none;border-color:var(--accent)}
+input[readonly]{background:#f0f2f5;color:var(--muted)}
+.vinrow{display:flex;gap:8px}.vinrow input{flex:1;font-family:ui-monospace,monospace;letter-spacing:1px;text-transform:uppercase}
+.row{display:flex;gap:12px;flex-wrap:wrap}.row>*{flex:1;min-width:150px}
+.btn{background:var(--accent);color:#1a1206;border:none;padding:12px 18px;border-radius:9px;font-weight:700;font-size:15px;cursor:pointer;width:100%;margin-top:16px}
+.btn:disabled{opacity:.5}.btn.sec{background:#eef1f4;color:var(--ink);width:auto;margin:0;padding:11px 16px;font-size:14px}
+.btn.ghost{background:none;border:1px solid #3a4654;color:#cdd8e2;width:auto;margin:0;padding:7px 12px;font-size:13px;font-weight:600}
+.chk{display:flex;align-items:flex-start;gap:9px;margin:10px 0;font-size:13.5px;font-weight:500}.chk input{width:18px;height:18px;margin-top:1px;flex:0 0 auto}
+.note{background:#fff6ec;border:1px solid #ffe0bf;border-radius:9px;padding:11px 13px;font-size:12.5px;color:#8a5200;margin-top:6px}
+.msg{padding:12px 14px;border-radius:9px;font-size:14px;margin-top:14px;display:none}
+.msg.ok{background:#e8f6ee;border:1px solid #b6e2c6;color:var(--ok);display:block}
+.msg.err{background:#fdecea;border:1px solid #f5c3bc;color:var(--err);display:block}
+.lookup{font-size:13px;margin-top:8px;color:var(--muted);min-height:18px}.lookup b{color:var(--ink)}
+.hidden{display:none}
+table{width:100%;border-collapse:collapse;font-size:13px;margin-top:8px}
+th{text-align:left;font-size:11px;text-transform:uppercase;color:var(--muted);border-bottom:1px solid var(--line);padding:7px 6px}
+td{padding:7px 6px;border-bottom:1px solid #f0f2f5}
+.badge{font-size:11px;padding:2px 8px;border-radius:20px;font-weight:700}
+.b-ok{background:#e8f6ee;color:var(--ok)}.b-pend{background:#fff4e2;color:var(--warn)}.b-rej{background:#fdecea;color:var(--err)}
+.mono{font-family:ui-monospace,monospace;font-size:12px}
+footer{max-width:720px;margin:8px auto 30px;padding:0 20px;font-size:12px;color:var(--muted);text-align:center}
+footer a{color:var(--accent)}
+.btn:active{transform:translateY(1px)}
+@media(max-width:560px){
+  .wrap{padding:14px}.card{padding:16px}
+  table{display:block;overflow-x:auto;white-space:nowrap;-webkit-overflow-scrolling:touch}
+  .top .wrap{padding:0}.tabs{gap:5px}.tabs button{padding:8px 11px;font-size:12.5px}
+}
+</style>
+</head>
+<body>
+<div class="top"><div class="wrap">
+  <div><h1>BUILT <b>TRAILERS</b></h1><div class="sub">Dealer Portal</div></div>
+  <div class="who" id="who"></div>
+</div></div>
+
+<div class="wrap">
+  <!-- AUTH (logged out) -->
+  <div id="auth">
+    <div class="tabs">
+      <button id="tabLogin" class="active" onclick="showAuth('login')">Log In</button>
+      <button id="tabSignup" onclick="showAuth('signup')">Create Account</button>
+    </div>
+    <div id="paneLogin" class="card">
+      <h2>Dealer log in</h2>
+      <p class="lead">Sign in to register the trailers you've sold and manage warranty claims.</p>
+      <label class="req">Email</label><input id="lEmail" type="email" autocomplete="username">
+      <label class="req">Password</label><input id="lPass" type="password" autocomplete="current-password">
+      <button class="btn" onclick="login()">Log In</button>
+      <div id="lMsg" class="msg"></div>
+    </div>
+    <div id="paneSignup" class="card hidden">
+      <h2>Create a dealer account</h2>
+      <p class="lead">New accounts are reviewed and approved by Built Trailers before you can sign in.</p>
+      <label class="req">Dealership name</label><input id="sDealer" placeholder="Your dealership's name">
+      <label class="req">Your name</label><input id="sName" placeholder="Contact person">
+      <label class="req">Email</label><input id="sEmail" type="email">
+      <label class="req">Password</label><input id="sPass" type="password" placeholder="At least 6 characters">
+      <button class="btn" onclick="signup()">Create Account</button>
+      <div id="sMsg" class="msg"></div>
+    </div>
+  </div>
+
+  <!-- DASHBOARD (logged in) -->
+  <div id="dash" class="hidden">
+    <div class="tabs">
+      <button id="tabOrders" class="active" onclick="showDash('orders')">Orders</button>
+      <button id="tabReg" onclick="showDash('reg')">Register a Trailer</button>
+      <button id="tabMine" onclick="showDash('mine')">My Registrations</button>
+      <button id="tabClaims" onclick="showDash('claims')">Claims</button>
+      <button id="tabInvoices" onclick="showDash('invoices')">Invoices</button>
+      <button id="tabDocs" onclick="showDash('docs')">Documents</button>
+      <button id="tabTeam" onclick="showDash('team')">Team</button>
+      <button id="tabNotif" onclick="showDash('notif')">🔔<span id="notifBadge"></span></button>
+    </div>
+    <div id="paneInvoices" class="card hidden"><h2>Invoices &amp; balance</h2><div id="invBody"><p class="lead">Loading…</p></div></div>
+    <div id="paneDocs" class="card hidden"><h2>Documents</h2><p class="lead">Owner's manuals, spec sheets, and warranty terms.</p><div id="docsBody"><p class="lead">Loading…</p></div></div>
+    <div id="paneTeam" class="card hidden"><h2>Your team</h2><p class="lead">Everyone with a login under your dealership. Colleagues can create their own account at this portal — Built Trailers approves them under your dealership.</p><div id="teamBody"><p class="lead">Loading…</p></div></div>
+    <div id="paneNotif" class="card hidden">
+      <h2>Updates</h2>
+      <p class="lead">Order status changes, registration approvals, and claim resolutions appear here.</p>
+      <div id="notifBody"><p class="lead">Loading…</p></div>
+    </div>
+
+    <div id="paneOrders" class="card">
+      <h2>Place an order</h2>
+      <p class="lead">Order trailers in the models your dealership is authorized to carry.</p>
+      <label class="req">Model</label><select id="oModel"></select>
+      <div class="row">
+        <div><label class="req">Quantity</label><input id="oQty" type="number" min="1" value="1"></div>
+        <div><label>Requested delivery</label><input id="oDue" type="date"></div>
+      </div>
+      <button class="btn" onclick="placeOrder()">Submit Order</button>
+      <div id="oMsg" class="msg"></div>
+      <h2 style="margin-top:24px">Your orders</h2>
+      <div id="ordersBody"><p class="lead">Loading…</p></div>
+    </div>
+
+    <div id="paneReg" class="card">
+      <h2>Register a trailer you sold</h2>
+      <p class="lead">Selling dealership: <b id="regDealer"></b> — fills in automatically. Register within <b>15 days</b> of the sale.</p>
+      <label class="req">Trailer VIN</label>
+      <div class="vinrow"><input id="rVin" maxlength="17" placeholder="17-character VIN" oninput="this.value=this.value.toUpperCase()"><button class="btn sec" onclick="lookupVin()">Look up</button></div>
+      <div id="rLookup" class="lookup"></div>
+      <label class="req">Trailer owner — full name</label><input id="rOwner">
+      <div class="row">
+        <div><label class="req">Date of purchase</label><input id="rSale" type="date"></div>
+        <div><label>Owner phone</label><input id="rPhone" type="tel"></div>
+      </div>
+      <div class="row">
+        <div><label class="req">Owner email</label><input id="rEmail" type="email"></div>
+        <div><label>Warranty address</label><input id="rAddr" placeholder="Street, city, state, ZIP"></div>
+      </div>
+      <label>Proof of sale — buyer's order or invoice</label>
+      <input id="rProof" type="file" accept="image/*,application/pdf">
+      <div class="note">The warranty start date is the purchase date on this document. Built Trailers verifies it before the warranty is active.</div>
+      <label style="margin-top:14px">Send the owner their maintenance schedule, warranty terms, and the app link by:</label>
+      <div class="chk"><input type="checkbox" id="rSms"><label for="rSms" style="margin:0;font-weight:500">Text</label></div>
+      <div class="chk"><input type="checkbox" id="rEmailOpt" checked><label for="rEmailOpt" style="margin:0;font-weight:500">Email</label></div>
+      <button class="btn" id="rBtn" onclick="registerTrailer()">Register Warranty</button>
+      <div id="rMsg" class="msg"></div>
+    </div>
+
+    <div id="paneMine" class="card hidden">
+      <h2>My registrations</h2>
+      <div id="mineBody"><p class="lead">Loading…</p></div>
+    </div>
+
+    <div id="paneClaims" class="card hidden">
+      <h2>Warranty claims</h2>
+      <p class="lead">Submit a claim for a trailer you sold, and track its status.</p>
+      <label class="req">Trailer VIN</label><input id="cVin" maxlength="17" class="mono" style="text-transform:uppercase" oninput="this.value=this.value.toUpperCase()">
+      <label class="req">Describe the issue</label><textarea id="cIssue" rows="3"></textarea>
+      <label>Photos / video of the issue</label><input id="cFiles" type="file" accept="image/*,video/*" multiple>
+      <button class="btn" onclick="submitClaim()">Submit Claim</button>
+      <div id="cMsg" class="msg"></div>
+      <div id="claimsBody" style="margin-top:16px"></div>
+    </div>
+  </div>
+</div>
+
+<footer><a href="/privacy">Privacy</a> · <a href="/terms">Terms &amp; Conditions</a> · © Built Trailers</footer>
+
+<script>
+const $=id=>document.getElementById(id);
+let DTOKEN=localStorage.getItem('dealerToken')||null, DEALER=null;
+function setMsg(id,cls,html){const e=$(id);e.className='msg '+cls;e.innerHTML=html;}
+async function api(path,opts={}){
+  const h={'Content-Type':'application/json'}; if(DTOKEN) h.Authorization='Bearer '+DTOKEN;
+  const r=await fetch(path,{...opts,headers:h}); const d=await r.json().catch(()=>({}));
+  if(r.status===401){logout();throw new Error(d.error||'Session expired');}
+  if(!r.ok) throw new Error(d.error||('Error '+r.status)); return d;
+}
+function showAuth(t){$('paneLogin').classList.toggle('hidden',t!=='login');$('paneSignup').classList.toggle('hidden',t!=='signup');$('tabLogin').classList.toggle('active',t==='login');$('tabSignup').classList.toggle('active',t==='signup');}
+function showDash(t){for(const k of ['orders','reg','mine','claims','invoices','docs','team','notif']){const pe=$('pane'+k[0].toUpperCase()+k.slice(1)),tb=$('tab'+k[0].toUpperCase()+k.slice(1));if(pe)pe.classList.toggle('hidden',k!==t);if(tb)tb.classList.toggle('active',k===t);}({orders:loadOrders,mine:loadMine,claims:loadClaims,notif:loadNotifs,invoices:loadInvoices,docs:loadDocs,team:loadTeam}[t]||(()=>{}))();}
+async function loadInvoices(){
+  try{const r=await api('/api/dealer/invoices');
+    $('invBody').innerHTML=`<div class="row" style="margin-bottom:14px">
+      <div class="card" style="margin:0;background:#fff6ec;border-color:#ffe0bf"><div class="lead" style="margin:0">Balance due</div><div style="font-size:24px;font-weight:800;color:#8a5200">$${Math.round(r.owed).toLocaleString()}</div></div>
+      <div class="card" style="margin:0;background:#e8f6ee;border-color:#b6e2c6"><div class="lead" style="margin:0">Paid</div><div style="font-size:24px;font-weight:800;color:#1a7f4b">$${Math.round(r.paid).toLocaleString()}</div></div></div>
+      <div class="note" style="margin-bottom:12px">This is a summary of your account. Invoices are billed and paid through Built Trailers' normal QuickBooks billing — there's nothing to pay here.</div>
+      ${r.invoices.length?`<table><thead><tr><th>Invoice</th><th>Status</th><th class="r" style="text-align:right">Total</th><th>Date</th></tr></thead><tbody>
+      ${r.invoices.map(i=>`<tr><td><b>${i.id}</b></td><td>${i.status==='Paid'?'<span class="badge b-ok">Paid</span>':'<span class="badge b-pend">Invoiced</span>'}</td><td style="text-align:right">$${Math.round(i.total).toLocaleString()}</td><td class="muted" style="font-size:12px">${i.invoicedAt?new Date(i.invoicedAt).toLocaleDateString():''}</td></tr>`).join('')}
+      </tbody></table>`:'<p class="lead">No invoices yet.</p>'}`;
+  }catch(e){$('invBody').innerHTML='<p class="msg err">'+e.message+'</p>';}
+}
+async function loadDocs(){
+  try{const docs=await api('/api/public/documents');
+    $('docsBody').innerHTML=docs.length?`<table><thead><tr><th>Document</th><th>For</th><th></th></tr></thead><tbody>
+      ${docs.map(d=>`<tr><td><b>${d.title}</b>${d.category?` <span class="muted" style="font-size:11px">${d.category}</span>`:''}</td><td class="muted" style="font-size:12px">${d.model||'All models'}</td><td><a class="btn sec" style="padding:5px 12px;font-size:13px;text-decoration:none" href="/api/public/document/${d.id}" target="_blank">Download</a></td></tr>`).join('')}
+    </tbody></table>`:'<p class="lead">No documents posted yet.</p>';
+  }catch(e){$('docsBody').innerHTML='<p class="msg err">'+e.message+'</p>';}
+}
+async function loadTeam(){
+  try{const team=await api('/api/dealer/team');
+    $('teamBody').innerHTML=team.length?`<table><thead><tr><th>Name</th><th>Email</th><th>Status</th></tr></thead><tbody>
+      ${team.map(u=>`<tr><td>${u.name||''}</td><td>${u.email}</td><td>${u.status==='active'?'<span class="badge b-ok">Active</span>':u.status==='pending'?'<span class="badge b-pend">Pending</span>':'<span class="badge b-rej">'+u.status+'</span>'}</td></tr>`).join('')}
+    </tbody></table>`:'<p class="lead">Just you so far.</p>';
+  }catch(e){$('teamBody').innerHTML='<p class="msg err">'+e.message+'</p>';}
+}
+async function refreshNotifBadge(){try{const n=await api('/api/dealer/notifications');const b=$('notifBadge');if(b)b.textContent=n.unread?' '+n.unread:'';if(b)b.style.cssText=n.unread?'background:#ff7a18;color:#1a1206;border-radius:10px;padding:0 6px;font-size:11px;margin-left:3px':'';}catch(e){}}
+async function loadNotifs(){
+  try{const n=await api('/api/dealer/notifications');
+    $('notifBody').innerHTML=n.items.length?n.items.map(it=>`<div style="padding:9px 0;border-bottom:1px solid #f0f2f5;${it.read?'':'font-weight:600'}">
+      <span style="margin-right:6px">${it.kind==='order'?'📦':it.kind==='claim'?'🛠️':'📝'}</span>${it.body}
+      <div class="muted" style="font-size:11px;font-weight:400">${new Date(it.at).toLocaleString()}</div></div>`).join(''):'<p class="lead">No updates yet.</p>';
+    await api('/api/dealer/notifications/read',{method:'POST'});refreshNotifBadge();
+  }catch(e){$('notifBody').innerHTML='<p class="msg err">'+e.message+'</p>';}
+}
+
+async function signup(){
+  const dealershipName=$('sDealer').value.trim(),name=$('sName').value.trim(),email=$('sEmail').value.trim(),password=$('sPass').value;
+  if(!dealershipName||!name||!email||!password){setMsg('sMsg','err','Please fill in every field.');return;}
+  try{ await api('/api/dealer/signup',{method:'POST',body:JSON.stringify({dealershipName,name,email,password})});
+    setMsg('sMsg','ok','✓ Account created. Built Trailers will review and approve it — you’ll be able to log in once approved.');
+  }catch(e){setMsg('sMsg','err',e.message);}
+}
+async function login(){
+  const email=$('lEmail').value.trim(),password=$('lPass').value;
+  if(!email||!password){setMsg('lMsg','err','Enter your email and password.');return;}
+  try{ const d=await api('/api/dealer/login',{method:'POST',body:JSON.stringify({email,password})});
+    DTOKEN=d.token;localStorage.setItem('dealerToken',DTOKEN);DEALER=d.dealer;enterDash();
+  }catch(e){setMsg('lMsg','err',e.message);}
+}
+function logout(){DTOKEN=null;DEALER=null;localStorage.removeItem('dealerToken');$('dash').classList.add('hidden');$('auth').classList.remove('hidden');$('who').innerHTML='';}
+function enterDash(){
+  $('auth').classList.add('hidden');$('dash').classList.remove('hidden');
+  $('who').innerHTML=`<span>${DEALER.dealership||DEALER.name||''}</span><button class="btn ghost" onclick="logout()">Log out</button>`;
+  $('regDealer').textContent=DEALER.dealership||'(your dealership)';
+  showDash('orders');refreshNotifBadge();
+}
+let _models=[];
+function orderStatus(s){const label=s==='Quote'?'Pending approval':s;return `<span class="badge ${s==='Ready / Shipped'?'b-ok':'b-pend'}">${label||''}</span>`;}
+async function loadOrders(){
+  try{
+    if(!_models.length){ _models=await api('/api/dealer/models'); $('oModel').innerHTML=_models.length?_models.map(m=>`<option value="${m.id}">${m.name} — ${m.category} ($${m.price.toLocaleString()})</option>`).join(''):'<option value="">No authorized models — contact Built Trailers</option>'; }
+    const orders=await api('/api/dealer/orders');
+    $('ordersBody').innerHTML=orders.length?`<table><thead><tr><th>Order</th><th>Model</th><th>Qty</th><th>Status</th><th>Due</th><th></th></tr></thead><tbody>
+      ${orders.map(o=>`<tr><td><b>${o.id}</b></td><td>${o.model||''}</td><td>${o.qty}</td><td>${orderStatus(o.stage)}${o.vinsAssigned?` <span class="muted" style="font-size:11px">${o.vinsAssigned} VIN${o.vinsAssigned>1?'s':''}</span>`:''}</td><td>${o.due?String(o.due).slice(0,10):'—'}</td>
+      <td><button class="btn sec" style="padding:5px 10px;font-size:12px;margin:0" onclick="reorder('${o.modelId}',${o.qty})">Reorder</button></td></tr>`).join('')}
+    </tbody></table>`:'<p class="lead">No orders yet — place your first above.</p>';
+  }catch(e){$('ordersBody').innerHTML='<p class="msg err">'+e.message+'</p>';}
+}
+async function placeOrder(){
+  const modelId=$('oModel').value,qty=Number($('oQty').value)||1;
+  if(!modelId){setMsg('oMsg','err','Choose a model.');return;}
+  try{const d=await api('/api/dealer/orders',{method:'POST',body:JSON.stringify({modelId,qty,due:$('oDue').value||undefined})});
+    setMsg('oMsg','ok','✓ Order '+d.id+' submitted — pending approval by Built Trailers. You\'ll get a confirmation here once it\'s approved.');loadOrders();
+  }catch(e){setMsg('oMsg','err',e.message);}
+}
+function reorder(modelId,qty){$('oModel').value=modelId;$('oQty').value=qty;window.scrollTo({top:0,behavior:'smooth'});setMsg('oMsg','ok','Pre-filled from a past order — review and submit.');}
+
+async function lookupVin(){
+  const vin=$('rVin').value.trim(); if(!vin){$('rLookup').textContent='';return;}
+  $('rLookup').textContent='Looking up…';
+  try{ const d=await api('/api/public/trailer/'+encodeURIComponent(vin));
+    $('rLookup').innerHTML=d.found?('✓ <b>'+d.model+'</b>'+(d.registered?' — already registered ('+d.status+')':'')):'<span style="color:#c0392b">No trailer found with that VIN.</span>';
+  }catch(e){$('rLookup').innerHTML='<span style="color:#c0392b">'+e.message+'</span>';}
+}
+function readFile(f){return new Promise((res,rej)=>{const r=new FileReader();r.onload=()=>res(r.result);r.onerror=rej;r.readAsDataURL(f);});}
+async function registerTrailer(){
+  const vin=$('rVin').value.trim(),owner=$('rOwner').value.trim(),sale=$('rSale').value,email=$('rEmail').value.trim();
+  if(!vin||!owner||!sale||!email){setMsg('rMsg','err','VIN, owner name, date of purchase, and owner email are required.');return;}
+  const btn=$('rBtn');btn.disabled=true;btn.textContent='Submitting…';
+  try{
+    let proof=null;const f=$('rProof').files[0]; if(f){if(f.size>10*1024*1024)throw new Error('Proof file must be under 10 MB.');proof=await readFile(f);}
+    const d=await api('/api/dealer/register',{method:'POST',body:JSON.stringify({vin,ownerName:owner,saleDate:sale,email,phone:$('rPhone').value.trim()||undefined,warrantyAddress:$('rAddr').value.trim()||undefined,smsOptIn:$('rSms').checked,emailOptIn:$('rEmailOpt').checked,proofOfSale:proof||undefined})});
+    setMsg('rMsg','ok','✓ Registration submitted for verification by Built Trailers.'+(d.within15===false?' <b>Note:</b> past the 15-day window.':''));
+    $('rVin').value='';$('rOwner').value='';$('rSale').value='';$('rEmail').value='';$('rPhone').value='';$('rAddr').value='';$('rProof').value='';$('rLookup').textContent='';
+  }catch(e){setMsg('rMsg','err',e.message);}
+  finally{btn.disabled=false;btn.textContent='Register Warranty';}
+}
+
+const regBadge=s=>s==='verified'?'<span class="badge b-ok">Verified</span>':s==='rejected'?'<span class="badge b-rej">Rejected</span>':'<span class="badge b-pend">Pending</span>';
+async function loadMine(){
+  try{const rows=await api('/api/dealer/registrations');
+    $('mineBody').innerHTML=rows.length?`<table><thead><tr><th>VIN</th><th>Model</th><th>Owner</th><th>Sale date</th><th>Status</th></tr></thead><tbody>
+      ${rows.map(r=>`<tr><td class="mono">${r.vin}</td><td>${r.model||''}</td><td>${r.owner||''}</td><td>${r.saleDate?String(r.saleDate).slice(0,10):''}${r.within15===false?' ⚠️':''}</td><td>${regBadge(r.status)}</td></tr>`).join('')}
+    </tbody></table>`:'<p class="lead">No registrations yet.</p>';
+  }catch(e){$('mineBody').innerHTML='<p class="msg err">'+e.message+'</p>';}
+}
+async function loadClaims(){
+  try{const rows=await api('/api/dealer/claims');
+    $('claimsBody').innerHTML=rows.length?`<table><thead><tr><th>Claim</th><th>VIN</th><th>Issue</th><th>Status</th></tr></thead><tbody>
+      ${rows.map(c=>`<tr><td><b>${c.id}</b></td><td class="mono">${c.vin}</td><td>${c.issue||''}</td><td>${c.status==='Resolved'?'<span class="badge b-ok">Resolved</span>':'<span class="badge b-pend">Open</span>'}</td></tr>`).join('')}
+    </tbody></table>`:'<p class="lead">No claims yet.</p>';
+  }catch(e){$('claimsBody').innerHTML='<p class="msg err">'+e.message+'</p>';}
+}
+async function readFiles(el){const out=[];for(const f of (el&&el.files?el.files:[])){if(f.size>10*1024*1024)throw new Error('Each file must be under 10 MB ("'+f.name+'").');out.push({dataUrl:await readFile(f),name:f.name});}return out;}
+async function submitClaim(){
+  const vin=$('cVin').value.trim(),issue=$('cIssue').value.trim();
+  if(!vin||!issue){setMsg('cMsg','err','Enter the VIN and describe the issue.');return;}
+  try{const attachments=await readFiles($('cFiles'));
+    const d=await api('/api/dealer/claim',{method:'POST',body:JSON.stringify({vin,issue,attachments})});
+    setMsg('cMsg','ok','✓ Claim '+d.id+' submitted'+(d.attachments?' with '+d.attachments+' file(s)':'')+'.');$('cVin').value='';$('cIssue').value='';if($('cFiles'))$('cFiles').value='';loadClaims();
+  }catch(e){setMsg('cMsg','err',e.message);}
+}
+
+// auto-resume session
+(async()=>{ if(DTOKEN){ try{ DEALER=await api('/api/dealer/me'); enterDash(); }catch(e){ logout(); } } })();
+</script>
+</body>
+</html>

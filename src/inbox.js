@@ -65,6 +65,10 @@ export async function actionItemsFor(user) {
           AND due IS NOT NULL AND due <= (CURRENT_DATE + INTERVAL '7 days')`);
     if (n) items.push({ key: 'orders_due', icon: '📋',
       label: `${plural(n, 'order')} due within 7 days`, count: n, link: 'orders' });
+    // Dealer-portal orders awaiting Built Trailers sales approval
+    const da = await count(`SELECT COUNT(*)::int AS n FROM sales_order WHERE stage='Quote' AND channel='Dealer Portal'`);
+    if (da) items.push({ key: 'dealer_orders', icon: '🛒',
+      label: `${plural(da, 'dealer order')} awaiting approval`, count: da, link: 'orders' });
   }
 
   // 5b. Open warranty claims + portal registrations awaiting verification (trailers section)
@@ -75,6 +79,9 @@ export async function actionItemsFor(user) {
     const pr = await count(`SELECT COUNT(*)::int AS n FROM warranty_registration WHERE verification_status='pending'`);
     if (pr) items.push({ key: 'warranty_regs', icon: '📝',
       label: `${plural(pr, 'warranty registration')} to verify`, count: pr, link: 'trailers' });
+    const dl = await count(`SELECT COUNT(*)::int AS n FROM dealer_user WHERE status='pending'`);
+    if (dl) items.push({ key: 'dealer_signups', icon: '🤝',
+      label: `${plural(dl, 'dealership account')} to approve`, count: dl, link: 'trailers' });
   }
 
   // 6. Time-off requests from MY direct reports waiting on my approval

@@ -1686,26 +1686,44 @@ async function viewTrailers(){
   $('pTitle').textContent='Trailers & Warranty';
   $('pSub').textContent='Per-trailer VINs, build history, and warranty';
   $('pActions').innerHTML=canSee('accounting')?`<button class="btn sec" onclick="vinSettings()">⚙ VIN Settings</button>`:'';
-  let pendN=0; try{ pendN=(await api('/api/warranty/registrations/pending')).length; }catch(e){}
+  let pendN=0; try{ const [pr,dl]=await Promise.all([api('/api/warranty/registrations/pending'),api('/api/dealers/pending').catch(()=>[])]); pendN=pr.length+dl.length; }catch(e){}
   const tabs=`<div class="tabs" style="margin-bottom:12px">
     <button class="${trailerTab==='vins'?'active':''}" onclick="trailerTab='vins';viewTrailers()">🏷️ VINs</button>
     <button class="${trailerTab==='dealer'?'active':''}" onclick="trailerTab='dealer';viewTrailers()">🏬 By Dealer</button>
     <button class="${trailerTab==='regs'?'active':''}" onclick="trailerTab='regs';viewTrailers()">📝 Registrations${pendN?` <span class="badge b-low" style="margin-left:2px">${pendN}</span>`:''}</button>
-    <button class="${trailerTab==='claims'?'active':''}" onclick="trailerTab='claims';viewTrailers()">🛠️ Warranty Claims</button></div>`;
+    <button class="${trailerTab==='claims'?'active':''}" onclick="trailerTab='claims';viewTrailers()">🛠️ Warranty Claims</button>
+    <button class="${trailerTab==='docs'?'active':''}" onclick="trailerTab='docs';viewTrailers()">📚 Documents</button></div>`;
   let body='';
   try{
     if(trailerTab==='dealer') body=await trailersDealerTab();
     else if(trailerTab==='claims') body=await trailersClaimsTab();
     else if(trailerTab==='regs') body=await trailersRegsTab();
+    else if(trailerTab==='docs') body=await trailersDocsTab();
     else body=await trailersVinsTab();
   }catch(e){ body=`<div class="card">Error: ${esc(e.message)}</div>`; }
   $('content').innerHTML=tabs+body;
 }
 async function trailersRegsTab(){
-  const pend=await api('/api/warranty/registrations/pending');
+  const [pend,dealers,custs]=await Promise.all([
+    api('/api/warranty/registrations/pending'),
+    api('/api/dealers/pending').catch(()=>[]),
+    api('/api/customers').catch(()=>[])
+  ]);
   const canReview=canEdit();
-  if(!pend.length) return `<div class="card"><p class="muted">No registrations awaiting verification. Submissions from the public <b>/register</b> portal appear here for review.</p></div>`;
-  return `<div class="card"><h3>Registrations awaiting verification <span class="badge b-low">${pend.length}</span></h3>
+  const dealerOpts=`<option value="">— link to dealer record —</option>`+custs.map(c=>`<option value="${esc(c.id)}">${esc(c.name)}</option>`).join('');
+  const dealerCard=dealers.length?`<div class="card" style="margin-bottom:16px;border-color:var(--accent)">
+    <h3>🤝 Dealer accounts to approve <span class="badge b-low">${dealers.length}</span></h3>
+    <p class="muted" style="font-size:12px;margin-bottom:10px">Approve a dealership's sign-up and link it to their dealer record, so their registrations and units appear under their account.</p>
+    <table><thead><tr><th>Dealership</th><th>Contact</th><th>Link to dealer record</th>${canReview?'<th></th>':''}</tr></thead><tbody>
+    ${dealers.map(d=>`<tr>
+      <td><b>${esc(d.dealershipName||'')}</b></td>
+      <td style="font-size:12px">${esc(d.name||'')}<br><span class="muted">${esc(d.email||'')}</span></td>
+      <td>${canReview?`<select id="dl_${esc(d.id)}" style="max-width:220px">${dealerOpts}</select>`:'<span class="muted">—</span>'}</td>
+      ${canReview?`<td style="white-space:nowrap"><button class="btn sm" onclick="approveDealerAcct('${esc(d.id)}')">✓ Approve</button> <button class="btn sm sec" onclick="rejectDealerAcct('${esc(d.id)}')">✕</button></td>`:''}
+    </tr>`).join('')}
+    </tbody></table></div>`:'';
+  const regCard=!pend.length?`<div class="card"><p class="muted">No warranty registrations awaiting verification. Submissions from the owner &amp; dealer portals appear here for review.</p></div>`
+    :`<div class="card"><h3>Registrations awaiting verification <span class="badge b-low">${pend.length}</span></h3>
     <p class="muted" style="font-size:12px;margin-bottom:10px">Verify the purchase date against the uploaded proof of sale, then approve or reject. Flagged ⚠️ = submitted outside the 15-day window.</p>
     <table><thead><tr><th>VIN</th><th>Owner</th><th>Sale date</th><th>Contact</th><th>Proof</th><th>15-day</th>${canReview?'<th></th>':''}</tr></thead><tbody>
     ${pend.map(r=>`<tr>
@@ -1718,6 +1736,51 @@ async function trailersRegsTab(){
       ${canReview?`<td style="white-space:nowrap"><button class="btn sm" onclick="reviewReg('${esc(r.trailerId)}','approve')">✓</button> <button class="btn sm sec" onclick="reviewReg('${esc(r.trailerId)}','reject')">✕</button></td>`:''}
     </tr>`).join('')}
     </tbody></table></div>`;
+  return dealerCard+regCard;
+}
+async function approveDealerAcct(id){
+  const sel=$('dl_'+id), customerId=sel?sel.value:'';
+  if(!customerId && !confirm('Approve without linking to a dealer record? Their units will not show until linked.')) return;
+  try{ await api('/api/dealers/'+encodeURIComponent(id)+'/approve',{method:'POST',body:JSON.stringify({customerId:customerId||undefined})}); toast('Dealership approved'); viewTrailers(); }
+  catch(e){ toast(e.message); }
+}
+async function rejectDealerAcct(id){
+  try{ await api('/api/dealers/'+encodeURIComponent(id)+'/reject',{method:'POST'}); toast('Dealership rejected'); viewTrailers(); }
+  catch(e){ toast(e.message); }
+}
+async function trailersDocsTab(){
+  const [docs,models]=await Promise.all([api('/api/public/documents'),api('/api/models').catch(()=>[])]);
+  const admin=isAdmin();
+  const uploadCard=admin?`<div class="card" style="margin-bottom:16px">
+    <h3>📚 Post a document <span class="muted" style="text-transform:none;letter-spacing:0">— visible to dealers &amp; owners in their portals</span></h3>
+    <div style="display:flex;gap:10px;flex-wrap:wrap">
+      <div class="field" style="flex:2;min-width:180px"><label>Title</label><input id="docTitle" placeholder="e.g. Utility Trailer Owner's Manual"></div>
+      <div class="field" style="flex:1;min-width:110px"><label>Category</label><input id="docCat" placeholder="Manual / Spec / Terms"></div>
+      <div class="field" style="flex:1;min-width:130px"><label>Model</label><select id="docModel"><option value="">All models</option>${models.map(m=>`<option value="${esc(m.id)}">${esc(m.name)}</option>`).join('')}</select></div>
+    </div>
+    <div class="field"><label>File</label><input id="docFile" type="file"></div>
+    <button class="btn sm" onclick="uploadDoc()">Upload</button>
+  </div>`:'';
+  const listCard=`<div class="card"><h3>Documents (${docs.length})</h3>
+    ${docs.length?`<table><thead><tr><th>Title</th><th>Category</th><th>Model</th>${admin?'<th></th>':''}</tr></thead><tbody>
+      ${docs.map(d=>`<tr><td><a class="lnk" href="/api/public/document/${d.id}" target="_blank">${esc(d.title)}</a></td><td>${esc(d.category||'')}</td><td>${esc(d.model||'All')}</td>
+        ${admin?`<td><button class="btn sm sec" onclick="deleteDoc(${d.id})">Delete</button></td>`:''}</tr>`).join('')}
+    </tbody></table>`:'<p class="muted">No documents posted yet.</p>'}
+  </div>`;
+  return uploadCard+listCard;
+}
+async function uploadDoc(){
+  const title=$('docTitle').value.trim(),f=$('docFile').files[0];
+  if(!title||!f){ toast('Title and file are required'); return; }
+  if(f.size>10*1024*1024){ toast('File must be under 10 MB'); return; }
+  const dataUrl=await new Promise((res,rej)=>{const r=new FileReader();r.onload=()=>res(r.result);r.onerror=rej;r.readAsDataURL(f);});
+  try{ await api('/api/documents',{method:'POST',body:JSON.stringify({title,category:$('docCat').value.trim()||undefined,modelId:$('docModel').value||undefined,dataUrl})}); toast('Document posted'); viewTrailers(); }
+  catch(e){ toast(e.message); }
+}
+async function deleteDoc(id){
+  if(!confirm('Delete this document?')) return;
+  try{ await api('/api/documents/'+id,{method:'DELETE'}); toast('Deleted'); viewTrailers(); }
+  catch(e){ toast(e.message); }
 }
 async function reviewReg(trailerId,decision,fromModal){
   try{ await api('/api/warranty/registrations/'+encodeURIComponent(trailerId)+'/review',{method:'POST',body:JSON.stringify({decision})});
@@ -1828,7 +1891,7 @@ async function openTrailerDetail(id){
     ${canW?`<td><button class="btn sm ${s.done?'sec':''}" onclick="logStep('${esc(d.id)}','${s.step}')">${s.done?'Update':'Log'}</button></td>`:''}
   </tr>`).join('');
   const claimRows=d.claims.length?d.claims.map(c=>`<tr>
-    <td><b>${esc(c.id)}</b> ${c.status==='Open'?'<span class="badge b-low">Open</span>':'<span class="badge b-ok">Resolved</span>'}<br><span class="muted" style="font-size:11px">${esc(c.issue||'')}</span></td>
+    <td><b>${esc(c.id)}</b> ${c.status==='Open'?'<span class="badge b-low">Open</span>':'<span class="badge b-ok">Resolved</span>'}<br><span class="muted" style="font-size:11px">${esc(c.issue||'')}</span>${(c.attachments&&c.attachments.length)?`<br>${c.attachments.map(a=>`<a class="lnk" style="font-size:11px;margin-right:6px" onclick="viewProof('${encodeURIComponent(a.path)}')">${a.kind==='video'?'🎬':a.kind==='photo'?'📷':'📎'} ${esc(a.name||a.kind)}</a>`).join('')}`:''}</td>
     <td class="right" style="font-size:12px">parts ${money(c.partsCost)} · labor ${money(c.laborCost)} · ship ${money(c.shippingCost)}<br><b style="font-size:14px">${money(c.total)}</b></td>
     ${canW&&c.status==='Open'?`<td><button class="btn sm" onclick="resolveClaim('${esc(c.id)}','${esc(d.id)}')">Resolve</button></td>`:'<td></td>'}
   </tr>`).join(''):`<tr><td colspan="3" class="muted">No claims on this trailer.</td></tr>`;
@@ -1841,7 +1904,7 @@ async function openTrailerDetail(id){
       Owner: <b style="color:var(--txt)">${esc(w.ownerName||'—')}</b>${w.source==='portal'?' <span class="badge b-buy" style="font-size:10px">portal</span>':''}<br>
       ${w.address?esc(w.address)+'<br>':''}${[w.email,w.phone].filter(Boolean).map(esc).join(' · ')}${(w.email||w.phone)?'<br>':''}
       ${w.saleDate?'Purchased '+String(w.saleDate).slice(0,10)+' · ':''}${w.termMonths} mo · expires ${w.expiresAt?new Date(w.expiresAt).toLocaleDateString():'—'}${w.within15===false?' · <span style="color:var(--red)">⚠️ registered after 15-day window</span>':''}<br>
-      Opt-ins: ${[w.smsOptIn?'Text':null,w.emailOptIn?'Email':null].filter(Boolean).join(' + ')||'none'}${w.proofOfSale?` · <a class="lnk" onclick="viewProof('${encodeURIComponent(w.proofOfSale)}')">proof of sale</a>`:''}
+      Opt-ins: ${[w.smsOptIn?'Text':null,w.emailOptIn?'Email':null].filter(Boolean).join(' + ')||'none'}${w.proofOfSale?` · <a class="lnk" onclick="viewProof('${encodeURIComponent(w.proofOfSale)}')">proof of sale</a>`:''}${(d.regAttachments&&d.regAttachments.length)?' · '+d.regAttachments.map(a=>`<a class="lnk" onclick="viewProof('${encodeURIComponent(a.path)}')">${a.kind==='video'?'🎬':'📷'} ${esc(a.name||a.kind)}</a>`).join(' '):''}
     </div>
     ${w.verificationStatus==='pending'&&canW?`<div style="margin:0 0 8px"><button class="btn sm" onclick="reviewReg('${esc(d.id)}','approve',true)">✓ Verify</button> <button class="btn sm sec" onclick="reviewReg('${esc(d.id)}','reject',true)">✕ Reject</button></div>`:''}`
     :'<p class="muted" style="font-size:12px;margin:0 0 6px">Not registered.</p>'}

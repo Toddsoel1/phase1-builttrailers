@@ -21,7 +21,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Ar
 .card h2{font-size:17px;margin-bottom:4px}.card .lead{font-size:13px;color:var(--muted);margin-bottom:14px}
 label{display:block;font-size:12.5px;font-weight:600;color:var(--ink);margin:12px 0 4px}
 .req::after{content:" *";color:var(--err)}
-input,select,textarea{width:100%;border:1px solid var(--line);border-radius:9px;padding:11px;font-size:15px;font-family:inherit;background:#fff;color:var(--ink)}
+input,select,textarea{width:100%;border:1px solid var(--line);border-radius:9px;padding:12px;font-size:16px;font-family:inherit;background:#fff;color:var(--ink)}
 input:focus,textarea:focus,select:focus{outline:none;border-color:var(--accent)}
 .vinrow{display:flex;gap:8px}.vinrow input{flex:1;font-family:ui-monospace,monospace;letter-spacing:1px;text-transform:uppercase}
 .row{display:flex;gap:12px;flex-wrap:wrap}.row>*{flex:1;min-width:160px}
@@ -41,6 +41,13 @@ input:focus,textarea:focus,select:focus{outline:none;border-color:var(--accent)}
 footer{max-width:680px;margin:8px auto 30px;padding:0 20px;font-size:12px;color:var(--muted);text-align:center}
 footer a{color:var(--accent)}
 .filename{font-size:12px;color:var(--muted);margin-top:5px}
+.btn:active{transform:translateY(1px)}
+@media(max-width:560px){
+  .wrap{padding:14px}.card{padding:18px}
+  table{display:block;overflow-x:auto;white-space:nowrap;-webkit-overflow-scrolling:touch}
+  .tabs{gap:5px}.tabs button{padding:9px 10px;font-size:12.5px}
+  .row{flex-direction:column;gap:0}
+}
 </style>
 </head>
 <body>
@@ -51,6 +58,7 @@ footer a{color:var(--accent)}
     <button id="tabRegister" class="active" onclick="showTab('register')">Register Warranty</button>
     <button id="tabClaim" onclick="showTab('claim')">Submit a Claim</button>
     <button id="tabMaint" onclick="showTab('maint')">Maintenance Log</button>
+    <button id="tabDocs" onclick="showTab('docs')">Documents</button>
   </div>
 
   <!-- REGISTER -->
@@ -109,6 +117,9 @@ footer a{color:var(--accent)}
       </div>
       <label class="req">Describe the issue</label>
       <textarea id="cIssue" rows="4" placeholder="What's wrong with the trailer?"></textarea>
+      <label>Photos / video of the issue</label>
+      <input id="cFiles" type="file" accept="image/*,video/*" multiple>
+      <div class="note">Add photos or a short video so Built Trailers can validate the claim faster.</div>
       <button class="btn" onclick="submitClaim()">Submit Claim</button>
       <div id="cMsg" class="msg"></div>
     </div>
@@ -131,6 +142,15 @@ footer a{color:var(--accent)}
       <div id="mMsg" class="msg"></div>
     </div>
   </div>
+
+  <!-- DOCUMENTS -->
+  <div id="paneDocs" class="hidden">
+    <div class="card">
+      <h2>Documents</h2>
+      <p class="lead">Owner's manuals, maintenance schedules, and warranty terms for your trailer.</p>
+      <div id="docsBody"><p class="lead">Loading…</p></div>
+    </div>
+  </div>
 </div>
 
 <footer>
@@ -141,10 +161,19 @@ footer a{color:var(--accent)}
 <script>
 const $=id=>document.getElementById(id);
 function showTab(t){
-  for(const k of ['register','claim','maint']){
-    $('pane'+k[0].toUpperCase()+k.slice(1)).classList.toggle('hidden',k!==t);
-    $('tab'+k[0].toUpperCase()+k.slice(1)).classList.toggle('active',k===t);
+  for(const k of ['register','claim','maint','docs']){
+    const pe=$('pane'+k[0].toUpperCase()+k.slice(1)),tb=$('tab'+k[0].toUpperCase()+k.slice(1));
+    if(pe)pe.classList.toggle('hidden',k!==t);if(tb)tb.classList.toggle('active',k===t);
   }
+  if(t==='docs')loadDocs();
+}
+async function loadDocs(){
+  const el=$('docsBody');if(!el)return;
+  try{const docs=await api('/api/public/documents');
+    el.innerHTML=docs.length?docs.map(d=>`<div style="display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-bottom:1px solid var(--line)">
+      <div><b>${d.title}</b>${d.category?` <span style="color:var(--muted);font-size:12px">${d.category}</span>`:''}<div style="color:var(--muted);font-size:12px">${d.model||'All models'}</div></div>
+      <a class="btn sec" style="text-decoration:none" href="/api/public/document/${d.id}" target="_blank">Download</a></div>`).join(''):'<p class="lead">No documents posted yet.</p>';
+  }catch(e){el.innerHTML='<p class="msg err">'+e.message+'</p>';}
 }
 function setMsg(id,cls,html){const e=$(id);e.className='msg '+cls;e.innerHTML=html;}
 async function api(path,opts){const r=await fetch(path,opts);const d=await r.json().catch(()=>({}));if(!r.ok)throw new Error(d.error||('Error '+r.status));return d;}
@@ -182,14 +211,16 @@ async function submitRegistration(){
   }catch(e){setMsg('rMsg','err',e.message);}
   finally{btn.disabled=false;btn.textContent='Register Warranty';}
 }
+async function readFiles(el){const out=[];for(const f of (el&&el.files?el.files:[])){if(f.size>10*1024*1024){throw new Error('Each file must be under 10 MB ("'+f.name+'").');}out.push({dataUrl:await readFile(f),name:f.name});}return out;}
 async function submitClaim(){
   const vin=$('cVin').value.trim(),issue=$('cIssue').value.trim();
   if(!vin||!issue){setMsg('cMsg','err','Please enter the VIN and describe the issue.');return;}
   try{
+    const attachments=await readFiles($('cFiles'));
     const d=await api('/api/public/claim',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({
-      vin,issue,submittedBy:$('cBy').value.trim()||undefined,contact:$('cContact').value.trim()||undefined})});
-    setMsg('cMsg','ok','✓ Claim '+d.id+' submitted. Built Trailers will be in touch.');
-    $('cIssue').value='';
+      vin,issue,submittedBy:$('cBy').value.trim()||undefined,contact:$('cContact').value.trim()||undefined,attachments})});
+    setMsg('cMsg','ok','✓ Claim '+d.id+' submitted'+(d.attachments?' with '+d.attachments+' file(s)':'')+'. Built Trailers will be in touch.');
+    $('cIssue').value='';$('cFiles').value='';
   }catch(e){setMsg('cMsg','err',e.message);}
 }
 async function submitMaintenance(){

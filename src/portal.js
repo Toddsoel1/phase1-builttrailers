@@ -5,6 +5,8 @@
 import { all, one, q } from './db.js';
 import { writeFile, mkdir } from 'fs/promises';
 import path from 'path';
+import { notifyDealer } from './dealernotify.js';
+import { sendWarrantyWelcome } from './email.js';
 
 const REG_WINDOW_DAYS = 15;       // dealer must register within 15 days of sale
 const UPLOAD_DIR = process.env.UPLOAD_DIR || './uploads';
@@ -33,42 +35,94 @@ async function saveUpload(trailerId, dataUrl) {
   if (buf.length > MAX_UPLOAD) throw new Error('Proof-of-sale file is too large (max 10 MB).');
   const ext = (m[1].split('/')[1] || 'bin').replace(/[^a-z0-9]/gi, '').slice(0, 5);
   await mkdir(UPLOAD_DIR, { recursive: true });
-  const name = `${trailerId}-${Date.now()}.${ext}`;
+  const name = `${trailerId}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}.${ext}`;
   await writeFile(path.join(UPLOAD_DIR, name), buf);
   return `${UPLOAD_DIR}/${name}`;
 }
 
+// Save a list of attachments (photos / video / receipts) against a claim or
+// registration. Each item is { dataUrl, name, kind }. Returns how many saved.
+export async function saveAttachments(entityType, entityId, items, by) {
+  if (!Array.isArray(items)) return 0;
+  let n = 0;
+  for (const it of items.slice(0, 10)) {
+    if (!it || typeof it.dataUrl !== 'string' || !it.dataUrl.startsWith('data:')) continue;
+    const ct = (/^data:([^;]+)/.exec(it.dataUrl) || [])[1] || '';
+    const kind = it.kind || (ct.startsWith('video') ? 'video' : ct.startsWith('image') ? 'photo' : 'document');
+    let filePath = null;
+    try { filePath = await saveUpload(`${entityType}-${entityId}`, it.dataUrl); } catch { continue; }
+    if (!filePath) continue;
+    await q(`INSERT INTO attachment(entity_type,entity_id,kind,file_path,original_name,content_type,uploaded_by) VALUES($1,$2,$3,$4,$5,$6,$7)`,
+      [entityType, String(entityId), kind, filePath, it.name || null, ct || null, by || null]);
+    n++;
+  }
+  return n;
+}
+export async function attachmentsFor(entityType, entityId) {
+  return (await all('SELECT id,kind,file_path,original_name,created_at FROM attachment WHERE entity_type=$1 AND entity_id=$2 ORDER BY id', [entityType, String(entityId)]).catch(() => []))
+    .map(a => ({ id: a.id, kind: a.kind, path: a.file_path, name: a.original_name, at: a.created_at }));
+}
+
+// ---- document library (manuals, spec sheets, warranty terms) ----
+export async function addDocument({ title, modelId, category, dataUrl }, by) {
+  if (!title) throw new Error('A title is required.');
+  if (!dataUrl || !dataUrl.startsWith('data:')) throw new Error('Please choose a file.');
+  const filePath = await saveUpload('doc', dataUrl);
+  if (!filePath) throw new Error('Could not save the file.');
+  const ct = (/^data:([^;]+)/.exec(dataUrl) || [])[1] || null;
+  const r = await one(`INSERT INTO document(title,model_id,category,file_path,content_type,uploaded_by) VALUES($1,$2,$3,$4,$5,$6) RETURNING id`,
+    [title, modelId || null, category || null, filePath, ct, by || null]);
+  return { id: r.id };
+}
+export async function listDocuments() {
+  return (await all(`SELECT d.id,d.title,d.category,d.model_id,m.name AS model,d.created_at
+                       FROM document d LEFT JOIN model m ON m.id=d.model_id
+                      ORDER BY d.category NULLS FIRST, d.title`, []).catch(() => []))
+    .map(d => ({ id: d.id, title: d.title, category: d.category, modelId: d.model_id, model: d.model, at: d.created_at }));
+}
+export async function getDocumentPath(id) {
+  return one(`SELECT file_path AS path, content_type AS ct FROM document WHERE id=$1`, [id]);
+}
+export async function deleteDocument(id) { await q(`DELETE FROM document WHERE id=$1`, [id]); return { ok: true }; }
+
 export async function submitRegistration(data) {
   const { vin, ownerName, saleDate, warrantyAddress, email, phone, sellingDealer,
-          smsOptIn, emailOptIn, proofOfSale, source, termMonths } = data || {};
+          smsOptIn, emailOptIn, proofOfSale, source, termMonths, dealerCustomerId, attachments } = data || {};
   if (!vin) throw new Error('VIN is required.');
   if (!ownerName) throw new Error('Owner full name is required.');
   if (!saleDate) throw new Error('Date of purchase is required.');
   if (!email && !phone) throw new Error('An email or phone number is required.');
-  const t = await one(`SELECT id FROM trailer WHERE upper(vin)=upper($1)`, [String(vin).trim()]);
+  const t = await one(`SELECT id, customer_id FROM trailer WHERE upper(vin)=upper($1)`, [String(vin).trim()]);
   if (!t) throw new Error('That VIN was not found. Please check the 17-character VIN on your trailer.');
 
   const proofPath = (typeof proofOfSale === 'string' && proofOfSale.startsWith('data:')) ? await saveUpload(t.id, proofOfSale) : null;
   const w15 = within15(saleDate);
+  // Self-validation: a dealership registering one of its OWN VINs (we already know
+  // which VINs were sold to whom) within the 15-day window is auto-verified — no
+  // staff step. Everything the system can't confirm defaults to the manual queue,
+  // so dealers and owners are never blocked at submission time.
+  const vinMatchesDealer = source === 'dealer' && dealerCustomerId && t.customer_id && String(t.customer_id) === String(dealerCustomerId);
+  const status = (vinMatchesDealer && w15 === true) ? 'verified' : 'pending';
 
   await q(`INSERT INTO warranty_registration
       (trailer_id, owner_name, owner_contact, registered_at, term_months, email, phone, warranty_address,
        sale_date, selling_dealer, sms_opt_in, email_opt_in, proof_of_sale, verification_status, within_15_days, source, submitted_by)
-      VALUES ($1,$2,$3,now(),$4,$5,$6,$7,$8,$9,$10,$11,$12,'pending',$13,$14,$15)
+      VALUES ($1,$2,$3,now(),$4,$5,$6,$7,$8,$9,$10,$11,$12,$16,$13,$14,$15)
       ON CONFLICT(trailer_id) DO UPDATE SET owner_name=$2, owner_contact=$3, term_months=$4, email=$5, phone=$6,
         warranty_address=$7, sale_date=$8, selling_dealer=$9, sms_opt_in=$10, email_opt_in=$11,
-        proof_of_sale=COALESCE($12, warranty_registration.proof_of_sale), verification_status='pending',
+        proof_of_sale=COALESCE($12, warranty_registration.proof_of_sale), verification_status=$16,
         within_15_days=$13, source=$14, submitted_by=$15`,
     [t.id, ownerName, phone || email || null, Number(termMonths) || 12, email || null, phone || null, warrantyAddress || null,
-     saleDate, sellingDealer || null, !!smsOptIn, !!emailOptIn, proofPath, w15, source || 'owner', ownerName]);
+     saleDate, sellingDealer || null, !!smsOptIn, !!emailOptIn, proofPath, w15, source || 'owner', ownerName, status]);
 
   // NOTE: opt-in delivery of the maintenance schedule / T&Cs / app link is captured here;
   // SMS uses the existing Twilio path, email delivery needs an email provider (flagged).
-  return { ok: true, within15: w15, status: 'pending' };
+  await saveAttachments('registration', t.id, attachments, ownerName);
+  return { ok: true, within15: w15, status, autoVerified: status === 'verified' };
 }
 
 export async function submitPublicClaim(data) {
-  const { vin, issue, submittedBy, contact } = data || {};
+  const { vin, issue, submittedBy, contact, attachments } = data || {};
   if (!vin) throw new Error('VIN is required.');
   if (!issue) throw new Error('Please describe the issue.');
   const t = await one(`SELECT id FROM trailer WHERE upper(vin)=upper($1)`, [String(vin).trim()]);
@@ -76,7 +130,8 @@ export async function submitPublicClaim(data) {
   const id = 'WC-' + (5001 + (await all('SELECT id FROM warranty_claim', [])).length);
   await q(`INSERT INTO warranty_claim(id,trailer_id,issue,source,submitted_by,contact) VALUES($1,$2,$3,'portal',$4,$5)`,
     [id, t.id, issue, submittedBy || null, contact || null]);
-  return { id };
+  const photos = await saveAttachments('claim', id, attachments, submittedBy);
+  return { id, attachments: photos };
 }
 
 export async function submitMaintenance(data) {
@@ -112,6 +167,16 @@ export async function reviewRegistration(trailerId, decision) {
   if (!await one('SELECT trailer_id FROM warranty_registration WHERE trailer_id=$1', [trailerId])) throw new Error('registration not found');
   const status = decision === 'approve' ? 'verified' : 'rejected';
   await q(`UPDATE warranty_registration SET verification_status=$1 WHERE trailer_id=$2`, [status, trailerId]);
+  const t = await one('SELECT customer_id, vin FROM trailer WHERE id=$1', [trailerId]);
+  if (t) await notifyDealer(t.customer_id, 'registration', `Warranty registration for VIN ${t.vin} was ${status === 'verified' ? 'verified' : 'rejected'}.`, t.vin);
+  // Opt-in welcome email once the warranty is verified (no-ops until RESEND_API_KEY is set).
+  if (status === 'verified' && t) {
+    const reg = await one('SELECT owner_name, email, email_opt_in FROM warranty_registration WHERE trailer_id=$1', [trailerId]);
+    if (reg?.email && reg.email_opt_in) {
+      const m = await one('SELECT m.name AS model FROM trailer tr LEFT JOIN model m ON m.id=tr.model_id WHERE tr.id=$1', [trailerId]);
+      try { await sendWarrantyWelcome({ email: reg.email, ownerName: reg.owner_name, vin: t.vin, model: m?.model }); } catch (e) { console.warn('welcome email:', e.message); }
+    }
+  }
   return { status };
 }
 

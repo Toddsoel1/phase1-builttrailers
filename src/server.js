@@ -30,6 +30,8 @@ import * as invoicing from './invoicing.js';
 import * as trailers from './trailers.js';
 import * as warranty from './warranty.js';
 import * as portal from './portal.js';
+import * as dealer from './dealer.js';
+import * as dealernotify from './dealernotify.js';
 
 // Crash fast if JWT_SECRET is unset in production — predictable fallback is a critical vuln
 if (!process.env.JWT_SECRET) {
@@ -194,6 +196,52 @@ app.post('/api/public/maintenance', portalLimiter, async (req, res) => {
   try { res.json(await portal.submitMaintenance(req.body || {})); }
   catch (e) { res.status(400).json({ error: e.message }); }
 });
+
+// ---- Dealership portal (dealership.builttrailers.app) ----
+app.get('/dealer', (_req, res) => res.sendFile(path.join(__dir, '..', 'public', 'dealership.html')));
+app.post('/api/dealer/signup', portalLimiter, async (req, res) => {
+  try { res.json(await dealer.signup(req.body || {})); } catch (e) { res.status(400).json({ error: e.message }); }
+});
+app.post('/api/dealer/login', loginLimiter, async (req, res) => {
+  try { res.json(await dealer.login(req.body || {})); } catch (e) { res.status(401).json({ error: e.message }); }
+});
+app.get('/api/dealer/me', dealer.dealerAuth, async (req, res) => res.json(await dealer.me(req.dealer)));
+app.post('/api/dealer/register', dealer.dealerAuth, async (req, res) => {
+  try { res.json(await dealer.registerTrailer(req.dealer, req.body || {})); } catch (e) { res.status(400).json({ error: e.message }); }
+});
+app.get('/api/dealer/registrations', dealer.dealerAuth, async (req, res) => res.json(await dealer.myRegistrations(req.dealer)));
+app.get('/api/dealer/claims', dealer.dealerAuth, async (req, res) => res.json(await dealer.myClaims(req.dealer)));
+app.post('/api/dealer/claim', dealer.dealerAuth, async (req, res) => {
+  try { res.json(await portal.submitPublicClaim({ ...req.body, submittedBy: req.dealer.name })); } catch (e) { res.status(400).json({ error: e.message }); }
+});
+app.get('/api/dealer/models', dealer.dealerAuth, async (req, res) => res.json(await dealer.orderableModels(req.dealer)));
+app.get('/api/dealer/orders', dealer.dealerAuth, async (req, res) => res.json(await dealer.myOrders(req.dealer)));
+app.post('/api/dealer/orders', dealer.dealerAuth, async (req, res) => {
+  try { res.json(await dealer.placeOrder(req.dealer, req.body || {})); } catch (e) { res.status(400).json({ error: e.message }); }
+});
+app.get('/api/dealer/notifications', dealer.dealerAuth, async (req, res) => res.json(await dealernotify.myNotifications(req.dealer)));
+app.post('/api/dealer/notifications/read', dealer.dealerAuth, async (req, res) => res.json(await dealernotify.markRead(req.dealer)));
+app.get('/api/dealer/invoices', dealer.dealerAuth, async (req, res) => res.json(await dealer.myInvoices(req.dealer)));
+app.get('/api/dealer/team', dealer.dealerAuth, async (req, res) => res.json(await dealer.team(req.dealer)));
+
+// ---- Document library (manuals, spec sheets, warranty terms) ----
+app.get('/api/public/documents', portalLimiter, async (_req, res) => res.json(await portal.listDocuments()));
+app.get('/api/public/document/:id', portalLimiter, async (req, res) => {
+  const doc = await portal.getDocumentPath(req.params.id);
+  if (!doc) return res.status(404).json({ error: 'not found' });
+  const base = path.resolve(process.env.UPLOAD_DIR || './uploads');
+  const abs = path.resolve(doc.path);
+  if (!abs.startsWith(base)) return res.status(400).json({ error: 'invalid path' });
+  res.sendFile(abs, err => { if (err) res.status(404).end(); });
+});
+app.post('/api/documents', authMiddleware, requireTier('admin'), async (req, res) => {
+  try { const r = await portal.addDocument(req.body || {}, req.user.id); await audit(req, 'doc.add', `${r.id} ${req.body?.title || ''}`); res.json(r); }
+  catch (e) { res.status(400).json({ error: e.message }); }
+});
+app.delete('/api/documents/:id', authMiddleware, requireTier('admin'), async (req, res) => {
+  try { res.json(await portal.deleteDocument(req.params.id)); } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
 app.get('/t&cs',    (_req, res) => res.sendFile(path.join(__dir, '..', 'public', 'terms.html')));
 
 // ---- health ----
@@ -667,6 +715,7 @@ app.patch('/api/orders/:id/stage', authMiddleware, requireTier('editor'), async 
   if (stage === 'Ready / Shipped' && !cur.consumed) await consumeInventory(req.params.id, req.user.id);
   await audit(req, 'order.stage', `${req.params.id} -> ${stage}`);
   await sms.notifyOrderStage(req.params.id, stage, req.user.id); // Phase 6: text the customer
+  await dealernotify.notifyDealer(cur.customer_id, 'order', `Order ${req.params.id} is now "${stage}".`, req.params.id);
   res.json({ ok: true });
 });
 
@@ -952,6 +1001,11 @@ app.post('/api/briefing/run', authMiddleware, requireTier('admin'), async (req, 
     res.json(r);
   } catch (e) { res.status(500).json({ error: String(e.message || e) }); }
 });
+// Run the weekly verification-queue prompt now (admin; also runs automatically weekly)
+app.post('/api/jobs/verify-prompt', authMiddleware, requireTier('admin'), async (req, res) => {
+  try { const r = await runVerifyPrompt(); await audit(req, 'verify.prompt', `manual: ${r.total} pending, sent ${r.sent}`); res.json(r); }
+  catch (e) { res.status(500).json({ error: String(e.message || e) }); }
+});
 
 // ---- Invoice batches (group a dealer's trailers onto one invoice) ----
 app.get('/api/invoice-batches', authMiddleware, async (_req, res) => res.json(await invoicing.listBatches()));
@@ -1074,6 +1128,20 @@ app.get('/api/warranty/proof', authMiddleware, requireSection('trailers'), async
   if (!abs.startsWith(base)) return res.status(400).json({ error: 'invalid path' });
   res.sendFile(abs, err => { if (err) res.status(404).json({ error: 'not found' }); });
 });
+// Staff review of dealership account signups
+app.get('/api/dealers/pending', authMiddleware, requireSection('trailers'), async (_req, res) =>
+  res.json(await dealer.pendingDealers()));
+app.post('/api/dealers/:id/approve', authMiddleware, requireTier('editor'), requireSection('trailers'), async (req, res) => {
+  try {
+    await dealer.approveDealer(req.params.id, req.body?.customerId);
+    await audit(req, 'dealer.approve', `${req.params.id} -> ${req.body?.customerId || '(no link)'}`);
+    res.json({ ok: true });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+app.post('/api/dealers/:id/reject', authMiddleware, requireTier('editor'), requireSection('trailers'), async (req, res) => {
+  try { await dealer.rejectDealer(req.params.id); await audit(req, 'dealer.reject', req.params.id); res.json({ ok: true }); }
+  catch (e) { res.status(400).json({ error: e.message }); }
+});
 
 // ---- audit ----
 app.get('/api/audit', authMiddleware, requireTier('admin'), async (_req, res) =>
@@ -1143,8 +1211,16 @@ app.delete('/api/support/tickets/:id', authMiddleware, requireTier('admin'), asy
 });
 
 // ---- static UI (must be last) ----
-app.use(express.static(path.join(__dir, '..', 'public')));
-app.get('*', (_req, res) => res.sendFile(path.join(__dir, '..', 'public', 'index.html')));
+// Serve static assets, but NOT the auto-index — so "/" falls through to the
+// subdomain-aware handler below (owner.* and dealership.* get their own front door).
+app.use(express.static(path.join(__dir, '..', 'public'), { index: false }));
+function portalPageFor(req) {
+  const sub = String(req.hostname || '').split('.')[0].toLowerCase();
+  if (sub === 'owner') return 'register.html';                 // owner.builttrailers.app
+  if (sub === 'dealership' || sub === 'dealer') return 'dealership.html'; // dealership.builttrailers.app
+  return 'index.html';                                          // app.builttrailers.app (staff)
+}
+app.get('*', (req, res) => res.sendFile(path.join(__dir, '..', 'public', portalPageFor(req))));
 
 // ---- final error handler (4-arg, must be registered after all routes) ----
 // Catches synchronous throws and (via express-async-errors) async route rejections.
@@ -1218,6 +1294,11 @@ if (kind === 'postgres' || kind === 'pglite') {
     `ALTER TABLE warranty_claim ADD COLUMN IF NOT EXISTS submitted_by TEXT`,
     `ALTER TABLE warranty_claim ADD COLUMN IF NOT EXISTS contact TEXT`,
     `CREATE TABLE IF NOT EXISTS maintenance_record (id SERIAL PRIMARY KEY, trailer_id TEXT NOT NULL, item TEXT NOT NULL, performed_on DATE, note TEXT, source TEXT, submitted_by TEXT, created_at TIMESTAMPTZ NOT NULL DEFAULT now())`,
+    `CREATE TABLE IF NOT EXISTS dealer_user (id TEXT PRIMARY KEY, email TEXT UNIQUE NOT NULL, password_hash TEXT NOT NULL, name TEXT, dealership_name TEXT, customer_id TEXT, status TEXT NOT NULL DEFAULT 'pending', created_at TIMESTAMPTZ NOT NULL DEFAULT now(), approved_by TEXT, approved_at TIMESTAMPTZ)`,
+    `CREATE TABLE IF NOT EXISTS attachment (id SERIAL PRIMARY KEY, entity_type TEXT NOT NULL, entity_id TEXT NOT NULL, kind TEXT, file_path TEXT NOT NULL, original_name TEXT, content_type TEXT, uploaded_by TEXT, created_at TIMESTAMPTZ NOT NULL DEFAULT now())`,
+    `CREATE INDEX IF NOT EXISTS idx_attach_entity ON attachment(entity_type, entity_id)`,
+    `CREATE TABLE IF NOT EXISTS dealer_notification (id SERIAL PRIMARY KEY, customer_id TEXT NOT NULL, kind TEXT, body TEXT NOT NULL, ref TEXT, read BOOLEAN NOT NULL DEFAULT false, created_at TIMESTAMPTZ NOT NULL DEFAULT now())`,
+    `CREATE TABLE IF NOT EXISTS document (id SERIAL PRIMARY KEY, title TEXT NOT NULL, model_id TEXT, category TEXT, file_path TEXT NOT NULL, content_type TEXT, uploaded_by TEXT, created_at TIMESTAMPTZ NOT NULL DEFAULT now())`,
   ];
   // Migrate existing app_user.title into user_title junction (idempotent)
   await q(`INSERT INTO user_title(user_id,role_name)
@@ -1278,9 +1359,44 @@ async function maybeRunBriefing() {
     console.log(`Morning briefing (${today}): sent ${r.sent}, skipped ${r.skipped}, errors ${r.errors}.`);
   } catch (e) { console.warn('briefing scheduler:', e.message); }
 }
+
+// Weekly nudge to staff to clear the manual-verification queue (pending portal
+// registrations, dealer-account approvals, open warranty claims) — so the
+// auto-verify-or-queue backlog never goes stale, without slowing dealers/owners.
+const VERIFY_PROMPT_HOUR = Number(process.env.VERIFY_PROMPT_HOUR || 8);
+const VERIFY_PROMPT_DOW = process.env.VERIFY_PROMPT_DOW || 'Mon';
+const weekdayIn = tz => new Intl.DateTimeFormat('en-US', { timeZone: tz, weekday: 'short' }).format(new Date());
+async function runVerifyPrompt() {
+  const [regs, dealers, claims] = await Promise.all([
+    portal.pendingRegistrationCount(), dealer.pendingDealerCount(), warranty.openClaimCount(),
+  ]);
+  const total = regs + dealers + claims;
+  let sent = 0;
+  if (total > 0) {
+    const body = `Built Trailers — weekly verification queue: ${regs} registration(s) to verify, ${dealers} dealer account(s) to approve, ${claims} open warranty claim(s). Please clear these this week.`;
+    const staff = await all(`SELECT phone FROM app_user WHERE active<>false AND sms_consent=true AND phone IS NOT NULL AND phone<>'' AND role IN ('admin','editor')`, []).catch(() => []);
+    for (const s of staff) { try { await sms.send({ recipient: s.phone, body, kind: 'verify-prompt' }, null); sent++; } catch {} }
+  }
+  return { regs, dealers, claims, total, sent };
+}
+async function maybeRunVerifyPrompt() {
+  try {
+    const p = partsIn(BRIEFING_TZ);
+    if (Number(p.hour) < VERIFY_PROMPT_HOUR || weekdayIn(BRIEFING_TZ) !== VERIFY_PROMPT_DOW) return;
+    const today = `${p.year}-${p.month}-${p.day}`;
+    const last = await one(`SELECT value FROM app_config WHERE key='verify_prompt_last_run'`, []).catch(() => null);
+    if (last && last.value === today) return;
+    await q(`INSERT INTO app_config(key,value) VALUES('verify_prompt_last_run',$1) ON CONFLICT(key) DO UPDATE SET value=$1`, [today]);
+    const r = await runVerifyPrompt();
+    console.log(`Weekly verify prompt (${today}): ${r.regs}+${r.dealers}+${r.claims} pending, texted ${r.sent} staff.`);
+  } catch (e) { console.warn('verify prompt:', e.message); }
+}
 if (kind === 'postgres' && process.env.BRIEFING_DISABLED !== 'true') {
   setInterval(maybeRunBriefing, 5 * 60 * 1000);           // re-check every 5 minutes
   setTimeout(maybeRunBriefing, 15 * 1000);                // and once shortly after boot
+}
+if (kind === 'postgres' && process.env.VERIFY_PROMPT_DISABLED !== 'true') {
+  setInterval(maybeRunVerifyPrompt, 30 * 60 * 1000);      // weekly job, checked every 30 min
 }
 
 app.listen(PORT, () => console.log(`Built Trailers Phase 1 API on :${PORT} (db: ${kind})`));

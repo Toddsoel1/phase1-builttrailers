@@ -18,6 +18,7 @@ export async function authMiddleware(req, res, next) {
   if (!tok) return res.status(401).json({ error: 'Not authenticated' });
   try {
     const payload = jwt.verify(tok, JWT_SECRET);
+    if (payload.kind === 'dealer') return res.status(403).json({ error: 'Staff access required' });
     const u = await one('SELECT id,name,username,title,role,manager_id FROM app_user WHERE id=$1', [payload.id]);
     if (!u) return res.status(401).json({ error: 'User not found' });
     req.user = u;
