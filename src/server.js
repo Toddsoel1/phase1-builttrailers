@@ -30,6 +30,7 @@ import * as invoicing from './invoicing.js';
 import * as trailers from './trailers.js';
 import * as warranty from './warranty.js';
 import * as portal from './portal.js';
+import * as dealer from './dealer.js';
 
 // Crash fast if JWT_SECRET is unset in production — predictable fallback is a critical vuln
 if (!process.env.JWT_SECRET) {
@@ -194,6 +195,25 @@ app.post('/api/public/maintenance', portalLimiter, async (req, res) => {
   try { res.json(await portal.submitMaintenance(req.body || {})); }
   catch (e) { res.status(400).json({ error: e.message }); }
 });
+
+// ---- Dealership portal (dealership.builttrailers.app) ----
+app.get('/dealer', (_req, res) => res.sendFile(path.join(__dir, '..', 'public', 'dealership.html')));
+app.post('/api/dealer/signup', portalLimiter, async (req, res) => {
+  try { res.json(await dealer.signup(req.body || {})); } catch (e) { res.status(400).json({ error: e.message }); }
+});
+app.post('/api/dealer/login', loginLimiter, async (req, res) => {
+  try { res.json(await dealer.login(req.body || {})); } catch (e) { res.status(401).json({ error: e.message }); }
+});
+app.get('/api/dealer/me', dealer.dealerAuth, async (req, res) => res.json(await dealer.me(req.dealer)));
+app.post('/api/dealer/register', dealer.dealerAuth, async (req, res) => {
+  try { res.json(await dealer.registerTrailer(req.dealer, req.body || {})); } catch (e) { res.status(400).json({ error: e.message }); }
+});
+app.get('/api/dealer/registrations', dealer.dealerAuth, async (req, res) => res.json(await dealer.myRegistrations(req.dealer)));
+app.get('/api/dealer/claims', dealer.dealerAuth, async (req, res) => res.json(await dealer.myClaims(req.dealer)));
+app.post('/api/dealer/claim', dealer.dealerAuth, async (req, res) => {
+  try { res.json(await portal.submitPublicClaim({ ...req.body, submittedBy: req.dealer.name })); } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
 app.get('/t&cs',    (_req, res) => res.sendFile(path.join(__dir, '..', 'public', 'terms.html')));
 
 // ---- health ----
@@ -1074,6 +1094,20 @@ app.get('/api/warranty/proof', authMiddleware, requireSection('trailers'), async
   if (!abs.startsWith(base)) return res.status(400).json({ error: 'invalid path' });
   res.sendFile(abs, err => { if (err) res.status(404).json({ error: 'not found' }); });
 });
+// Staff review of dealership account signups
+app.get('/api/dealers/pending', authMiddleware, requireSection('trailers'), async (_req, res) =>
+  res.json(await dealer.pendingDealers()));
+app.post('/api/dealers/:id/approve', authMiddleware, requireTier('editor'), requireSection('trailers'), async (req, res) => {
+  try {
+    await dealer.approveDealer(req.params.id, req.body?.customerId);
+    await audit(req, 'dealer.approve', `${req.params.id} -> ${req.body?.customerId || '(no link)'}`);
+    res.json({ ok: true });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+app.post('/api/dealers/:id/reject', authMiddleware, requireTier('editor'), requireSection('trailers'), async (req, res) => {
+  try { await dealer.rejectDealer(req.params.id); await audit(req, 'dealer.reject', req.params.id); res.json({ ok: true }); }
+  catch (e) { res.status(400).json({ error: e.message }); }
+});
 
 // ---- audit ----
 app.get('/api/audit', authMiddleware, requireTier('admin'), async (_req, res) =>
@@ -1143,8 +1177,16 @@ app.delete('/api/support/tickets/:id', authMiddleware, requireTier('admin'), asy
 });
 
 // ---- static UI (must be last) ----
-app.use(express.static(path.join(__dir, '..', 'public')));
-app.get('*', (_req, res) => res.sendFile(path.join(__dir, '..', 'public', 'index.html')));
+// Serve static assets, but NOT the auto-index — so "/" falls through to the
+// subdomain-aware handler below (owner.* and dealership.* get their own front door).
+app.use(express.static(path.join(__dir, '..', 'public'), { index: false }));
+function portalPageFor(req) {
+  const sub = String(req.hostname || '').split('.')[0].toLowerCase();
+  if (sub === 'owner') return 'register.html';                 // owner.builttrailers.app
+  if (sub === 'dealership' || sub === 'dealer') return 'dealership.html'; // dealership.builttrailers.app
+  return 'index.html';                                          // app.builttrailers.app (staff)
+}
+app.get('*', (req, res) => res.sendFile(path.join(__dir, '..', 'public', portalPageFor(req))));
 
 // ---- final error handler (4-arg, must be registered after all routes) ----
 // Catches synchronous throws and (via express-async-errors) async route rejections.
@@ -1218,6 +1260,7 @@ if (kind === 'postgres' || kind === 'pglite') {
     `ALTER TABLE warranty_claim ADD COLUMN IF NOT EXISTS submitted_by TEXT`,
     `ALTER TABLE warranty_claim ADD COLUMN IF NOT EXISTS contact TEXT`,
     `CREATE TABLE IF NOT EXISTS maintenance_record (id SERIAL PRIMARY KEY, trailer_id TEXT NOT NULL, item TEXT NOT NULL, performed_on DATE, note TEXT, source TEXT, submitted_by TEXT, created_at TIMESTAMPTZ NOT NULL DEFAULT now())`,
+    `CREATE TABLE IF NOT EXISTS dealer_user (id TEXT PRIMARY KEY, email TEXT UNIQUE NOT NULL, password_hash TEXT NOT NULL, name TEXT, dealership_name TEXT, customer_id TEXT, status TEXT NOT NULL DEFAULT 'pending', created_at TIMESTAMPTZ NOT NULL DEFAULT now(), approved_by TEXT, approved_at TIMESTAMPTZ)`,
   ];
   // Migrate existing app_user.title into user_title junction (idempotent)
   await q(`INSERT INTO user_title(user_id,role_name)

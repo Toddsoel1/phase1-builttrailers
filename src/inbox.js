@@ -75,6 +75,9 @@ export async function actionItemsFor(user) {
     const pr = await count(`SELECT COUNT(*)::int AS n FROM warranty_registration WHERE verification_status='pending'`);
     if (pr) items.push({ key: 'warranty_regs', icon: '📝',
       label: `${plural(pr, 'warranty registration')} to verify`, count: pr, link: 'trailers' });
+    const dl = await count(`SELECT COUNT(*)::int AS n FROM dealer_user WHERE status='pending'`);
+    if (dl) items.push({ key: 'dealer_signups', icon: '🤝',
+      label: `${plural(dl, 'dealership account')} to approve`, count: dl, link: 'trailers' });
   }
 
   // 6. Time-off requests from MY direct reports waiting on my approval

@@ -1686,7 +1686,7 @@ async function viewTrailers(){
   $('pTitle').textContent='Trailers & Warranty';
   $('pSub').textContent='Per-trailer VINs, build history, and warranty';
   $('pActions').innerHTML=canSee('accounting')?`<button class="btn sec" onclick="vinSettings()">⚙ VIN Settings</button>`:'';
-  let pendN=0; try{ pendN=(await api('/api/warranty/registrations/pending')).length; }catch(e){}
+  let pendN=0; try{ const [pr,dl]=await Promise.all([api('/api/warranty/registrations/pending'),api('/api/dealers/pending').catch(()=>[])]); pendN=pr.length+dl.length; }catch(e){}
   const tabs=`<div class="tabs" style="margin-bottom:12px">
     <button class="${trailerTab==='vins'?'active':''}" onclick="trailerTab='vins';viewTrailers()">🏷️ VINs</button>
     <button class="${trailerTab==='dealer'?'active':''}" onclick="trailerTab='dealer';viewTrailers()">🏬 By Dealer</button>
@@ -1702,10 +1702,26 @@ async function viewTrailers(){
   $('content').innerHTML=tabs+body;
 }
 async function trailersRegsTab(){
-  const pend=await api('/api/warranty/registrations/pending');
+  const [pend,dealers,custs]=await Promise.all([
+    api('/api/warranty/registrations/pending'),
+    api('/api/dealers/pending').catch(()=>[]),
+    api('/api/customers').catch(()=>[])
+  ]);
   const canReview=canEdit();
-  if(!pend.length) return `<div class="card"><p class="muted">No registrations awaiting verification. Submissions from the public <b>/register</b> portal appear here for review.</p></div>`;
-  return `<div class="card"><h3>Registrations awaiting verification <span class="badge b-low">${pend.length}</span></h3>
+  const dealerOpts=`<option value="">— link to dealer record —</option>`+custs.map(c=>`<option value="${esc(c.id)}">${esc(c.name)}</option>`).join('');
+  const dealerCard=dealers.length?`<div class="card" style="margin-bottom:16px;border-color:var(--accent)">
+    <h3>🤝 Dealer accounts to approve <span class="badge b-low">${dealers.length}</span></h3>
+    <p class="muted" style="font-size:12px;margin-bottom:10px">Approve a dealership's sign-up and link it to their dealer record, so their registrations and units appear under their account.</p>
+    <table><thead><tr><th>Dealership</th><th>Contact</th><th>Link to dealer record</th>${canReview?'<th></th>':''}</tr></thead><tbody>
+    ${dealers.map(d=>`<tr>
+      <td><b>${esc(d.dealershipName||'')}</b></td>
+      <td style="font-size:12px">${esc(d.name||'')}<br><span class="muted">${esc(d.email||'')}</span></td>
+      <td>${canReview?`<select id="dl_${esc(d.id)}" style="max-width:220px">${dealerOpts}</select>`:'<span class="muted">—</span>'}</td>
+      ${canReview?`<td style="white-space:nowrap"><button class="btn sm" onclick="approveDealerAcct('${esc(d.id)}')">✓ Approve</button> <button class="btn sm sec" onclick="rejectDealerAcct('${esc(d.id)}')">✕</button></td>`:''}
+    </tr>`).join('')}
+    </tbody></table></div>`:'';
+  const regCard=!pend.length?`<div class="card"><p class="muted">No warranty registrations awaiting verification. Submissions from the owner &amp; dealer portals appear here for review.</p></div>`
+    :`<div class="card"><h3>Registrations awaiting verification <span class="badge b-low">${pend.length}</span></h3>
     <p class="muted" style="font-size:12px;margin-bottom:10px">Verify the purchase date against the uploaded proof of sale, then approve or reject. Flagged ⚠️ = submitted outside the 15-day window.</p>
     <table><thead><tr><th>VIN</th><th>Owner</th><th>Sale date</th><th>Contact</th><th>Proof</th><th>15-day</th>${canReview?'<th></th>':''}</tr></thead><tbody>
     ${pend.map(r=>`<tr>
@@ -1718,6 +1734,17 @@ async function trailersRegsTab(){
       ${canReview?`<td style="white-space:nowrap"><button class="btn sm" onclick="reviewReg('${esc(r.trailerId)}','approve')">✓</button> <button class="btn sm sec" onclick="reviewReg('${esc(r.trailerId)}','reject')">✕</button></td>`:''}
     </tr>`).join('')}
     </tbody></table></div>`;
+  return dealerCard+regCard;
+}
+async function approveDealerAcct(id){
+  const sel=$('dl_'+id), customerId=sel?sel.value:'';
+  if(!customerId && !confirm('Approve without linking to a dealer record? Their units will not show until linked.')) return;
+  try{ await api('/api/dealers/'+encodeURIComponent(id)+'/approve',{method:'POST',body:JSON.stringify({customerId:customerId||undefined})}); toast('Dealership approved'); viewTrailers(); }
+  catch(e){ toast(e.message); }
+}
+async function rejectDealerAcct(id){
+  try{ await api('/api/dealers/'+encodeURIComponent(id)+'/reject',{method:'POST'}); toast('Dealership rejected'); viewTrailers(); }
+  catch(e){ toast(e.message); }
 }
 async function reviewReg(trailerId,decision,fromModal){
   try{ await api('/api/warranty/registrations/'+encodeURIComponent(trailerId)+'/review',{method:'POST',body:JSON.stringify({decision})});
