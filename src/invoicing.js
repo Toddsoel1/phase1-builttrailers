@@ -7,6 +7,7 @@
 // trailer is never invoiced twice. Lifecycle: Draft -> Invoiced -> Paid.
 import { all, one, q } from './db.js';
 import { postInvoice } from './accounting.js';
+import { assignVinsForOrder } from './trailers.js';
 
 async function nextBatchId() {
   const n = (await all('SELECT id FROM invoice_batch', [])).length;
@@ -125,6 +126,11 @@ export async function postBatchInvoice(batchId, user) {
   if (b.status !== 'Draft') throw new Error('batch has already been invoiced');
   const orders = await all('SELECT id FROM sales_order WHERE invoice_batch_id=$1', [batchId]);
   if (!orders.length) throw new Error('batch has no orders to invoice');
+  // Issue VINs for any trailers that don't have one yet, so the invoice never
+  // goes out with a "VIN pending" line.
+  for (const o of orders) {
+    try { await assignVinsForOrder(o.id, user); } catch { /* non-fatal: invoice still posts */ }
+  }
   const total = await batchTotal(batchId);
   // One QuickBooks line per trailer, with its VIN in the description.
   const { lineItems } = await getBatch(batchId);

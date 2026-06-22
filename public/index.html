@@ -1649,7 +1649,7 @@ async function printBatchInvoice(id){
   w.document.write(html); w.document.close(); w.focus(); setTimeout(()=>{try{w.print();}catch(e){}},350);
 }
 async function postBatch(id){
-  if(!confirm('Post ONE combined invoice for this batch? Every trailer in it will be marked billed.')) return;
+  if(!confirm('Post ONE combined invoice for this batch? Any trailers without a VIN will be issued one, and every trailer will be marked billed.')) return;
   try{ await api('/api/invoice-batches/'+encodeURIComponent(id)+'/post',{method:'POST'}); $('modalBg').remove(); toast('Invoice posted'); viewAccounting(); }
   catch(e){ toast(e.message); }
 }
