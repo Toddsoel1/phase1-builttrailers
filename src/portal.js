@@ -6,6 +6,7 @@ import { all, one, q } from './db.js';
 import { writeFile, mkdir } from 'fs/promises';
 import path from 'path';
 import { notifyDealer } from './dealernotify.js';
+import { sendWarrantyWelcome } from './email.js';
 
 const REG_WINDOW_DAYS = 15;       // dealer must register within 15 days of sale
 const UPLOAD_DIR = process.env.UPLOAD_DIR || './uploads';
@@ -168,6 +169,14 @@ export async function reviewRegistration(trailerId, decision) {
   await q(`UPDATE warranty_registration SET verification_status=$1 WHERE trailer_id=$2`, [status, trailerId]);
   const t = await one('SELECT customer_id, vin FROM trailer WHERE id=$1', [trailerId]);
   if (t) await notifyDealer(t.customer_id, 'registration', `Warranty registration for VIN ${t.vin} was ${status === 'verified' ? 'verified' : 'rejected'}.`, t.vin);
+  // Opt-in welcome email once the warranty is verified (no-ops until RESEND_API_KEY is set).
+  if (status === 'verified' && t) {
+    const reg = await one('SELECT owner_name, email, email_opt_in FROM warranty_registration WHERE trailer_id=$1', [trailerId]);
+    if (reg?.email && reg.email_opt_in) {
+      const m = await one('SELECT m.name AS model FROM trailer tr LEFT JOIN model m ON m.id=tr.model_id WHERE tr.id=$1', [trailerId]);
+      try { await sendWarrantyWelcome({ email: reg.email, ownerName: reg.owner_name, vin: t.vin, model: m?.model }); } catch (e) { console.warn('welcome email:', e.message); }
+    }
+  }
   return { status };
 }
 

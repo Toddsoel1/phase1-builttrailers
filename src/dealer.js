@@ -98,10 +98,11 @@ export async function placeOrder(d, { modelId, qty, due }) {
   const id = 'SO-' + (1049 + (await all('SELECT id FROM sales_order', [])).length);
   const seq = await one('SELECT COALESCE(MAX(production_seq),0)+1 AS n FROM sales_order', []);
   const cust = await one('SELECT rep_id FROM customer WHERE id=$1', [d.customer_id]);
+  // Dealer orders enter as Quote = pending Built Trailers sales approval.
   await q(`INSERT INTO sales_order(id,customer_id,model_id,qty,stage,due,deposit,channel,rep_id,production_seq)
-           VALUES($1,$2,$3,$4,'Confirmed',$5,0,'Dealer Portal',$6,$7)`,
+           VALUES($1,$2,$3,$4,'Quote',$5,0,'Dealer Portal',$6,$7)`,
     [id, d.customer_id, modelId, Math.max(1, Number(qty) || 1), due || null, cust?.rep_id || null, seq?.n || 1]);
-  return { id };
+  return { id, status: 'Pending approval' };
 }
 export async function myOrders(d) {
   if (!d.customer_id) return [];

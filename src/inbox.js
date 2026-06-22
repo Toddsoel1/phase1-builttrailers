@@ -65,6 +65,10 @@ export async function actionItemsFor(user) {
           AND due IS NOT NULL AND due <= (CURRENT_DATE + INTERVAL '7 days')`);
     if (n) items.push({ key: 'orders_due', icon: '📋',
       label: `${plural(n, 'order')} due within 7 days`, count: n, link: 'orders' });
+    // Dealer-portal orders awaiting Built Trailers sales approval
+    const da = await count(`SELECT COUNT(*)::int AS n FROM sales_order WHERE stage='Quote' AND channel='Dealer Portal'`);
+    if (da) items.push({ key: 'dealer_orders', icon: '🛒',
+      label: `${plural(da, 'dealer order')} awaiting approval`, count: da, link: 'orders' });
   }
 
   // 5b. Open warranty claims + portal registrations awaiting verification (trailers section)

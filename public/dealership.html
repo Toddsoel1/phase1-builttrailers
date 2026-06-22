@@ -182,6 +182,7 @@ async function loadInvoices(){
     $('invBody').innerHTML=`<div class="row" style="margin-bottom:14px">
       <div class="card" style="margin:0;background:#fff6ec;border-color:#ffe0bf"><div class="lead" style="margin:0">Balance due</div><div style="font-size:24px;font-weight:800;color:#8a5200">$${Math.round(r.owed).toLocaleString()}</div></div>
       <div class="card" style="margin:0;background:#e8f6ee;border-color:#b6e2c6"><div class="lead" style="margin:0">Paid</div><div style="font-size:24px;font-weight:800;color:#1a7f4b">$${Math.round(r.paid).toLocaleString()}</div></div></div>
+      <div class="note" style="margin-bottom:12px">This is a summary of your account. Invoices are billed and paid through Built Trailers' normal QuickBooks billing — there's nothing to pay here.</div>
       ${r.invoices.length?`<table><thead><tr><th>Invoice</th><th>Status</th><th class="r" style="text-align:right">Total</th><th>Date</th></tr></thead><tbody>
       ${r.invoices.map(i=>`<tr><td><b>${i.id}</b></td><td>${i.status==='Paid'?'<span class="badge b-ok">Paid</span>':'<span class="badge b-pend">Invoiced</span>'}</td><td style="text-align:right">$${Math.round(i.total).toLocaleString()}</td><td class="muted" style="font-size:12px">${i.invoicedAt?new Date(i.invoicedAt).toLocaleDateString():''}</td></tr>`).join('')}
       </tbody></table>`:'<p class="lead">No invoices yet.</p>'}`;
@@ -233,7 +234,7 @@ function enterDash(){
   showDash('orders');refreshNotifBadge();
 }
 let _models=[];
-function orderStatus(s){return `<span class="badge ${s==='Ready / Shipped'?'b-ok':'b-pend'}">${s||''}</span>`;}
+function orderStatus(s){const label=s==='Quote'?'Pending approval':s;return `<span class="badge ${s==='Ready / Shipped'?'b-ok':'b-pend'}">${label||''}</span>`;}
 async function loadOrders(){
   try{
     if(!_models.length){ _models=await api('/api/dealer/models'); $('oModel').innerHTML=_models.length?_models.map(m=>`<option value="${m.id}">${m.name} — ${m.category} ($${m.price.toLocaleString()})</option>`).join(''):'<option value="">No authorized models — contact Built Trailers</option>'; }
@@ -248,7 +249,7 @@ async function placeOrder(){
   const modelId=$('oModel').value,qty=Number($('oQty').value)||1;
   if(!modelId){setMsg('oMsg','err','Choose a model.');return;}
   try{const d=await api('/api/dealer/orders',{method:'POST',body:JSON.stringify({modelId,qty,due:$('oDue').value||undefined})});
-    setMsg('oMsg','ok','✓ Order '+d.id+' submitted.');loadOrders();
+    setMsg('oMsg','ok','✓ Order '+d.id+' submitted — pending approval by Built Trailers. You\'ll get a confirmation here once it\'s approved.');loadOrders();
   }catch(e){setMsg('oMsg','err',e.message);}
 }
 function reorder(modelId,qty){$('oModel').value=modelId;$('oQty').value=qty;window.scrollTo({top:0,behavior:'smooth'});setMsg('oMsg','ok','Pre-filled from a past order — review and submit.');}
