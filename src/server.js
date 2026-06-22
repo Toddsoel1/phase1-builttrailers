@@ -1014,8 +1014,12 @@ if (kind === 'postgres' || kind === 'pglite') {
   const { fileURLToPath: ftu } = await import('url');
   const schemaPath = new URL('../db/schema.sql', import.meta.url);
   const schemaSql = readFileSync(ftu(schemaPath), 'utf8');
+  // Strip `-- line comments` before splitting on `;`. The schema is plain DDL with
+  // no functions/dollar-quotes, but a comment containing a semicolon (e.g. the file
+  // header) would otherwise split a real statement and make it fail to run.
+  const ddl = schemaSql.replace(/--[^\n]*/g, '');
   // Run each statement separately so one failure doesn't block others
-  for (const stmt of schemaSql.split(';').map(s => s.trim()).filter(Boolean)) {
+  for (const stmt of ddl.split(';').map(s => s.trim()).filter(Boolean)) {
     await q(stmt).catch(e => console.warn('schema migration:', e.message));
   }
   // Column-level migrations (ALTER TABLE IF NOT EXISTS is supported in PG 9.6+)
