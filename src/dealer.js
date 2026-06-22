@@ -45,13 +45,23 @@ export async function login({ email, password }) {
   return { token: signDealerToken(d), dealer: await context(d) };
 }
 
-// Resolve the dealer's display name + linked dealer record.
+// Resolve the dealer's display name + linked dealer record + role.
 async function context(d) {
-  let dealership = d.dealership_name, customerId = d.customer_id;
+  let dealership = d.dealership_name;
   if (d.customer_id) { const c = await one('SELECT name FROM customer WHERE id=$1', [d.customer_id]); if (c) dealership = c.name; }
-  return { name: d.name, email: d.email, dealership, customerId };
+  return { name: d.name, email: d.email, dealership, customerId: d.customer_id, role: d.role || 'admin' };
 }
 export const me = context;
+
+// Role gate for /api/dealer/* endpoints. Dealership admins always pass.
+//   admin → everything · sales → orders+invoices · service → claims+maintenance · warranty → registrations+claims
+export function dealerRole(...allowed) {
+  return (req, res, next) => {
+    const r = req.dealer?.role || 'admin';
+    if (r === 'admin' || allowed.includes(r)) return next();
+    return res.status(403).json({ error: "Your role doesn't have access to this. Ask your dealership admin." });
+  };
+}
 
 // Register a trailer the dealer sold — selling dealership auto-fills from the account.
 export async function registerTrailer(d, data) {
@@ -127,11 +137,43 @@ export async function myInvoices(d) {
   });
   return { invoices, owed, paid };
 }
-// All login accounts under this dealership (multiple logins per dealership).
+// All login accounts under this dealership + colleagues awaiting the admin's approval.
 export async function team(d) {
-  if (!d.customer_id) return [];
-  return (await all(`SELECT name,email,status,created_at FROM dealer_user WHERE customer_id=$1 ORDER BY created_at`, [d.customer_id]))
-    .map(u => ({ name: u.name, email: u.email, status: u.status, createdAt: u.created_at }));
+  if (!d.customer_id) return { members: [], pending: [] };
+  const members = (await all(`SELECT id,name,email,status,role,created_at FROM dealer_user WHERE customer_id=$1 ORDER BY created_at`, [d.customer_id]))
+    .map(u => ({ id: u.id, name: u.name, email: u.email, status: u.status, role: u.role || 'admin', createdAt: u.created_at, self: u.id === d.id }));
+  // Colleagues who signed up with this dealership's name but aren't linked yet
+  const pending = (await all(`SELECT id,name,email,created_at FROM dealer_user
+                               WHERE status='pending' AND customer_id IS NULL AND lower(dealership_name)=lower($1) ORDER BY created_at`, [d.dealership_name || '']))
+    .map(u => ({ id: u.id, name: u.name, email: u.email, createdAt: u.created_at }));
+  return { members, pending };
+}
+const DEALER_ROLES = ['admin', 'sales', 'service', 'warranty'];
+// Dealership admin approves a colleague's signup onto their dealership with a role.
+export async function approveTeamMember(admin, memberId, role) {
+  if (!admin.customer_id) throw new Error('Your account is not linked to a dealership.');
+  const m = await one(`SELECT * FROM dealer_user WHERE id=$1`, [memberId]);
+  if (!m || m.status !== 'pending' || m.customer_id) throw new Error('That sign-up is not available to approve.');
+  if (String(m.dealership_name || '').toLowerCase() !== String(admin.dealership_name || '').toLowerCase()) throw new Error('That sign-up is for a different dealership.');
+  const r = DEALER_ROLES.includes(role) ? role : 'sales';
+  await q(`UPDATE dealer_user SET status='active', customer_id=$1, role=$2 WHERE id=$3`, [admin.customer_id, r, memberId]);
+  return { ok: true };
+}
+export async function rejectTeamMember(admin, memberId) {
+  const m = await one(`SELECT * FROM dealer_user WHERE id=$1`, [memberId]);
+  if (m && m.status === 'pending' && String(m.dealership_name || '').toLowerCase() === String(admin.dealership_name || '').toLowerCase())
+    await q(`UPDATE dealer_user SET status='rejected' WHERE id=$1`, [memberId]);
+  return { ok: true };
+}
+// Admin changes a teammate's role or deactivates them (can't change self).
+export async function setTeamRole(admin, memberId, role) {
+  if (!admin.customer_id) throw new Error('Your account is not linked to a dealership.');
+  if (memberId === admin.id) throw new Error('You can\'t change your own role.');
+  const r = DEALER_ROLES.includes(role) ? role : null;
+  if (!r && role !== 'inactive') throw new Error('Invalid role.');
+  if (role === 'inactive') await q(`UPDATE dealer_user SET status='rejected' WHERE id=$1 AND customer_id=$2`, [memberId, admin.customer_id]);
+  else await q(`UPDATE dealer_user SET role=$1, status='active' WHERE id=$2 AND customer_id=$3`, [r, memberId, admin.customer_id]);
+  return { ok: true };
 }
 
 // ---- staff side ----
@@ -139,10 +181,16 @@ export async function pendingDealers() {
   return (await all(`SELECT id,email,name,dealership_name,created_at FROM dealer_user WHERE status='pending' ORDER BY created_at DESC`, []))
     .map(d => ({ id: d.id, email: d.email, name: d.name, dealershipName: d.dealership_name, createdAt: d.created_at }));
 }
-export async function approveDealer(id, customerId) {
+export async function approveDealer(id, customerId, role) {
   if (!await one('SELECT id FROM dealer_user WHERE id=$1', [id])) throw new Error('account not found');
-  await q(`UPDATE dealer_user SET status='active', customer_id=$1 WHERE id=$2`, [customerId || null, id]);
-  return { ok: true };
+  // First active user at a dealership becomes its admin; otherwise use the chosen role.
+  let r = role && DEALER_ROLES.includes(role) ? role : null;
+  if (!r) {
+    const existing = customerId ? await one(`SELECT 1 AS x FROM dealer_user WHERE customer_id=$1 AND status='active' LIMIT 1`, [customerId]) : null;
+    r = existing ? 'sales' : 'admin';
+  }
+  await q(`UPDATE dealer_user SET status='active', customer_id=$1, role=$2 WHERE id=$3`, [customerId || null, r, id]);
+  return { ok: true, role: r };
 }
 export async function rejectDealer(id) {
   await q(`UPDATE dealer_user SET status='rejected' WHERE id=$1`, [id]);

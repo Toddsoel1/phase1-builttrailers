@@ -206,23 +206,37 @@ app.post('/api/dealer/login', loginLimiter, async (req, res) => {
   try { res.json(await dealer.login(req.body || {})); } catch (e) { res.status(401).json({ error: e.message }); }
 });
 app.get('/api/dealer/me', dealer.dealerAuth, async (req, res) => res.json(await dealer.me(req.dealer)));
-app.post('/api/dealer/register', dealer.dealerAuth, async (req, res) => {
+// Warranty role (+admin): register & view registrations
+app.post('/api/dealer/register', dealer.dealerAuth, dealer.dealerRole('warranty'), async (req, res) => {
   try { res.json(await dealer.registerTrailer(req.dealer, req.body || {})); } catch (e) { res.status(400).json({ error: e.message }); }
 });
-app.get('/api/dealer/registrations', dealer.dealerAuth, async (req, res) => res.json(await dealer.myRegistrations(req.dealer)));
-app.get('/api/dealer/claims', dealer.dealerAuth, async (req, res) => res.json(await dealer.myClaims(req.dealer)));
-app.post('/api/dealer/claim', dealer.dealerAuth, async (req, res) => {
+app.get('/api/dealer/registrations', dealer.dealerAuth, dealer.dealerRole('warranty'), async (req, res) => res.json(await dealer.myRegistrations(req.dealer)));
+// Service + warranty roles (+admin): claims
+app.get('/api/dealer/claims', dealer.dealerAuth, dealer.dealerRole('service', 'warranty'), async (req, res) => res.json(await dealer.myClaims(req.dealer)));
+app.post('/api/dealer/claim', dealer.dealerAuth, dealer.dealerRole('service', 'warranty'), async (req, res) => {
   try { res.json(await portal.submitPublicClaim({ ...req.body, submittedBy: req.dealer.name })); } catch (e) { res.status(400).json({ error: e.message }); }
 });
-app.get('/api/dealer/models', dealer.dealerAuth, async (req, res) => res.json(await dealer.orderableModels(req.dealer)));
-app.get('/api/dealer/orders', dealer.dealerAuth, async (req, res) => res.json(await dealer.myOrders(req.dealer)));
-app.post('/api/dealer/orders', dealer.dealerAuth, async (req, res) => {
+// Sales role (+admin): orders & invoices
+app.get('/api/dealer/models', dealer.dealerAuth, dealer.dealerRole('sales'), async (req, res) => res.json(await dealer.orderableModels(req.dealer)));
+app.get('/api/dealer/orders', dealer.dealerAuth, dealer.dealerRole('sales'), async (req, res) => res.json(await dealer.myOrders(req.dealer)));
+app.post('/api/dealer/orders', dealer.dealerAuth, dealer.dealerRole('sales'), async (req, res) => {
   try { res.json(await dealer.placeOrder(req.dealer, req.body || {})); } catch (e) { res.status(400).json({ error: e.message }); }
 });
+app.get('/api/dealer/invoices', dealer.dealerAuth, dealer.dealerRole('sales'), async (req, res) => res.json(await dealer.myInvoices(req.dealer)));
+// Everyone: notifications, team view
 app.get('/api/dealer/notifications', dealer.dealerAuth, async (req, res) => res.json(await dealernotify.myNotifications(req.dealer)));
 app.post('/api/dealer/notifications/read', dealer.dealerAuth, async (req, res) => res.json(await dealernotify.markRead(req.dealer)));
-app.get('/api/dealer/invoices', dealer.dealerAuth, async (req, res) => res.json(await dealer.myInvoices(req.dealer)));
 app.get('/api/dealer/team', dealer.dealerAuth, async (req, res) => res.json(await dealer.team(req.dealer)));
+// Dealership admin only: manage who joins and their roles
+app.post('/api/dealer/team/:id/approve', dealer.dealerAuth, dealer.dealerRole(), async (req, res) => {
+  try { res.json(await dealer.approveTeamMember(req.dealer, req.params.id, req.body?.role)); } catch (e) { res.status(400).json({ error: e.message }); }
+});
+app.post('/api/dealer/team/:id/reject', dealer.dealerAuth, dealer.dealerRole(), async (req, res) => {
+  try { res.json(await dealer.rejectTeamMember(req.dealer, req.params.id)); } catch (e) { res.status(400).json({ error: e.message }); }
+});
+app.post('/api/dealer/team/:id/role', dealer.dealerAuth, dealer.dealerRole(), async (req, res) => {
+  try { res.json(await dealer.setTeamRole(req.dealer, req.params.id, req.body?.role)); } catch (e) { res.status(400).json({ error: e.message }); }
+});
 
 // ---- Document library (manuals, spec sheets, warranty terms) ----
 app.get('/api/public/documents', portalLimiter, async (_req, res) => res.json(await portal.listDocuments()));
@@ -1133,8 +1147,8 @@ app.get('/api/dealers/pending', authMiddleware, requireSection('trailers'), asyn
   res.json(await dealer.pendingDealers()));
 app.post('/api/dealers/:id/approve', authMiddleware, requireTier('editor'), requireSection('trailers'), async (req, res) => {
   try {
-    await dealer.approveDealer(req.params.id, req.body?.customerId);
-    await audit(req, 'dealer.approve', `${req.params.id} -> ${req.body?.customerId || '(no link)'}`);
+    const r = await dealer.approveDealer(req.params.id, req.body?.customerId, req.body?.role);
+    await audit(req, 'dealer.approve', `${req.params.id} -> ${req.body?.customerId || '(no link)'} (${r.role})`);
     res.json({ ok: true });
   } catch (e) { res.status(400).json({ error: e.message }); }
 });
@@ -1299,6 +1313,11 @@ if (kind === 'postgres' || kind === 'pglite') {
     `CREATE INDEX IF NOT EXISTS idx_attach_entity ON attachment(entity_type, entity_id)`,
     `CREATE TABLE IF NOT EXISTS dealer_notification (id SERIAL PRIMARY KEY, customer_id TEXT NOT NULL, kind TEXT, body TEXT NOT NULL, ref TEXT, read BOOLEAN NOT NULL DEFAULT false, created_at TIMESTAMPTZ NOT NULL DEFAULT now())`,
     `CREATE TABLE IF NOT EXISTS document (id SERIAL PRIMARY KEY, title TEXT NOT NULL, model_id TEXT, category TEXT, file_path TEXT NOT NULL, content_type TEXT, uploaded_by TEXT, created_at TIMESTAMPTZ NOT NULL DEFAULT now())`,
+    // Dealership user roles (admin/sales/service/warranty); existing accounts default to admin to keep access.
+    `ALTER TABLE dealer_user ADD COLUMN IF NOT EXISTS role TEXT NOT NULL DEFAULT 'admin'`,
+    // Margin intelligence captured from the buyer's order at verification — Built Trailers staff only.
+    `ALTER TABLE warranty_registration ADD COLUMN IF NOT EXISTS sale_price NUMERIC(12,2)`,
+    `ALTER TABLE warranty_registration ADD COLUMN IF NOT EXISTS accessories TEXT`,
   ];
   // Migrate existing app_user.title into user_title junction (idempotent)
   await q(`INSERT INTO user_title(user_id,role_name)
