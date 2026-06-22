@@ -72,9 +72,14 @@ export async function consumeInventory(orderId, userId) {
   await q('UPDATE sales_order SET consumed=true WHERE id=$1', [orderId]);
   await q('INSERT INTO audit_log(user_id,action,detail) VALUES ($1,$2,$3)',
     [userId || null, 'order.ship', `${orderId} shipped — inventory consumed`]);
-  // Phase 4: post a customer invoice to accounting on shipment
-  const info = await one(`SELECT m.price, c.name AS customer FROM sales_order o
-                            LEFT JOIN model m ON m.id=o.model_id
-                            LEFT JOIN customer c ON c.id=o.customer_id WHERE o.id=$1`, [orderId]);
-  if (info) await postInvoice(orderId, info.customer || 'Customer', Number(info.price || 0) * o.qty, userId);
+  // Phase 4: post a customer invoice to accounting on shipment.
+  // Skipped if the order is billed as part of an invoice batch (orders.invoice_batch_id),
+  // so a trailer is never invoiced twice. Non-batched orders are marked billed here.
+  if (!o.invoice_batch_id && !o.billed) {
+    const info = await one(`SELECT m.price, c.name AS customer FROM sales_order o
+                              LEFT JOIN model m ON m.id=o.model_id
+                              LEFT JOIN customer c ON c.id=o.customer_id WHERE o.id=$1`, [orderId]);
+    if (info) await postInvoice(orderId, info.customer || 'Customer', Number(info.price || 0) * o.qty, userId);
+    await q('UPDATE sales_order SET billed=true WHERE id=$1', [orderId]);
+  }
 }

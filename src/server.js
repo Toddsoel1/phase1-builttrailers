@@ -26,6 +26,7 @@ import * as approvals from './approvals.js';
 import * as support from './support.js';
 import { actionItemsFor, resolveUserForInbox } from './inbox.js';
 import { sendMorningBriefings, previewBriefingFor } from './briefing.js';
+import * as invoicing from './invoicing.js';
 
 // Crash fast if JWT_SECRET is unset in production — predictable fallback is a critical vuln
 if (!process.env.JWT_SECRET) {
@@ -920,6 +921,48 @@ app.post('/api/briefing/run', authMiddleware, requireTier('admin'), async (req, 
   } catch (e) { res.status(500).json({ error: String(e.message || e) }); }
 });
 
+// ---- Invoice batches (group a dealer's trailers onto one invoice) ----
+app.get('/api/invoice-batches', authMiddleware, async (_req, res) => res.json(await invoicing.listBatches()));
+// NOTE: /eligible must be declared before /:id so it isn't captured as an id
+app.get('/api/invoice-batches/eligible', authMiddleware, async (req, res) => {
+  if (!req.query.customerId) return res.status(400).json({ error: 'customerId required' });
+  res.json(await invoicing.eligibleOrders(req.query.customerId));
+});
+app.get('/api/invoice-batches/:id', authMiddleware, async (req, res) => {
+  const b = await invoicing.getBatch(req.params.id);
+  if (!b) return res.status(404).json({ error: 'not found' });
+  res.json(b);
+});
+app.post('/api/invoice-batches', authMiddleware, requireSection('accounting'), async (req, res) => {
+  const { customerId, orderIds, note } = req.body || {};
+  if (!customerId) return res.status(400).json({ error: 'customerId required' });
+  const id = await invoicing.createBatch(customerId, orderIds || [], note, req.user);
+  await audit(req, 'batch.create', `${id} ${customerId} (${(orderIds || []).length} orders)`);
+  res.json({ id });
+});
+app.post('/api/invoice-batches/:id/orders', authMiddleware, requireSection('accounting'), async (req, res) => {
+  try { res.json(await invoicing.addOrders(req.params.id, req.body?.orderIds || [])); }
+  catch (e) { res.status(400).json({ error: e.message }); }
+});
+app.delete('/api/invoice-batches/:id/orders/:orderId', authMiddleware, requireSection('accounting'), async (req, res) => {
+  try { res.json(await invoicing.removeOrder(req.params.id, req.params.orderId)); }
+  catch (e) { res.status(400).json({ error: e.message }); }
+});
+app.post('/api/invoice-batches/:id/post', authMiddleware, requireSection('accounting'), async (req, res) => {
+  try {
+    const b = await invoicing.postBatchInvoice(req.params.id, req.user);
+    await audit(req, 'batch.invoice', `${req.params.id} ${b.customer} $${Math.round(b.total)} (${b.orders.length} trailers)`);
+    res.json(b);
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+app.post('/api/invoice-batches/:id/paid', authMiddleware, requireSection('accounting'), async (req, res) => {
+  try {
+    const b = await invoicing.markPaid(req.params.id, req.user);
+    await audit(req, 'batch.paid', req.params.id);
+    res.json(b);
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
 // ---- audit ----
 app.get('/api/audit', authMiddleware, requireTier('admin'), async (_req, res) =>
   res.json(await all('SELECT * FROM audit_log ORDER BY id DESC LIMIT 100', [])));
@@ -1038,6 +1081,9 @@ if (kind === 'postgres' || kind === 'pglite') {
     `CREATE TABLE IF NOT EXISTS bom_change_request (id SERIAL PRIMARY KEY, model_id TEXT NOT NULL, model_name TEXT, requested_by TEXT NOT NULL, requester_name TEXT, created_at TIMESTAMPTZ NOT NULL DEFAULT now(), op TEXT NOT NULL, payload JSONB NOT NULL, status TEXT NOT NULL DEFAULT 'pending', reviewed_by TEXT, reviewer_name TEXT, reviewed_at TIMESTAMPTZ, review_note TEXT)`,
     `CREATE TABLE IF NOT EXISTS app_config (key TEXT PRIMARY KEY, value TEXT)`,
     `ALTER TABLE sales_order ADD COLUMN IF NOT EXISTS production_seq INTEGER`,
+    `CREATE TABLE IF NOT EXISTS invoice_batch (id TEXT PRIMARY KEY, customer_id TEXT, customer_name TEXT, status TEXT NOT NULL DEFAULT 'Draft', total NUMERIC(12,2) NOT NULL DEFAULT 0, note TEXT, created_by TEXT, created_at TIMESTAMPTZ NOT NULL DEFAULT now(), invoiced_at TIMESTAMPTZ, paid_at TIMESTAMPTZ, external_id TEXT)`,
+    `ALTER TABLE sales_order ADD COLUMN IF NOT EXISTS invoice_batch_id TEXT`,
+    `ALTER TABLE sales_order ADD COLUMN IF NOT EXISTS billed BOOLEAN NOT NULL DEFAULT false`,
   ];
   // Migrate existing app_user.title into user_title junction (idempotent)
   await q(`INSERT INTO user_title(user_id,role_name)
