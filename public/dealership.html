@@ -195,13 +195,29 @@ async function loadDocs(){
     </tbody></table>`:'<p class="lead">No documents posted yet.</p>';
   }catch(e){$('docsBody').innerHTML='<p class="msg err">'+e.message+'</p>';}
 }
+const ROLE_OPTS=r=>['admin','sales','service','warranty'].map(x=>`<option value="${x}" ${x===r?'selected':''}>${x.charAt(0).toUpperCase()+x.slice(1)}</option>`).join('');
 async function loadTeam(){
-  try{const team=await api('/api/dealer/team');
-    $('teamBody').innerHTML=team.length?`<table><thead><tr><th>Name</th><th>Email</th><th>Status</th></tr></thead><tbody>
-      ${team.map(u=>`<tr><td>${u.name||''}</td><td>${u.email}</td><td>${u.status==='active'?'<span class="badge b-ok">Active</span>':u.status==='pending'?'<span class="badge b-pend">Pending</span>':'<span class="badge b-rej">'+u.status+'</span>'}</td></tr>`).join('')}
-    </tbody></table>`:'<p class="lead">Just you so far.</p>';
+  try{const t=await api('/api/dealer/team');const isAdmin=(DEALER.role||'admin')==='admin';
+    const pendingCard=(isAdmin&&t.pending&&t.pending.length)?`<div style="background:#fff6ec;border:1px solid #ffe0bf;border-radius:10px;padding:12px;margin-bottom:14px">
+      <b>Colleagues awaiting your approval</b>
+      <table style="margin-top:6px"><tbody>${t.pending.map(p=>`<tr><td>${p.name||''}<br><span class="muted" style="font-size:12px">${p.email}</span></td>
+        <td><select id="pr_${p.id}">${ROLE_OPTS('sales')}</select></td>
+        <td style="white-space:nowrap"><button class="btn sec" style="padding:6px 10px;font-size:13px;margin:0" onclick="approveMember('${p.id}')">Approve</button> <a class="lnk" onclick="rejectMember('${p.id}')">Reject</a></td></tr>`).join('')}</tbody></table>
+    </div>`:'';
+    const members=(t.members||[]);
+    const memberTable=`<table><thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Status</th>${isAdmin?'<th></th>':''}</tr></thead><tbody>
+      ${members.map(u=>`<tr><td>${u.name||''}${u.self?' <span class="muted">(you)</span>':''}</td><td>${u.email}</td>
+        <td>${isAdmin&&!u.self&&u.status==='active'?`<select id="mr_${u.id}" onchange="changeRole('${u.id}')">${ROLE_OPTS(u.role)}</select>`:(u.role||'').charAt(0).toUpperCase()+(u.role||'').slice(1)}</td>
+        <td>${u.status==='active'?'<span class="badge b-ok">Active</span>':u.status==='pending'?'<span class="badge b-pend">Pending</span>':'<span class="badge b-rej">'+u.status+'</span>'}</td>
+        ${isAdmin?`<td>${!u.self&&u.status==='active'?`<a class="lnk" onclick="deactivateMember('${u.id}')">Remove</a>`:''}</td>`:''}</tr>`).join('')}
+    </tbody></table>`;
+    $('teamBody').innerHTML=pendingCard+memberTable;
   }catch(e){$('teamBody').innerHTML='<p class="msg err">'+e.message+'</p>';}
 }
+async function approveMember(id){try{await api('/api/dealer/team/'+id+'/approve',{method:'POST',body:JSON.stringify({role:$('pr_'+id).value})});loadTeam();}catch(e){alert(e.message);}}
+async function rejectMember(id){try{await api('/api/dealer/team/'+id+'/reject',{method:'POST'});loadTeam();}catch(e){alert(e.message);}}
+async function changeRole(id){try{await api('/api/dealer/team/'+id+'/role',{method:'POST',body:JSON.stringify({role:$('mr_'+id).value})});}catch(e){alert(e.message);loadTeam();}}
+async function deactivateMember(id){if(!confirm('Remove this login from your dealership?'))return;try{await api('/api/dealer/team/'+id+'/role',{method:'POST',body:JSON.stringify({role:'inactive'})});loadTeam();}catch(e){alert(e.message);}}
 async function refreshNotifBadge(){try{const n=await api('/api/dealer/notifications');const b=$('notifBadge');if(b)b.textContent=n.unread?' '+n.unread:'';if(b)b.style.cssText=n.unread?'background:#ff7a18;color:#1a1206;border-radius:10px;padding:0 6px;font-size:11px;margin-left:3px':'';}catch(e){}}
 async function loadNotifs(){
   try{const n=await api('/api/dealer/notifications');
@@ -227,11 +243,16 @@ async function login(){
   }catch(e){setMsg('lMsg','err',e.message);}
 }
 function logout(){DTOKEN=null;DEALER=null;localStorage.removeItem('dealerToken');$('dash').classList.add('hidden');$('auth').classList.remove('hidden');$('who').innerHTML='';}
+const ROLE_TABS={admin:['orders','reg','mine','claims','invoices','docs','team','notif'],sales:['orders','invoices','docs','team','notif'],service:['claims','docs','team','notif'],warranty:['reg','mine','claims','docs','team','notif']};
 function enterDash(){
   $('auth').classList.add('hidden');$('dash').classList.remove('hidden');
-  $('who').innerHTML=`<span>${DEALER.dealership||DEALER.name||''}</span><button class="btn ghost" onclick="logout()">Log out</button>`;
+  const role=DEALER.role||'admin';
+  const roleLabel=role.charAt(0).toUpperCase()+role.slice(1);
+  $('who').innerHTML=`<span>${DEALER.dealership||DEALER.name||''} · ${roleLabel}</span><button class="btn ghost" onclick="logout()">Log out</button>`;
   $('regDealer').textContent=DEALER.dealership||'(your dealership)';
-  showDash('orders');refreshNotifBadge();
+  const allowed=ROLE_TABS[role]||ROLE_TABS.admin;
+  for(const k of ['orders','reg','mine','claims','invoices','docs','team','notif']){const tb=$('tab'+k[0].toUpperCase()+k.slice(1));if(tb)tb.style.display=allowed.includes(k)?'':'none';}
+  showDash(allowed[0]);refreshNotifBadge();
 }
 let _models=[];
 function orderStatus(s){const label=s==='Quote'?'Pending approval':s;return `<span class="badge ${s==='Ready / Shipped'?'b-ok':'b-pend'}">${label||''}</span>`;}

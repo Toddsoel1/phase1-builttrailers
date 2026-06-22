@@ -148,7 +148,7 @@ export async function submitMaintenance(data) {
 export async function pendingRegistrations() {
   const rows = await all(`SELECT r.trailer_id, r.owner_name, r.email, r.phone, r.warranty_address, r.sale_date,
                                  r.selling_dealer, r.sms_opt_in, r.email_opt_in, r.proof_of_sale, r.within_15_days,
-                                 r.registered_at, r.source, t.vin, m.name AS model, c.name AS dealer
+                                 r.registered_at, r.source, r.sale_price, r.accessories, t.vin, m.name AS model, m.price AS our_price, c.name AS dealer
                             FROM warranty_registration r
                             JOIN trailer t ON t.id=r.trailer_id
                             LEFT JOIN model m ON m.id=t.model_id
@@ -160,13 +160,18 @@ export async function pendingRegistrations() {
     email: r.email, phone: r.phone, address: r.warranty_address, saleDate: r.sale_date, sellingDealer: r.selling_dealer,
     smsOptIn: r.sms_opt_in, emailOptIn: r.email_opt_in, proofOfSale: r.proof_of_sale, within15: r.within_15_days,
     registeredAt: r.registered_at, source: r.source,
+    // Built Trailers staff only — never exposed to dealer/owner endpoints
+    salePrice: r.sale_price != null ? Number(r.sale_price) : null, accessories: r.accessories || null, ourPrice: Number(r.our_price || 0),
   }));
 }
 
-export async function reviewRegistration(trailerId, decision) {
+export async function reviewRegistration(trailerId, decision, extras = {}) {
   if (!await one('SELECT trailer_id FROM warranty_registration WHERE trailer_id=$1', [trailerId])) throw new Error('registration not found');
   const status = decision === 'approve' ? 'verified' : 'rejected';
-  await q(`UPDATE warranty_registration SET verification_status=$1 WHERE trailer_id=$2`, [status, trailerId]);
+  // Capture margin intel (sale price + accessories) read from the buyer's order — staff only.
+  await q(`UPDATE warranty_registration SET verification_status=$1,
+             sale_price=COALESCE($2, sale_price), accessories=COALESCE($3, accessories) WHERE trailer_id=$4`,
+    [status, extras.salePrice != null && extras.salePrice !== '' ? Number(extras.salePrice) : null, extras.accessories || null, trailerId]);
   const t = await one('SELECT customer_id, vin FROM trailer WHERE id=$1', [trailerId]);
   if (t) await notifyDealer(t.customer_id, 'registration', `Warranty registration for VIN ${t.vin} was ${status === 'verified' ? 'verified' : 'rejected'}.`, t.vin);
   // Opt-in welcome email once the warranty is verified (no-ops until RESEND_API_KEY is set).
@@ -183,4 +188,30 @@ export async function reviewRegistration(trailerId, decision) {
 export async function pendingRegistrationCount() {
   const r = await one(`SELECT COUNT(*)::int AS n FROM warranty_registration WHERE verification_status='pending'`, []).catch(() => null);
   return r ? Number(r.n) : 0;
+}
+
+// Built Trailers staff only: dealer-margin intelligence captured from buyers' orders.
+// Compares each model's avg retail sale price (what dealers sold for) to our price
+// (what dealers pay us) and tallies accessory frequency. Never exposed to dealers/owners.
+export async function marginReport() {
+  const byModel = await all(`SELECT m.name AS model, m.price AS our_price,
+                                    COUNT(r.sale_price)::int AS n, AVG(r.sale_price) AS avg_sale,
+                                    MIN(r.sale_price) AS min_sale, MAX(r.sale_price) AS max_sale
+                               FROM warranty_registration r
+                               JOIN trailer t ON t.id=r.trailer_id JOIN model m ON m.id=t.model_id
+                              WHERE r.sale_price IS NOT NULL
+                              GROUP BY m.name, m.price ORDER BY m.name`, []).catch(() => []);
+  const accRows = await all(`SELECT accessories FROM warranty_registration WHERE accessories IS NOT NULL AND accessories<>''`, []).catch(() => []);
+  const accCount = {};
+  for (const row of accRows)
+    for (const a of String(row.accessories).split(/[,\n;]+/).map(s => s.trim()).filter(Boolean))
+      accCount[a.toLowerCase()] = (accCount[a.toLowerCase()] || 0) + 1;
+  return {
+    byModel: byModel.map(r => {
+      const our = Number(r.our_price) || 0, avg = Number(r.avg_sale) || 0;
+      return { model: r.model, ourPrice: our, n: r.n, avgSale: avg, minSale: Number(r.min_sale) || 0, maxSale: Number(r.max_sale) || 0,
+        dealerMargin: avg - our, dealerMarginPct: our > 0 ? (avg - our) / avg : null };
+    }),
+    accessories: Object.entries(accCount).map(([name, count]) => ({ name, count })).sort((a, b) => b.count - a.count),
+  };
 }
