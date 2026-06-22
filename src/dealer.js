@@ -61,7 +61,7 @@ export async function registerTrailer(d, data) {
     const t = await one('SELECT customer_id FROM trailer WHERE upper(vin)=upper($1)', [String(data?.vin || '').trim()]);
     if (t && t.customer_id && t.customer_id !== d.customer_id) throw new Error('That VIN belongs to a different dealership.');
   }
-  return submitRegistration({ ...data, sellingDealer: ctx.dealership, source: 'dealer' });
+  return submitRegistration({ ...data, sellingDealer: ctx.dealership, source: 'dealer', dealerCustomerId: d.customer_id });
 }
 
 export async function myRegistrations(d) {
@@ -79,6 +79,38 @@ export async function myClaims(d) {
                             LEFT JOIN model m ON m.id=t.model_id
                            WHERE t.customer_id=$1 ORDER BY wc.opened_at DESC`, [d.customer_id]);
   return rows.map(c => ({ id: c.id, vin: c.vin, model: c.model, status: c.status, issue: c.issue, openedAt: c.opened_at }));
+}
+
+// ---- orders ----
+// Models this dealership is authorized to order (by trailer type).
+export async function orderableModels(d) {
+  if (!d.customer_id) return [];
+  const allowed = (await all('SELECT type FROM customer_allowed_type WHERE customer_id=$1', [d.customer_id])).map(a => a.type);
+  const models = await all('SELECT id,name,category,price FROM model ORDER BY category, id', []);
+  return models.filter(m => allowed.includes(m.category)).map(m => ({ id: m.id, name: m.name, category: m.category, price: Number(m.price || 0) }));
+}
+export async function placeOrder(d, { modelId, qty, due }) {
+  if (!d.customer_id) throw new Error('Your account is not linked to a dealer record yet — contact Built Trailers.');
+  const mdl = await one('SELECT * FROM model WHERE id=$1', [modelId]);
+  if (!mdl) throw new Error('Please choose a trailer model.');
+  const allowed = (await all('SELECT type FROM customer_allowed_type WHERE customer_id=$1', [d.customer_id])).map(a => a.type);
+  if (!allowed.includes(mdl.category)) throw new Error(`Your dealership isn't authorized to order ${mdl.category} trailers.`);
+  const id = 'SO-' + (1049 + (await all('SELECT id FROM sales_order', [])).length);
+  const seq = await one('SELECT COALESCE(MAX(production_seq),0)+1 AS n FROM sales_order', []);
+  const cust = await one('SELECT rep_id FROM customer WHERE id=$1', [d.customer_id]);
+  await q(`INSERT INTO sales_order(id,customer_id,model_id,qty,stage,due,deposit,channel,rep_id,production_seq)
+           VALUES($1,$2,$3,$4,'Confirmed',$5,0,'Dealer Portal',$6,$7)`,
+    [id, d.customer_id, modelId, Math.max(1, Number(qty) || 1), due || null, cust?.rep_id || null, seq?.n || 1]);
+  return { id };
+}
+export async function myOrders(d) {
+  if (!d.customer_id) return [];
+  const rows = await all(`SELECT o.id, o.qty, o.stage, o.due, o.created_at, m.id AS model_id, m.name AS model, m.category AS type, m.price,
+                                 (SELECT COUNT(*) FROM trailer t WHERE t.order_id=o.id AND t.vin IS NOT NULL) AS vins
+                            FROM sales_order o LEFT JOIN model m ON m.id=o.model_id
+                           WHERE o.customer_id=$1 ORDER BY o.created_at DESC, o.id DESC`, [d.customer_id]);
+  return rows.map(o => ({ id: o.id, model: o.model, modelId: o.model_id, type: o.type, qty: o.qty, stage: o.stage, due: o.due,
+    createdAt: o.created_at, price: Number(o.price || 0), revenue: Number(o.price || 0) * o.qty, vinsAssigned: Number(o.vins) }));
 }
 
 // ---- staff side ----

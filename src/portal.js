@@ -40,31 +40,37 @@ async function saveUpload(trailerId, dataUrl) {
 
 export async function submitRegistration(data) {
   const { vin, ownerName, saleDate, warrantyAddress, email, phone, sellingDealer,
-          smsOptIn, emailOptIn, proofOfSale, source, termMonths } = data || {};
+          smsOptIn, emailOptIn, proofOfSale, source, termMonths, dealerCustomerId } = data || {};
   if (!vin) throw new Error('VIN is required.');
   if (!ownerName) throw new Error('Owner full name is required.');
   if (!saleDate) throw new Error('Date of purchase is required.');
   if (!email && !phone) throw new Error('An email or phone number is required.');
-  const t = await one(`SELECT id FROM trailer WHERE upper(vin)=upper($1)`, [String(vin).trim()]);
+  const t = await one(`SELECT id, customer_id FROM trailer WHERE upper(vin)=upper($1)`, [String(vin).trim()]);
   if (!t) throw new Error('That VIN was not found. Please check the 17-character VIN on your trailer.');
 
   const proofPath = (typeof proofOfSale === 'string' && proofOfSale.startsWith('data:')) ? await saveUpload(t.id, proofOfSale) : null;
   const w15 = within15(saleDate);
+  // Self-validation: a dealership registering one of its OWN VINs (we already know
+  // which VINs were sold to whom) within the 15-day window is auto-verified — no
+  // staff step. Everything the system can't confirm defaults to the manual queue,
+  // so dealers and owners are never blocked at submission time.
+  const vinMatchesDealer = source === 'dealer' && dealerCustomerId && t.customer_id && String(t.customer_id) === String(dealerCustomerId);
+  const status = (vinMatchesDealer && w15 === true) ? 'verified' : 'pending';
 
   await q(`INSERT INTO warranty_registration
       (trailer_id, owner_name, owner_contact, registered_at, term_months, email, phone, warranty_address,
        sale_date, selling_dealer, sms_opt_in, email_opt_in, proof_of_sale, verification_status, within_15_days, source, submitted_by)
-      VALUES ($1,$2,$3,now(),$4,$5,$6,$7,$8,$9,$10,$11,$12,'pending',$13,$14,$15)
+      VALUES ($1,$2,$3,now(),$4,$5,$6,$7,$8,$9,$10,$11,$12,$16,$13,$14,$15)
       ON CONFLICT(trailer_id) DO UPDATE SET owner_name=$2, owner_contact=$3, term_months=$4, email=$5, phone=$6,
         warranty_address=$7, sale_date=$8, selling_dealer=$9, sms_opt_in=$10, email_opt_in=$11,
-        proof_of_sale=COALESCE($12, warranty_registration.proof_of_sale), verification_status='pending',
+        proof_of_sale=COALESCE($12, warranty_registration.proof_of_sale), verification_status=$16,
         within_15_days=$13, source=$14, submitted_by=$15`,
     [t.id, ownerName, phone || email || null, Number(termMonths) || 12, email || null, phone || null, warrantyAddress || null,
-     saleDate, sellingDealer || null, !!smsOptIn, !!emailOptIn, proofPath, w15, source || 'owner', ownerName]);
+     saleDate, sellingDealer || null, !!smsOptIn, !!emailOptIn, proofPath, w15, source || 'owner', ownerName, status]);
 
   // NOTE: opt-in delivery of the maintenance schedule / T&Cs / app link is captured here;
   // SMS uses the existing Twilio path, email delivery needs an email provider (flagged).
-  return { ok: true, within15: w15, status: 'pending' };
+  return { ok: true, within15: w15, status, autoVerified: status === 'verified' };
 }
 
 export async function submitPublicClaim(data) {

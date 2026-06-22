@@ -213,6 +213,11 @@ app.get('/api/dealer/claims', dealer.dealerAuth, async (req, res) => res.json(aw
 app.post('/api/dealer/claim', dealer.dealerAuth, async (req, res) => {
   try { res.json(await portal.submitPublicClaim({ ...req.body, submittedBy: req.dealer.name })); } catch (e) { res.status(400).json({ error: e.message }); }
 });
+app.get('/api/dealer/models', dealer.dealerAuth, async (req, res) => res.json(await dealer.orderableModels(req.dealer)));
+app.get('/api/dealer/orders', dealer.dealerAuth, async (req, res) => res.json(await dealer.myOrders(req.dealer)));
+app.post('/api/dealer/orders', dealer.dealerAuth, async (req, res) => {
+  try { res.json(await dealer.placeOrder(req.dealer, req.body || {})); } catch (e) { res.status(400).json({ error: e.message }); }
+});
 
 app.get('/t&cs',    (_req, res) => res.sendFile(path.join(__dir, '..', 'public', 'terms.html')));
 
