@@ -137,6 +137,7 @@ footer a{color:var(--accent)}
       <p class="lead">Submit a claim for a trailer you sold, and track its status.</p>
       <label class="req">Trailer VIN</label><input id="cVin" maxlength="17" class="mono" style="text-transform:uppercase" oninput="this.value=this.value.toUpperCase()">
       <label class="req">Describe the issue</label><textarea id="cIssue" rows="3"></textarea>
+      <label>Photos / video of the issue</label><input id="cFiles" type="file" accept="image/*,video/*" multiple>
       <button class="btn" onclick="submitClaim()">Submit Claim</button>
       <div id="cMsg" class="msg"></div>
       <div id="claimsBody" style="margin-top:16px"></div>
@@ -237,11 +238,13 @@ async function loadClaims(){
     </tbody></table>`:'<p class="lead">No claims yet.</p>';
   }catch(e){$('claimsBody').innerHTML='<p class="msg err">'+e.message+'</p>';}
 }
+async function readFiles(el){const out=[];for(const f of (el&&el.files?el.files:[])){if(f.size>10*1024*1024)throw new Error('Each file must be under 10 MB ("'+f.name+'").');out.push({dataUrl:await readFile(f),name:f.name});}return out;}
 async function submitClaim(){
   const vin=$('cVin').value.trim(),issue=$('cIssue').value.trim();
   if(!vin||!issue){setMsg('cMsg','err','Enter the VIN and describe the issue.');return;}
-  try{const d=await api('/api/dealer/claim',{method:'POST',body:JSON.stringify({vin,issue})});
-    setMsg('cMsg','ok','✓ Claim '+d.id+' submitted.');$('cVin').value='';$('cIssue').value='';loadClaims();
+  try{const attachments=await readFiles($('cFiles'));
+    const d=await api('/api/dealer/claim',{method:'POST',body:JSON.stringify({vin,issue,attachments})});
+    setMsg('cMsg','ok','✓ Claim '+d.id+' submitted'+(d.attachments?' with '+d.attachments+' file(s)':'')+'.');$('cVin').value='';$('cIssue').value='';if($('cFiles'))$('cFiles').value='';loadClaims();
   }catch(e){setMsg('cMsg','err',e.message);}
 }
 

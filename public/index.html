@@ -1855,7 +1855,7 @@ async function openTrailerDetail(id){
     ${canW?`<td><button class="btn sm ${s.done?'sec':''}" onclick="logStep('${esc(d.id)}','${s.step}')">${s.done?'Update':'Log'}</button></td>`:''}
   </tr>`).join('');
   const claimRows=d.claims.length?d.claims.map(c=>`<tr>
-    <td><b>${esc(c.id)}</b> ${c.status==='Open'?'<span class="badge b-low">Open</span>':'<span class="badge b-ok">Resolved</span>'}<br><span class="muted" style="font-size:11px">${esc(c.issue||'')}</span></td>
+    <td><b>${esc(c.id)}</b> ${c.status==='Open'?'<span class="badge b-low">Open</span>':'<span class="badge b-ok">Resolved</span>'}<br><span class="muted" style="font-size:11px">${esc(c.issue||'')}</span>${(c.attachments&&c.attachments.length)?`<br>${c.attachments.map(a=>`<a class="lnk" style="font-size:11px;margin-right:6px" onclick="viewProof('${encodeURIComponent(a.path)}')">${a.kind==='video'?'🎬':a.kind==='photo'?'📷':'📎'} ${esc(a.name||a.kind)}</a>`).join('')}`:''}</td>
     <td class="right" style="font-size:12px">parts ${money(c.partsCost)} · labor ${money(c.laborCost)} · ship ${money(c.shippingCost)}<br><b style="font-size:14px">${money(c.total)}</b></td>
     ${canW&&c.status==='Open'?`<td><button class="btn sm" onclick="resolveClaim('${esc(c.id)}','${esc(d.id)}')">Resolve</button></td>`:'<td></td>'}
   </tr>`).join(''):`<tr><td colspan="3" class="muted">No claims on this trailer.</td></tr>`;
@@ -1868,7 +1868,7 @@ async function openTrailerDetail(id){
       Owner: <b style="color:var(--txt)">${esc(w.ownerName||'—')}</b>${w.source==='portal'?' <span class="badge b-buy" style="font-size:10px">portal</span>':''}<br>
       ${w.address?esc(w.address)+'<br>':''}${[w.email,w.phone].filter(Boolean).map(esc).join(' · ')}${(w.email||w.phone)?'<br>':''}
       ${w.saleDate?'Purchased '+String(w.saleDate).slice(0,10)+' · ':''}${w.termMonths} mo · expires ${w.expiresAt?new Date(w.expiresAt).toLocaleDateString():'—'}${w.within15===false?' · <span style="color:var(--red)">⚠️ registered after 15-day window</span>':''}<br>
-      Opt-ins: ${[w.smsOptIn?'Text':null,w.emailOptIn?'Email':null].filter(Boolean).join(' + ')||'none'}${w.proofOfSale?` · <a class="lnk" onclick="viewProof('${encodeURIComponent(w.proofOfSale)}')">proof of sale</a>`:''}
+      Opt-ins: ${[w.smsOptIn?'Text':null,w.emailOptIn?'Email':null].filter(Boolean).join(' + ')||'none'}${w.proofOfSale?` · <a class="lnk" onclick="viewProof('${encodeURIComponent(w.proofOfSale)}')">proof of sale</a>`:''}${(d.regAttachments&&d.regAttachments.length)?' · '+d.regAttachments.map(a=>`<a class="lnk" onclick="viewProof('${encodeURIComponent(a.path)}')">${a.kind==='video'?'🎬':'📷'} ${esc(a.name||a.kind)}</a>`).join(' '):''}
     </div>
     ${w.verificationStatus==='pending'&&canW?`<div style="margin:0 0 8px"><button class="btn sm" onclick="reviewReg('${esc(d.id)}','approve',true)">✓ Verify</button> <button class="btn sm sec" onclick="reviewReg('${esc(d.id)}','reject',true)">✕ Reject</button></div>`:''}`
     :'<p class="muted" style="font-size:12px;margin:0 0 6px">Not registered.</p>'}

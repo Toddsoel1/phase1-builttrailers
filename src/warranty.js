@@ -5,6 +5,7 @@
 //   - claims: the repair, itemized parts (cost from parts master) + labor + shipping
 //   - rollups: completed inventory by dealer, and warranty cost by model / dealer
 import { all, one, q } from './db.js';
+import { attachmentsFor } from './portal.js';
 
 export const BUILD_STEPS = [
   { key: 'Parts',     label: 'Parts built' },
@@ -52,6 +53,7 @@ async function claimsForTrailer(trailerId) {
       id: c.id, status: c.status, issue: c.issue, openedAt: c.opened_at, resolvedAt: c.resolved_at, resolution: c.resolution,
       laborCost: Number(c.labor_cost), shippingCost: Number(c.shipping_cost), partsCost,
       total: partsCost + Number(c.labor_cost) + Number(c.shipping_cost), parts,
+      attachments: await attachmentsFor('claim', c.id),
     });
   }
   return out;
@@ -74,6 +76,7 @@ export async function trailerDetail(trailerId) {
     id: t.id, vin: t.vin, model: t.model, type: t.type, customer: t.customer, orderId: t.order_id,
     buildLog, warranty: warrantyStatus(reg), claims: await claimsForTrailer(trailerId),
     maintenance: maint.map(m => ({ id: m.id, item: m.item, performedOn: m.performed_on, note: m.note, source: m.source, submittedBy: m.submitted_by, createdAt: m.created_at })),
+    regAttachments: await attachmentsFor('registration', t.id),
   };
 }
 

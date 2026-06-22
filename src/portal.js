@@ -33,14 +33,37 @@ async function saveUpload(trailerId, dataUrl) {
   if (buf.length > MAX_UPLOAD) throw new Error('Proof-of-sale file is too large (max 10 MB).');
   const ext = (m[1].split('/')[1] || 'bin').replace(/[^a-z0-9]/gi, '').slice(0, 5);
   await mkdir(UPLOAD_DIR, { recursive: true });
-  const name = `${trailerId}-${Date.now()}.${ext}`;
+  const name = `${trailerId}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}.${ext}`;
   await writeFile(path.join(UPLOAD_DIR, name), buf);
   return `${UPLOAD_DIR}/${name}`;
 }
 
+// Save a list of attachments (photos / video / receipts) against a claim or
+// registration. Each item is { dataUrl, name, kind }. Returns how many saved.
+export async function saveAttachments(entityType, entityId, items, by) {
+  if (!Array.isArray(items)) return 0;
+  let n = 0;
+  for (const it of items.slice(0, 10)) {
+    if (!it || typeof it.dataUrl !== 'string' || !it.dataUrl.startsWith('data:')) continue;
+    const ct = (/^data:([^;]+)/.exec(it.dataUrl) || [])[1] || '';
+    const kind = it.kind || (ct.startsWith('video') ? 'video' : ct.startsWith('image') ? 'photo' : 'document');
+    let filePath = null;
+    try { filePath = await saveUpload(`${entityType}-${entityId}`, it.dataUrl); } catch { continue; }
+    if (!filePath) continue;
+    await q(`INSERT INTO attachment(entity_type,entity_id,kind,file_path,original_name,content_type,uploaded_by) VALUES($1,$2,$3,$4,$5,$6,$7)`,
+      [entityType, String(entityId), kind, filePath, it.name || null, ct || null, by || null]);
+    n++;
+  }
+  return n;
+}
+export async function attachmentsFor(entityType, entityId) {
+  return (await all('SELECT id,kind,file_path,original_name,created_at FROM attachment WHERE entity_type=$1 AND entity_id=$2 ORDER BY id', [entityType, String(entityId)]).catch(() => []))
+    .map(a => ({ id: a.id, kind: a.kind, path: a.file_path, name: a.original_name, at: a.created_at }));
+}
+
 export async function submitRegistration(data) {
   const { vin, ownerName, saleDate, warrantyAddress, email, phone, sellingDealer,
-          smsOptIn, emailOptIn, proofOfSale, source, termMonths, dealerCustomerId } = data || {};
+          smsOptIn, emailOptIn, proofOfSale, source, termMonths, dealerCustomerId, attachments } = data || {};
   if (!vin) throw new Error('VIN is required.');
   if (!ownerName) throw new Error('Owner full name is required.');
   if (!saleDate) throw new Error('Date of purchase is required.');
@@ -70,11 +93,12 @@ export async function submitRegistration(data) {
 
   // NOTE: opt-in delivery of the maintenance schedule / T&Cs / app link is captured here;
   // SMS uses the existing Twilio path, email delivery needs an email provider (flagged).
+  await saveAttachments('registration', t.id, attachments, ownerName);
   return { ok: true, within15: w15, status, autoVerified: status === 'verified' };
 }
 
 export async function submitPublicClaim(data) {
-  const { vin, issue, submittedBy, contact } = data || {};
+  const { vin, issue, submittedBy, contact, attachments } = data || {};
   if (!vin) throw new Error('VIN is required.');
   if (!issue) throw new Error('Please describe the issue.');
   const t = await one(`SELECT id FROM trailer WHERE upper(vin)=upper($1)`, [String(vin).trim()]);
@@ -82,7 +106,8 @@ export async function submitPublicClaim(data) {
   const id = 'WC-' + (5001 + (await all('SELECT id FROM warranty_claim', [])).length);
   await q(`INSERT INTO warranty_claim(id,trailer_id,issue,source,submitted_by,contact) VALUES($1,$2,$3,'portal',$4,$5)`,
     [id, t.id, issue, submittedBy || null, contact || null]);
-  return { id };
+  const photos = await saveAttachments('claim', id, attachments, submittedBy);
+  return { id, attachments: photos };
 }
 
 export async function submitMaintenance(data) {

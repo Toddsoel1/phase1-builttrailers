@@ -1266,6 +1266,8 @@ if (kind === 'postgres' || kind === 'pglite') {
     `ALTER TABLE warranty_claim ADD COLUMN IF NOT EXISTS contact TEXT`,
     `CREATE TABLE IF NOT EXISTS maintenance_record (id SERIAL PRIMARY KEY, trailer_id TEXT NOT NULL, item TEXT NOT NULL, performed_on DATE, note TEXT, source TEXT, submitted_by TEXT, created_at TIMESTAMPTZ NOT NULL DEFAULT now())`,
     `CREATE TABLE IF NOT EXISTS dealer_user (id TEXT PRIMARY KEY, email TEXT UNIQUE NOT NULL, password_hash TEXT NOT NULL, name TEXT, dealership_name TEXT, customer_id TEXT, status TEXT NOT NULL DEFAULT 'pending', created_at TIMESTAMPTZ NOT NULL DEFAULT now(), approved_by TEXT, approved_at TIMESTAMPTZ)`,
+    `CREATE TABLE IF NOT EXISTS attachment (id SERIAL PRIMARY KEY, entity_type TEXT NOT NULL, entity_id TEXT NOT NULL, kind TEXT, file_path TEXT NOT NULL, original_name TEXT, content_type TEXT, uploaded_by TEXT, created_at TIMESTAMPTZ NOT NULL DEFAULT now())`,
+    `CREATE INDEX IF NOT EXISTS idx_attach_entity ON attachment(entity_type, entity_id)`,
   ];
   // Migrate existing app_user.title into user_title junction (idempotent)
   await q(`INSERT INTO user_title(user_id,role_name)

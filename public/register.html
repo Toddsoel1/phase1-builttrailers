@@ -109,6 +109,9 @@ footer a{color:var(--accent)}
       </div>
       <label class="req">Describe the issue</label>
       <textarea id="cIssue" rows="4" placeholder="What's wrong with the trailer?"></textarea>
+      <label>Photos / video of the issue</label>
+      <input id="cFiles" type="file" accept="image/*,video/*" multiple>
+      <div class="note">Add photos or a short video so Built Trailers can validate the claim faster.</div>
       <button class="btn" onclick="submitClaim()">Submit Claim</button>
       <div id="cMsg" class="msg"></div>
     </div>
@@ -182,14 +185,16 @@ async function submitRegistration(){
   }catch(e){setMsg('rMsg','err',e.message);}
   finally{btn.disabled=false;btn.textContent='Register Warranty';}
 }
+async function readFiles(el){const out=[];for(const f of (el&&el.files?el.files:[])){if(f.size>10*1024*1024){throw new Error('Each file must be under 10 MB ("'+f.name+'").');}out.push({dataUrl:await readFile(f),name:f.name});}return out;}
 async function submitClaim(){
   const vin=$('cVin').value.trim(),issue=$('cIssue').value.trim();
   if(!vin||!issue){setMsg('cMsg','err','Please enter the VIN and describe the issue.');return;}
   try{
+    const attachments=await readFiles($('cFiles'));
     const d=await api('/api/public/claim',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({
-      vin,issue,submittedBy:$('cBy').value.trim()||undefined,contact:$('cContact').value.trim()||undefined})});
-    setMsg('cMsg','ok','✓ Claim '+d.id+' submitted. Built Trailers will be in touch.');
-    $('cIssue').value='';
+      vin,issue,submittedBy:$('cBy').value.trim()||undefined,contact:$('cContact').value.trim()||undefined,attachments})});
+    setMsg('cMsg','ok','✓ Claim '+d.id+' submitted'+(d.attachments?' with '+d.attachments+' file(s)':'')+'. Built Trailers will be in touch.');
+    $('cIssue').value='';$('cFiles').value='';
   }catch(e){setMsg('cMsg','err',e.message);}
 }
 async function submitMaintenance(){
