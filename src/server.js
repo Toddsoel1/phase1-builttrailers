@@ -29,6 +29,7 @@ import { sendMorningBriefings, previewBriefingFor } from './briefing.js';
 import * as invoicing from './invoicing.js';
 import * as trailers from './trailers.js';
 import * as warranty from './warranty.js';
+import * as portal from './portal.js';
 
 // Crash fast if JWT_SECRET is unset in production — predictable fallback is a critical vuln
 if (!process.env.JWT_SECRET) {
@@ -92,8 +93,18 @@ const loginLimiter = rateLimit({
   legacyHeaders: false,
   message: { error: 'Too many login attempts. Try again in 15 minutes.' },
 });
+// Throttle the unauthenticated public warranty portal
+const portalLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many requests. Please try again in a few minutes.' },
+});
 
-app.use(express.json());
+// Limit raised to accommodate base64 proof-of-sale uploads from the public portal.
+// (Production should move uploads to multipart + object storage — see portal.js.)
+app.use(express.json({ limit: '12mb' }));
 app.use(express.urlencoded({ extended: false })); // needed for Twilio webhook
 
 async function audit(req, action, detail) {
@@ -164,6 +175,25 @@ app.get('/api/sms/optin-check', authMiddleware, async (req, res) => {
 app.get('/optin',   (_req, res) => res.sendFile(path.join(__dir, '..', 'public', 'optin.html')));
 app.get('/privacy', (_req, res) => res.sendFile(path.join(__dir, '..', 'public', 'privacy.html')));
 app.get('/terms',   (_req, res) => res.sendFile(path.join(__dir, '..', 'public', 'terms.html')));
+
+// ---- Public warranty registration portal (no staff login; rate-limited) ----
+app.get('/register', (_req, res) => res.sendFile(path.join(__dir, '..', 'public', 'register.html')));
+app.get('/api/public/trailer/:vin', portalLimiter, async (req, res) => {
+  try { res.json(await portal.publicTrailerLookup(req.params.vin)); }
+  catch (e) { res.status(400).json({ error: e.message }); }
+});
+app.post('/api/public/register', portalLimiter, async (req, res) => {
+  try { res.json(await portal.submitRegistration(req.body || {})); }
+  catch (e) { res.status(400).json({ error: e.message }); }
+});
+app.post('/api/public/claim', portalLimiter, async (req, res) => {
+  try { res.json(await portal.submitPublicClaim(req.body || {})); }
+  catch (e) { res.status(400).json({ error: e.message }); }
+});
+app.post('/api/public/maintenance', portalLimiter, async (req, res) => {
+  try { res.json(await portal.submitMaintenance(req.body || {})); }
+  catch (e) { res.status(400).json({ error: e.message }); }
+});
 app.get('/t&cs',    (_req, res) => res.sendFile(path.join(__dir, '..', 'public', 'terms.html')));
 
 // ---- health ----
@@ -1026,6 +1056,24 @@ app.post('/api/warranty/claims/:id/resolve', authMiddleware, requireTier('editor
     res.json({ ok: true });
   } catch (e) { res.status(400).json({ error: e.message }); }
 });
+// Staff review of portal registrations
+app.get('/api/warranty/registrations/pending', authMiddleware, requireSection('trailers'), async (_req, res) =>
+  res.json(await portal.pendingRegistrations()));
+app.post('/api/warranty/registrations/:trailerId/review', authMiddleware, requireTier('editor'), requireSection('trailers'), async (req, res) => {
+  try {
+    const r = await portal.reviewRegistration(req.params.trailerId, req.body?.decision);
+    await audit(req, 'warranty.reg_review', `${req.params.trailerId} -> ${r.status}`);
+    res.json(r);
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+// View an uploaded proof-of-sale (staff only — never public)
+app.get('/api/warranty/proof', authMiddleware, requireSection('trailers'), async (req, res) => {
+  const rel = String(req.query.path || '');
+  const base = path.resolve(process.env.UPLOAD_DIR || './uploads');
+  const abs = path.resolve(rel);
+  if (!abs.startsWith(base)) return res.status(400).json({ error: 'invalid path' });
+  res.sendFile(abs, err => { if (err) res.status(404).json({ error: 'not found' }); });
+});
 
 // ---- audit ----
 app.get('/api/audit', authMiddleware, requireTier('admin'), async (_req, res) =>
@@ -1153,6 +1201,23 @@ if (kind === 'postgres' || kind === 'pglite') {
     `CREATE TABLE IF NOT EXISTS warranty_registration (trailer_id TEXT PRIMARY KEY, owner_name TEXT, owner_contact TEXT, registered_at TIMESTAMPTZ NOT NULL DEFAULT now(), term_months INTEGER NOT NULL DEFAULT 12, registered_by TEXT, note TEXT)`,
     `CREATE TABLE IF NOT EXISTS warranty_claim (id TEXT PRIMARY KEY, trailer_id TEXT NOT NULL, opened_at TIMESTAMPTZ NOT NULL DEFAULT now(), status TEXT NOT NULL DEFAULT 'Open', issue TEXT, labor_cost NUMERIC(12,2) NOT NULL DEFAULT 0, shipping_cost NUMERIC(12,2) NOT NULL DEFAULT 0, opened_by TEXT, resolved_at TIMESTAMPTZ, resolution TEXT)`,
     `CREATE TABLE IF NOT EXISTS warranty_claim_part (id SERIAL PRIMARY KEY, claim_id TEXT NOT NULL, part_id TEXT, part_name TEXT, qty INTEGER NOT NULL DEFAULT 1, unit_cost NUMERIC(12,2) NOT NULL DEFAULT 0)`,
+    // Warranty registration portal: richer registration fields + maintenance log
+    `ALTER TABLE warranty_registration ADD COLUMN IF NOT EXISTS email TEXT`,
+    `ALTER TABLE warranty_registration ADD COLUMN IF NOT EXISTS phone TEXT`,
+    `ALTER TABLE warranty_registration ADD COLUMN IF NOT EXISTS warranty_address TEXT`,
+    `ALTER TABLE warranty_registration ADD COLUMN IF NOT EXISTS sale_date DATE`,
+    `ALTER TABLE warranty_registration ADD COLUMN IF NOT EXISTS selling_dealer TEXT`,
+    `ALTER TABLE warranty_registration ADD COLUMN IF NOT EXISTS sms_opt_in BOOLEAN NOT NULL DEFAULT false`,
+    `ALTER TABLE warranty_registration ADD COLUMN IF NOT EXISTS email_opt_in BOOLEAN NOT NULL DEFAULT false`,
+    `ALTER TABLE warranty_registration ADD COLUMN IF NOT EXISTS proof_of_sale TEXT`,
+    `ALTER TABLE warranty_registration ADD COLUMN IF NOT EXISTS verification_status TEXT NOT NULL DEFAULT 'verified'`,
+    `ALTER TABLE warranty_registration ADD COLUMN IF NOT EXISTS within_15_days BOOLEAN`,
+    `ALTER TABLE warranty_registration ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'staff'`,
+    `ALTER TABLE warranty_registration ADD COLUMN IF NOT EXISTS submitted_by TEXT`,
+    `ALTER TABLE warranty_claim ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'staff'`,
+    `ALTER TABLE warranty_claim ADD COLUMN IF NOT EXISTS submitted_by TEXT`,
+    `ALTER TABLE warranty_claim ADD COLUMN IF NOT EXISTS contact TEXT`,
+    `CREATE TABLE IF NOT EXISTS maintenance_record (id SERIAL PRIMARY KEY, trailer_id TEXT NOT NULL, item TEXT NOT NULL, performed_on DATE, note TEXT, source TEXT, submitted_by TEXT, created_at TIMESTAMPTZ NOT NULL DEFAULT now())`,
   ];
   // Migrate existing app_user.title into user_title junction (idempotent)
   await q(`INSERT INTO user_title(user_id,role_name)

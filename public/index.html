@@ -1677,23 +1677,58 @@ async function syncQB(){ try{const r=await api('/api/accounting/sync',{method:'P
 let trailerTab='vins';
 function warrantyBadge(w){
   if(!w||!w.registered) return '<span class="badge b-low">Unregistered</span>';
-  return w.status==='In warranty'?'<span class="badge b-ok">In warranty</span>':'<span class="badge b-below">Expired</span>';
+  if(w.status==='In warranty') return '<span class="badge b-ok">In warranty</span>';
+  if(w.status==='Pending verification') return '<span class="badge b-low">Pending verification</span>';
+  if(w.status==='Rejected') return '<span class="badge b-below">Rejected</span>';
+  return '<span class="badge b-below">Expired</span>';
 }
 async function viewTrailers(){
   $('pTitle').textContent='Trailers & Warranty';
   $('pSub').textContent='Per-trailer VINs, build history, and warranty';
   $('pActions').innerHTML=canSee('accounting')?`<button class="btn sec" onclick="vinSettings()">⚙ VIN Settings</button>`:'';
+  let pendN=0; try{ pendN=(await api('/api/warranty/registrations/pending')).length; }catch(e){}
   const tabs=`<div class="tabs" style="margin-bottom:12px">
     <button class="${trailerTab==='vins'?'active':''}" onclick="trailerTab='vins';viewTrailers()">🏷️ VINs</button>
     <button class="${trailerTab==='dealer'?'active':''}" onclick="trailerTab='dealer';viewTrailers()">🏬 By Dealer</button>
+    <button class="${trailerTab==='regs'?'active':''}" onclick="trailerTab='regs';viewTrailers()">📝 Registrations${pendN?` <span class="badge b-low" style="margin-left:2px">${pendN}</span>`:''}</button>
     <button class="${trailerTab==='claims'?'active':''}" onclick="trailerTab='claims';viewTrailers()">🛠️ Warranty Claims</button></div>`;
   let body='';
   try{
     if(trailerTab==='dealer') body=await trailersDealerTab();
     else if(trailerTab==='claims') body=await trailersClaimsTab();
+    else if(trailerTab==='regs') body=await trailersRegsTab();
     else body=await trailersVinsTab();
   }catch(e){ body=`<div class="card">Error: ${esc(e.message)}</div>`; }
   $('content').innerHTML=tabs+body;
+}
+async function trailersRegsTab(){
+  const pend=await api('/api/warranty/registrations/pending');
+  const canReview=canEdit();
+  if(!pend.length) return `<div class="card"><p class="muted">No registrations awaiting verification. Submissions from the public <b>/register</b> portal appear here for review.</p></div>`;
+  return `<div class="card"><h3>Registrations awaiting verification <span class="badge b-low">${pend.length}</span></h3>
+    <p class="muted" style="font-size:12px;margin-bottom:10px">Verify the purchase date against the uploaded proof of sale, then approve or reject. Flagged ⚠️ = submitted outside the 15-day window.</p>
+    <table><thead><tr><th>VIN</th><th>Owner</th><th>Sale date</th><th>Contact</th><th>Proof</th><th>15-day</th>${canReview?'<th></th>':''}</tr></thead><tbody>
+    ${pend.map(r=>`<tr>
+      <td><b style="font-family:ui-monospace,monospace;font-size:11px">${esc(r.vin)}</b><br><span class="muted" style="font-size:11px">${esc(r.model||'')}</span></td>
+      <td>${esc(r.ownerName||'')}${r.sellingDealer?`<br><span class="muted" style="font-size:11px">via ${esc(r.sellingDealer)}</span>`:''}</td>
+      <td>${r.saleDate?String(r.saleDate).slice(0,10):'—'}</td>
+      <td style="font-size:12px">${esc(r.email||'')}${r.phone?`<br>${esc(r.phone)}`:''}</td>
+      <td>${r.proofOfSale?`<a class="lnk" onclick="viewProof('${encodeURIComponent(r.proofOfSale)}')">View</a>`:'<span class="muted">none</span>'}</td>
+      <td>${r.within15===false?'<span class="badge b-below">⚠️ late</span>':r.within15===true?'<span class="badge b-ok">✓</span>':'<span class="muted">—</span>'}</td>
+      ${canReview?`<td style="white-space:nowrap"><button class="btn sm" onclick="reviewReg('${esc(r.trailerId)}','approve')">✓</button> <button class="btn sm sec" onclick="reviewReg('${esc(r.trailerId)}','reject')">✕</button></td>`:''}
+    </tr>`).join('')}
+    </tbody></table></div>`;
+}
+async function reviewReg(trailerId,decision,fromModal){
+  try{ await api('/api/warranty/registrations/'+encodeURIComponent(trailerId)+'/review',{method:'POST',body:JSON.stringify({decision})});
+    toast(decision==='approve'?'Registration verified':'Registration rejected');
+    if(fromModal) openTrailerDetail(trailerId); else viewTrailers();
+  }catch(e){ toast(e.message); }
+}
+async function viewProof(encPath){
+  try{ const r=await fetch(API+'/api/warranty/proof?path='+encPath,{headers:{Authorization:'Bearer '+TOKEN}});
+    if(!r.ok) throw new Error('Could not load proof'); const blob=await r.blob(); window.open(URL.createObjectURL(blob),'_blank');
+  }catch(e){ toast(e.message); }
 }
 async function trailersVinsTab(){
   const canAssign=canSee('accounting');
@@ -1802,11 +1837,23 @@ async function openTrailerDetail(id){
     <h3 style="font-size:13px;color:var(--accent);margin:14px 0 6px">Build history <span class="muted" style="text-transform:none">— who did each step</span></h3>
     <table><thead><tr><th>Step</th><th>By</th><th>When</th>${canW?'<th></th>':''}</tr></thead><tbody>${buildRows}</tbody></table>
     <h3 style="font-size:13px;color:var(--accent);margin:16px 0 6px">Warranty ${warrantyBadge(w)}</h3>
-    ${w.registered?`<p class="muted" style="font-size:12px;margin:0 0 6px">Owner: ${esc(w.ownerName||'—')}${w.ownerContact?' · '+esc(w.ownerContact):''} · ${w.termMonths} mo · expires ${w.expiresAt?new Date(w.expiresAt).toLocaleDateString():'—'}</p>`:'<p class="muted" style="font-size:12px;margin:0 0 6px">Not registered.</p>'}
+    ${w.registered?`<div style="font-size:12px;color:var(--muted);margin:0 0 8px;line-height:1.7">
+      Owner: <b style="color:var(--txt)">${esc(w.ownerName||'—')}</b>${w.source==='portal'?' <span class="badge b-buy" style="font-size:10px">portal</span>':''}<br>
+      ${w.address?esc(w.address)+'<br>':''}${[w.email,w.phone].filter(Boolean).map(esc).join(' · ')}${(w.email||w.phone)?'<br>':''}
+      ${w.saleDate?'Purchased '+String(w.saleDate).slice(0,10)+' · ':''}${w.termMonths} mo · expires ${w.expiresAt?new Date(w.expiresAt).toLocaleDateString():'—'}${w.within15===false?' · <span style="color:var(--red)">⚠️ registered after 15-day window</span>':''}<br>
+      Opt-ins: ${[w.smsOptIn?'Text':null,w.emailOptIn?'Email':null].filter(Boolean).join(' + ')||'none'}${w.proofOfSale?` · <a class="lnk" onclick="viewProof('${encodeURIComponent(w.proofOfSale)}')">proof of sale</a>`:''}
+    </div>
+    ${w.verificationStatus==='pending'&&canW?`<div style="margin:0 0 8px"><button class="btn sm" onclick="reviewReg('${esc(d.id)}','approve',true)">✓ Verify</button> <button class="btn sm sec" onclick="reviewReg('${esc(d.id)}','reject',true)">✕ Reject</button></div>`:''}`
+    :'<p class="muted" style="font-size:12px;margin:0 0 6px">Not registered.</p>'}
     ${canW?`<button class="btn sm sec" onclick="registerWarrantyForm('${esc(d.id)}')">${w.registered?'Update registration':'Register warranty'}</button>`:''}
     <h3 style="font-size:13px;color:var(--accent);margin:16px 0 6px">Warranty claims</h3>
     <table><tbody>${claimRows}</tbody></table>
     ${canW?`<button class="btn sm" style="margin-top:8px" onclick="openClaimForm('${esc(d.id)}')">+ New claim</button>`:''}
+    <h3 style="font-size:13px;color:var(--accent);margin:16px 0 6px">Maintenance log</h3>
+    ${d.maintenance&&d.maintenance.length?`<table><tbody>
+      ${d.maintenance.map(m=>`<tr><td><b>${esc(m.item)}</b>${m.note?`<br><span class="muted" style="font-size:11px">${esc(m.note)}</span>`:''}</td>
+      <td class="right muted" style="font-size:12px">${m.performedOn?String(m.performedOn).slice(0,10):(m.createdAt?new Date(m.createdAt).toLocaleDateString():'')}${m.source==='portal'?' <span class="badge b-buy" style="font-size:10px">portal</span>':''}</td></tr>`).join('')}
+    </tbody></table>`:'<p class="muted" style="font-size:12px">No maintenance recorded.</p>'}
     <div style="margin-top:14px;text-align:right"><button class="btn sec" onclick="$('modalBg').remove()">Close</button></div>`);
 }
 async function logStep(trailerId,step){

@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Built Trailers — Warranty Registration</title>
+<link rel="icon" type="image/png" sizes="192x192" href="/icons/icon-192.png">
+<style>
+:root{--accent:#ff7a18;--ink:#1a2230;--muted:#6b7785;--line:#e2e7ec;--bg:#f4f6f8;--ok:#1a7f4b;--warn:#b26a00;--err:#c0392b}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;background:var(--bg);color:var(--ink);line-height:1.5}
+.top{background:#0f1419;color:#fff;padding:18px 20px}
+.top .wrap{max-width:680px;margin:0 auto;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px}
+.top h1{font-size:18px;letter-spacing:.5px}.top h1 b{color:var(--accent)}
+.top .sub{font-size:13px;color:#9fb0c0}
+.wrap{max-width:680px;margin:0 auto;padding:20px}
+.tabs{display:flex;gap:6px;margin:18px 0}
+.tabs button{flex:1;background:#fff;border:1px solid var(--line);color:var(--muted);padding:10px;border-radius:9px;font-size:13px;font-weight:600;cursor:pointer}
+.tabs button.active{background:var(--accent);color:#1a1206;border-color:var(--accent)}
+.card{background:#fff;border:1px solid var(--line);border-radius:14px;padding:20px;margin-bottom:16px;box-shadow:0 1px 2px rgba(0,0,0,.03)}
+.card h2{font-size:17px;margin-bottom:4px}.card .lead{font-size:13px;color:var(--muted);margin-bottom:14px}
+label{display:block;font-size:12.5px;font-weight:600;color:var(--ink);margin:12px 0 4px}
+.req::after{content:" *";color:var(--err)}
+input,select,textarea{width:100%;border:1px solid var(--line);border-radius:9px;padding:11px;font-size:15px;font-family:inherit;background:#fff;color:var(--ink)}
+input:focus,textarea:focus,select:focus{outline:none;border-color:var(--accent)}
+.vinrow{display:flex;gap:8px}.vinrow input{flex:1;font-family:ui-monospace,monospace;letter-spacing:1px;text-transform:uppercase}
+.row{display:flex;gap:12px;flex-wrap:wrap}.row>*{flex:1;min-width:160px}
+.btn{background:var(--accent);color:#1a1206;border:none;padding:12px 18px;border-radius:9px;font-weight:700;font-size:15px;cursor:pointer;width:100%;margin-top:16px}
+.btn:disabled{opacity:.5;cursor:not-allowed}
+.btn.sec{background:#eef1f4;color:var(--ink);width:auto;margin:0;padding:11px 16px;font-size:14px}
+.chk{display:flex;align-items:flex-start;gap:9px;margin:10px 0;font-size:13.5px;color:var(--ink);font-weight:500}
+.chk input{width:18px;height:18px;margin-top:1px;flex:0 0 auto}
+.note{background:#fff6ec;border:1px solid #ffe0bf;border-radius:9px;padding:11px 13px;font-size:12.5px;color:#8a5200;margin-top:6px}
+.msg{padding:12px 14px;border-radius:9px;font-size:14px;margin-top:14px;display:none}
+.msg.ok{background:#e8f6ee;border:1px solid #b6e2c6;color:var(--ok);display:block}
+.msg.warn{background:#fff4e2;border:1px solid #ffd99a;color:var(--warn);display:block}
+.msg.err{background:#fdecea;border:1px solid #f5c3bc;color:var(--err);display:block}
+.lookup{font-size:13px;margin-top:8px;color:var(--muted);min-height:18px}
+.lookup b{color:var(--ink)}
+.hidden{display:none}
+footer{max-width:680px;margin:8px auto 30px;padding:0 20px;font-size:12px;color:var(--muted);text-align:center}
+footer a{color:var(--accent)}
+.filename{font-size:12px;color:var(--muted);margin-top:5px}
+</style>
+</head>
+<body>
+<div class="top"><div class="wrap"><div><h1>BUILT <b>TRAILERS</b></h1><div class="sub">Warranty Registration</div></div></div></div>
+
+<div class="wrap">
+  <div class="tabs">
+    <button id="tabRegister" class="active" onclick="showTab('register')">Register Warranty</button>
+    <button id="tabClaim" onclick="showTab('claim')">Submit a Claim</button>
+    <button id="tabMaint" onclick="showTab('maint')">Maintenance Log</button>
+  </div>
+
+  <!-- REGISTER -->
+  <div id="paneRegister">
+    <div class="card">
+      <h2>Register your trailer's warranty</h2>
+      <p class="lead">Dealerships or trailer owners — register at the time of sale. Trailers must be registered within <b>15 days</b> of the sale date by the selling dealership.</p>
+
+      <label class="req">Trailer VIN (17 characters)</label>
+      <div class="vinrow">
+        <input id="rVin" maxlength="17" placeholder="e.g. BLTUT7X14TA000001" oninput="this.value=this.value.toUpperCase()">
+        <button class="btn sec" onclick="lookupVin()">Look up</button>
+      </div>
+      <div id="rLookup" class="lookup"></div>
+
+      <label class="req">Trailer owner — full name</label>
+      <input id="rOwner" placeholder="First and last name">
+
+      <div class="row">
+        <div><label class="req">Date of purchase</label><input id="rSaleDate" type="date"></div>
+        <div><label>Selling dealership</label><input id="rDealer" placeholder="Dealership name"></div>
+      </div>
+
+      <label>Warranty mailing address</label>
+      <input id="rAddress" placeholder="Street, city, state, ZIP">
+
+      <div class="row">
+        <div><label class="req">Email</label><input id="rEmail" type="email" placeholder="you@example.com"></div>
+        <div><label class="req">Phone</label><input id="rPhone" type="tel" placeholder="(555) 555-1234"></div>
+      </div>
+
+      <label>Proof of sale — buyer's order or invoice</label>
+      <input id="rProof" type="file" accept="image/*,application/pdf" onchange="showFileName()">
+      <div id="rFileName" class="fileName"></div>
+      <div class="note">The warranty start date is the purchase date shown on this document. Built Trailers verifies the date against your upload before the warranty is active.</div>
+
+      <label style="margin-top:16px">Send me my required maintenance schedule, warranty terms &amp; conditions, and the app download link by:</label>
+      <div class="chk"><input type="checkbox" id="rSms"><label for="rSms" style="margin:0;font-weight:500">Text message</label></div>
+      <div class="chk"><input type="checkbox" id="rEmailOpt"><label for="rEmailOpt" style="margin:0;font-weight:500">Email</label></div>
+
+      <button class="btn" id="rBtn" onclick="submitRegistration()">Register Warranty</button>
+      <div id="rMsg" class="msg"></div>
+    </div>
+  </div>
+
+  <!-- CLAIM -->
+  <div id="paneClaim" class="hidden">
+    <div class="card">
+      <h2>Submit a warranty claim</h2>
+      <p class="lead">Trailer owners and selling dealerships can submit a claim. Built Trailers will follow up to schedule the repair.</p>
+      <label class="req">Trailer VIN</label>
+      <input id="cVin" maxlength="17" placeholder="17-character VIN" style="font-family:ui-monospace,monospace;text-transform:uppercase" oninput="this.value=this.value.toUpperCase()">
+      <div class="row">
+        <div><label>Your name</label><input id="cBy" placeholder="Owner or dealership"></div>
+        <div><label>Contact (email or phone)</label><input id="cContact"></div>
+      </div>
+      <label class="req">Describe the issue</label>
+      <textarea id="cIssue" rows="4" placeholder="What's wrong with the trailer?"></textarea>
+      <button class="btn" onclick="submitClaim()">Submit Claim</button>
+      <div id="cMsg" class="msg"></div>
+    </div>
+  </div>
+
+  <!-- MAINTENANCE -->
+  <div id="paneMaint" class="hidden">
+    <div class="card">
+      <h2>Log required maintenance</h2>
+      <p class="lead">Keep your warranty in good standing by recording required maintenance as you complete it.</p>
+      <label class="req">Trailer VIN</label>
+      <input id="mVin" maxlength="17" placeholder="17-character VIN" style="font-family:ui-monospace,monospace;text-transform:uppercase" oninput="this.value=this.value.toUpperCase()">
+      <div class="row">
+        <div><label class="req">Maintenance item</label><input id="mItem" placeholder="e.g. Repacked wheel bearings"></div>
+        <div><label>Date performed</label><input id="mDate" type="date"></div>
+      </div>
+      <label>Notes</label>
+      <textarea id="mNote" rows="3" placeholder="Optional"></textarea>
+      <button class="btn" onclick="submitMaintenance()">Log Maintenance</button>
+      <div id="mMsg" class="msg"></div>
+    </div>
+  </div>
+</div>
+
+<footer>
+  📲 Tip: add this page to your phone's home screen to log maintenance and submit claims anytime.<br>
+  <a href="/privacy">Privacy</a> · <a href="/terms">Terms &amp; Conditions</a> · © Built Trailers
+</footer>
+
+<script>
+const $=id=>document.getElementById(id);
+function showTab(t){
+  for(const k of ['register','claim','maint']){
+    $('pane'+k[0].toUpperCase()+k.slice(1)).classList.toggle('hidden',k!==t);
+    $('tab'+k[0].toUpperCase()+k.slice(1)).classList.toggle('active',k===t);
+  }
+}
+function setMsg(id,cls,html){const e=$(id);e.className='msg '+cls;e.innerHTML=html;}
+async function api(path,opts){const r=await fetch(path,opts);const d=await r.json().catch(()=>({}));if(!r.ok)throw new Error(d.error||('Error '+r.status));return d;}
+function showFileName(){const f=$('rProof').files[0];$('rFileName').textContent=f?('Selected: '+f.name):'';}
+
+async function lookupVin(){
+  const vin=$('rVin').value.trim();
+  if(!vin){$('rLookup').textContent='';return;}
+  $('rLookup').textContent='Looking up…';
+  try{
+    const d=await api('/api/public/trailer/'+encodeURIComponent(vin));
+    if(!d.found){$('rLookup').innerHTML='<span style="color:#c0392b">No trailer found with that VIN. Double-check the 17 characters.</span>';return;}
+    let s='✓ Found: <b>'+d.model+'</b>';
+    if(d.registered) s+=' — already registered ('+d.status+'). Submitting again will update it.';
+    $('rLookup').innerHTML=s;
+  }catch(e){$('rLookup').innerHTML='<span style="color:#c0392b">'+e.message+'</span>';}
+}
+function readFile(file){return new Promise((res,rej)=>{const r=new FileReader();r.onload=()=>res(r.result);r.onerror=rej;r.readAsDataURL(file);});}
+
+async function submitRegistration(){
+  const vin=$('rVin').value.trim(), owner=$('rOwner').value.trim(), sale=$('rSaleDate').value;
+  const email=$('rEmail').value.trim(), phone=$('rPhone').value.trim();
+  if(!vin||!owner||!sale||(!email&&!phone)){setMsg('rMsg','err','Please fill in VIN, owner name, date of purchase, and an email or phone.');return;}
+  const btn=$('rBtn');btn.disabled=true;btn.textContent='Submitting…';
+  try{
+    let proof=null;const f=$('rProof').files[0];
+    if(f){ if(f.size>10*1024*1024) throw new Error('Proof file must be under 10 MB.'); proof=await readFile(f); }
+    const d=await api('/api/public/register',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({
+      vin,ownerName:owner,saleDate:sale,warrantyAddress:$('rAddress').value.trim()||undefined,email:email||undefined,phone:phone||undefined,
+      sellingDealer:$('rDealer').value.trim()||undefined,smsOptIn:$('rSms').checked,emailOptIn:$('rEmailOpt').checked,
+      proofOfSale:proof||undefined,source:'portal'})});
+    const w15=d.within15;
+    setMsg('rMsg','ok','✓ Registration received and pending verification by Built Trailers.'+
+      (w15===false?' <b>Note:</b> this is past the 15-day registration window — Built Trailers will review it.':w15===true?' It was submitted within the 15-day window.':''));
+  }catch(e){setMsg('rMsg','err',e.message);}
+  finally{btn.disabled=false;btn.textContent='Register Warranty';}
+}
+async function submitClaim(){
+  const vin=$('cVin').value.trim(),issue=$('cIssue').value.trim();
+  if(!vin||!issue){setMsg('cMsg','err','Please enter the VIN and describe the issue.');return;}
+  try{
+    const d=await api('/api/public/claim',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({
+      vin,issue,submittedBy:$('cBy').value.trim()||undefined,contact:$('cContact').value.trim()||undefined})});
+    setMsg('cMsg','ok','✓ Claim '+d.id+' submitted. Built Trailers will be in touch.');
+    $('cIssue').value='';
+  }catch(e){setMsg('cMsg','err',e.message);}
+}
+async function submitMaintenance(){
+  const vin=$('mVin').value.trim(),item=$('mItem').value.trim();
+  if(!vin||!item){setMsg('mMsg','err','Please enter the VIN and the maintenance item.');return;}
+  try{
+    await api('/api/public/maintenance',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({
+      vin,item,performedOn:$('mDate').value||undefined,note:$('mNote').value.trim()||undefined,submittedBy:undefined})});
+    setMsg('mMsg','ok','✓ Maintenance logged for '+vin+'.');
+    $('mItem').value='';$('mNote').value='';
+  }catch(e){setMsg('mMsg','err',e.message);}
+}
+</script>
+</body>
+</html>

@@ -17,16 +17,23 @@ const DEFAULT_TERM = 12; // months
 
 function warrantyStatus(reg) {
   if (!reg || !reg.registered_at) return { registered: false, status: 'Unregistered', expiresAt: null, termMonths: null, ownerName: null, ownerContact: null, registeredAt: null };
-  const exp = new Date(reg.registered_at);
+  // Warranty starts on the sale/invoice date when known, else the registration date.
+  const start = reg.sale_date || reg.registered_at;
+  const exp = new Date(start);
   exp.setMonth(exp.getMonth() + (Number(reg.term_months) || DEFAULT_TERM));
+  const vs = reg.verification_status || 'verified';
+  const status = vs === 'pending' ? 'Pending verification'
+    : vs === 'rejected' ? 'Rejected'
+    : (Date.now() < exp.getTime() ? 'In warranty' : 'Expired');
   return {
-    registered: true,
-    status: Date.now() < exp.getTime() ? 'In warranty' : 'Expired',
-    expiresAt: exp.toISOString(),
-    termMonths: Number(reg.term_months) || DEFAULT_TERM,
-    ownerName: reg.owner_name || null,
-    ownerContact: reg.owner_contact || null,
-    registeredAt: reg.registered_at,
+    registered: true, status, verificationStatus: vs,
+    expiresAt: exp.toISOString(), termMonths: Number(reg.term_months) || DEFAULT_TERM,
+    ownerName: reg.owner_name || null, ownerContact: reg.owner_contact || null,
+    email: reg.email || null, phone: reg.phone || null, address: reg.warranty_address || null,
+    saleDate: reg.sale_date || null, sellingDealer: reg.selling_dealer || null,
+    smsOptIn: !!reg.sms_opt_in, emailOptIn: !!reg.email_opt_in,
+    within15: reg.within_15_days, source: reg.source || 'staff',
+    proofOfSale: reg.proof_of_sale || null, registeredAt: reg.registered_at,
   };
 }
 
@@ -62,9 +69,11 @@ export async function trailerDetail(trailerId) {
     const done = steps.find(x => x.step === s.key);
     return { step: s.key, label: s.label, done: !!done, by: done?.employee_name || null, at: done?.completed_at || null, note: done?.note || null };
   });
+  const maint = await all('SELECT * FROM maintenance_record WHERE trailer_id=$1 ORDER BY COALESCE(performed_on, created_at::date) DESC, id DESC', [trailerId]).catch(() => []);
   return {
     id: t.id, vin: t.vin, model: t.model, type: t.type, customer: t.customer, orderId: t.order_id,
     buildLog, warranty: warrantyStatus(reg), claims: await claimsForTrailer(trailerId),
+    maintenance: maint.map(m => ({ id: m.id, item: m.item, performedOn: m.performed_on, note: m.note, source: m.source, submittedBy: m.submitted_by, createdAt: m.created_at })),
   };
 }
 
@@ -112,7 +121,7 @@ export async function resolveClaim(claimId, resolution) {
 // Completed inventory (trailers with a VIN) grouped by dealer, with warranty status.
 export async function byDealer() {
   const rows = await all(`SELECT c.name AS dealer, t.id, t.vin, t.serial, t.order_id, m.name AS model, m.category AS type,
-                                 r.registered_at, r.term_months
+                                 r.registered_at, r.term_months, r.sale_date, r.verification_status
                             FROM trailer t
                             LEFT JOIN customer c ON c.id=t.customer_id
                             LEFT JOIN model m ON m.id=t.model_id
@@ -125,7 +134,7 @@ export async function byDealer() {
     if (!map.has(key)) map.set(key, { dealer: key, trailers: [] });
     map.get(key).trailers.push({
       id: r.id, vin: r.vin, model: r.model, type: r.type, orderId: r.order_id,
-      warranty: warrantyStatus(r.registered_at ? { registered_at: r.registered_at, term_months: r.term_months } : null),
+      warranty: warrantyStatus(r.registered_at ? { registered_at: r.registered_at, term_months: r.term_months, sale_date: r.sale_date, verification_status: r.verification_status } : null),
     });
   }
   return [...map.values()];

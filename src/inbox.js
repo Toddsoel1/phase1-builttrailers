@@ -67,11 +67,14 @@ export async function actionItemsFor(user) {
       label: `${plural(n, 'order')} due within 7 days`, count: n, link: 'orders' });
   }
 
-  // 5b. Open warranty claims (trailers section)
+  // 5b. Open warranty claims + portal registrations awaiting verification (trailers section)
   if (has('trailers')) {
     const n = await count(`SELECT COUNT(*)::int AS n FROM warranty_claim WHERE status='Open'`);
     if (n) items.push({ key: 'warranty_claims', icon: '🛠️',
       label: `${plural(n, 'open warranty claim')}`, count: n, link: 'trailers' });
+    const pr = await count(`SELECT COUNT(*)::int AS n FROM warranty_registration WHERE verification_status='pending'`);
+    if (pr) items.push({ key: 'warranty_regs', icon: '📝',
+      label: `${plural(pr, 'warranty registration')} to verify`, count: pr, link: 'trailers' });
   }
 
   // 6. Time-off requests from MY direct reports waiting on my approval
