@@ -28,6 +28,7 @@ import { actionItemsFor, resolveUserForInbox } from './inbox.js';
 import { sendMorningBriefings, previewBriefingFor } from './briefing.js';
 import * as invoicing from './invoicing.js';
 import * as trailers from './trailers.js';
+import * as warranty from './warranty.js';
 
 // Crash fast if JWT_SECRET is unset in production — predictable fallback is a critical vuln
 if (!process.env.JWT_SECRET) {
@@ -983,6 +984,49 @@ app.put('/api/trailers/config', authMiddleware, requireSection('accounting'), as
   res.json(cfg);
 });
 
+// ---- Warranty & build history ----
+app.get('/api/warranty/steps', authMiddleware, requireSection('trailers'), (_req, res) => res.json(warranty.BUILD_STEPS));
+app.get('/api/warranty/by-dealer', authMiddleware, requireSection('trailers'), async (_req, res) => res.json(await warranty.byDealer()));
+app.get('/api/warranty/summary', authMiddleware, requireSection('trailers'), async (_req, res) => res.json(await warranty.summary()));
+app.get('/api/warranty/claims', authMiddleware, requireSection('trailers'), async (_req, res) => res.json(await warranty.claimsList()));
+app.get('/api/trailers/:id/detail', authMiddleware, requireSection('trailers'), async (req, res) => {
+  const d = await warranty.trailerDetail(req.params.id);
+  if (!d) return res.status(404).json({ error: 'trailer not found' });
+  res.json(d);
+});
+// Mutations require editor tier (shop floor + supervisors)
+app.post('/api/trailers/:id/build-step', authMiddleware, requireTier('editor'), requireSection('trailers'), async (req, res) => {
+  const { step, employeeId, employeeName, note } = req.body || {};
+  try {
+    const d = await warranty.logBuildStep(req.params.id, step, { employeeId, employeeName, note }, req.user);
+    await audit(req, 'build.step', `${req.params.id} ${step} by ${employeeName || '—'}`);
+    res.json(d);
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+app.post('/api/trailers/:id/warranty', authMiddleware, requireTier('editor'), requireSection('trailers'), async (req, res) => {
+  try {
+    const d = await warranty.registerWarranty(req.params.id, req.body || {}, req.user);
+    await audit(req, 'warranty.register', `${req.params.id}`);
+    res.json(d);
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+app.post('/api/warranty/claims', authMiddleware, requireTier('editor'), requireSection('trailers'), async (req, res) => {
+  const { trailerId } = req.body || {};
+  if (!trailerId) return res.status(400).json({ error: 'trailerId required' });
+  try {
+    const id = await warranty.openClaim(trailerId, req.body || {}, req.user);
+    await audit(req, 'warranty.claim', `${id} on ${trailerId}`);
+    res.json({ id });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+app.post('/api/warranty/claims/:id/resolve', authMiddleware, requireTier('editor'), requireSection('trailers'), async (req, res) => {
+  try {
+    await warranty.resolveClaim(req.params.id, req.body?.resolution);
+    await audit(req, 'warranty.resolve', req.params.id);
+    res.json({ ok: true });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
 // ---- audit ----
 app.get('/api/audit', authMiddleware, requireTier('admin'), async (_req, res) =>
   res.json(await all('SELECT * FROM audit_log ORDER BY id DESC LIMIT 100', [])));
@@ -1105,6 +1149,10 @@ if (kind === 'postgres' || kind === 'pglite') {
     `ALTER TABLE sales_order ADD COLUMN IF NOT EXISTS invoice_batch_id TEXT`,
     `ALTER TABLE sales_order ADD COLUMN IF NOT EXISTS billed BOOLEAN NOT NULL DEFAULT false`,
     `CREATE TABLE IF NOT EXISTS trailer (id TEXT PRIMARY KEY, order_id TEXT, model_id TEXT, customer_id TEXT, vin TEXT UNIQUE, serial INTEGER, status TEXT NOT NULL DEFAULT 'Pending', created_at TIMESTAMPTZ NOT NULL DEFAULT now(), vin_assigned_at TIMESTAMPTZ, vin_assigned_by TEXT)`,
+    `CREATE TABLE IF NOT EXISTS trailer_build_step (id SERIAL PRIMARY KEY, trailer_id TEXT NOT NULL, step TEXT NOT NULL, employee_id TEXT, employee_name TEXT, completed_at TIMESTAMPTZ NOT NULL DEFAULT now(), note TEXT, logged_by TEXT, UNIQUE(trailer_id, step))`,
+    `CREATE TABLE IF NOT EXISTS warranty_registration (trailer_id TEXT PRIMARY KEY, owner_name TEXT, owner_contact TEXT, registered_at TIMESTAMPTZ NOT NULL DEFAULT now(), term_months INTEGER NOT NULL DEFAULT 12, registered_by TEXT, note TEXT)`,
+    `CREATE TABLE IF NOT EXISTS warranty_claim (id TEXT PRIMARY KEY, trailer_id TEXT NOT NULL, opened_at TIMESTAMPTZ NOT NULL DEFAULT now(), status TEXT NOT NULL DEFAULT 'Open', issue TEXT, labor_cost NUMERIC(12,2) NOT NULL DEFAULT 0, shipping_cost NUMERIC(12,2) NOT NULL DEFAULT 0, opened_by TEXT, resolved_at TIMESTAMPTZ, resolution TEXT)`,
+    `CREATE TABLE IF NOT EXISTS warranty_claim_part (id SERIAL PRIMARY KEY, claim_id TEXT NOT NULL, part_id TEXT, part_name TEXT, qty INTEGER NOT NULL DEFAULT 1, unit_cost NUMERIC(12,2) NOT NULL DEFAULT 0)`,
   ];
   // Migrate existing app_user.title into user_title junction (idempotent)
   await q(`INSERT INTO user_title(user_id,role_name)

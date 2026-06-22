@@ -152,7 +152,7 @@ function logout(){TOKEN=null;ME=null;$('app').classList.add('hidden');$('login')
 $('liPass').addEventListener('keydown',e=>{if(e.key==='Enter')login();});
 
 // ---- nav/render ----
-const NAV=[['dashboard','📊 Dashboard'],['orders','📋 Orders & Fulfillment'],['neworder','➕ New Order'],['customers','🏬 Customers & Dealers'],['parts','📦 Parts Master'],['predict','🤖 Predictive Ordering'],['pos','🧾 Purchase Orders'],['boms','🧩 BOMs & Cost'],['inventory','📈 Inventory Value'],['accounting','💵 Accounting'],['trailers','🚛 Trailers & VINs'],['team','👷 Team & Payroll'],['timeoff','📅 Schedule & Time Off'],['outcomes','🎯 Goals & Outcomes'],['wins','🎉 Wins'],['forecast','🔮 Forecasting & Planning'],['notify','💬 Notifications'],['support','🆘 Support'],['users','👤 Users & Roles']];
+const NAV=[['dashboard','📊 Dashboard'],['orders','📋 Orders & Fulfillment'],['neworder','➕ New Order'],['customers','🏬 Customers & Dealers'],['parts','📦 Parts Master'],['predict','🤖 Predictive Ordering'],['pos','🧾 Purchase Orders'],['boms','🧩 BOMs & Cost'],['inventory','📈 Inventory Value'],['accounting','💵 Accounting'],['trailers','🚛 Trailers & Warranty'],['team','👷 Team & Payroll'],['timeoff','📅 Schedule & Time Off'],['outcomes','🎯 Goals & Outcomes'],['wins','🎉 Wins'],['forecast','🔮 Forecasting & Planning'],['notify','💬 Notifications'],['support','🆘 Support'],['users','👤 Users & Roles']];
 function canSee(section){
   if(isAdmin()) return true;
   if(!ME.sections) return true; // null = all sections (admin)
@@ -416,8 +416,8 @@ const HELP={
       <li><em>Simulated mode badge</em> → set ACCOUNTING_MODE=quickbooks in server environment</li>
       <li><em>Pending events stuck</em> → click "Push pending" to retry; check QB Error Log for details</li>
     </ul>`},
-  trailers:{title:'🚛 Trailers & VINs',body:`
-    <p>The per-trailer registry. Every order becomes one or more physical trailer units, each getting its own 17-character VIN.</p>
+  trailers:{title:'🚛 Trailers & Warranty',body:`
+    <p>The per-trailer registry plus build history and warranty. Three tabs: <strong>VINs</strong>, <strong>By Dealer</strong> (completed inventory), and <strong>Warranty Claims</strong>. Click any trailer row to open its full record.</p>
     <h4 style="color:var(--accent);margin:14px 0 6px">Assigning VINs</h4>
     <ol>
       <li>The <strong>Awaiting VINs</strong> card lists orders whose trailers don't all have VINs yet (shows assigned / quantity).</li>
@@ -428,10 +428,20 @@ const HELP={
     <p>Each VIN is a standard 17 characters: your WMI (manufacturer code) + a model descriptor + a calculated check digit + the model-year code + plant code + a sequential serial. The check digit is computed automatically so every VIN validates.</p>
     <h4 style="color:var(--accent);margin:14px 0 6px">VIN Settings</h4>
     <p>Click <strong>⚙ VIN Settings</strong> (Accounting only) to set your <strong>WMI</strong> — the 3-character manufacturer code NHTSA assigns you — and your plant code. Set the real WMI before issuing live VINs; it defaults to a placeholder.</p>
+    <h4 style="color:var(--accent);margin:14px 0 6px">Build history (per trailer)</h4>
+    <p>Open a trailer and log each major step — <strong>parts built, metal bent, painted, finished, QC passed</strong> — recording who did it. The date &amp; time stamp automatically. This is your accountability trail: if a claim comes in, you can see exactly who built that trailer.</p>
+    <h4 style="color:var(--accent);margin:14px 0 6px">Warranty registration</h4>
+    <p>On a trailer, click <strong>Register warranty</strong> to record the owner and term (months). Status shows <strong>In warranty</strong> or <strong>Expired</strong> automatically based on the term.</p>
+    <h4 style="color:var(--accent);margin:14px 0 6px">Warranty claims</h4>
+    <ol>
+      <li>Open the trailer → <strong>+ New claim</strong>. Describe the issue, add parts used (cost pulled from the parts master), and enter labor &amp; shipping.</li>
+      <li>The claim totals <strong>parts + labor + shipping</strong>. Resolve it when the repair is done.</li>
+      <li>The <strong>Warranty Claims</strong> tab rolls up total cost and flags your costliest models and dealers. Open claims also appear in everyone's dashboard action inbox.</li>
+    </ol>
     <h4 style="color:var(--accent);margin:14px 0 6px">Notes</h4>
     <ul>
       <li>VINs are permanent once issued — there's no un-assign, by design.</li>
-      <li>The registry is the basis for warranty tracking and completed-inventory-by-dealer.</li>
+      <li>Build logging, registration, and claims need editor access; viewing is open to anyone with Trailers access.</li>
     </ul>`},
   team:{title:'👷 Team & Payroll',body:`
     <p>Employee roster and payroll summary.</p>
@@ -1664,11 +1674,29 @@ async function removeBatchOrder(bid,oid){
 async function syncQB(){ try{const r=await api('/api/accounting/sync',{method:'POST'});toast(r.mode==='quickbooks'?('Pushed '+r.pushed+' to QuickBooks'):'Simulated mode — '+r.pushed+' pushed (set QBO creds to go live)');viewAccounting();}catch(e){toast(e.message);} }
 
 // ── Trailers & VINs ──────────────────────────────────────────────────────────
+let trailerTab='vins';
+function warrantyBadge(w){
+  if(!w||!w.registered) return '<span class="badge b-low">Unregistered</span>';
+  return w.status==='In warranty'?'<span class="badge b-ok">In warranty</span>':'<span class="badge b-below">Expired</span>';
+}
 async function viewTrailers(){
-  $('pTitle').textContent='Trailers & VINs';
-  $('pSub').textContent='Per-trailer VIN registry — VINs are assigned by Accounting';
+  $('pTitle').textContent='Trailers & Warranty';
+  $('pSub').textContent='Per-trailer VINs, build history, and warranty';
+  $('pActions').innerHTML=canSee('accounting')?`<button class="btn sec" onclick="vinSettings()">⚙ VIN Settings</button>`:'';
+  const tabs=`<div class="tabs" style="margin-bottom:12px">
+    <button class="${trailerTab==='vins'?'active':''}" onclick="trailerTab='vins';viewTrailers()">🏷️ VINs</button>
+    <button class="${trailerTab==='dealer'?'active':''}" onclick="trailerTab='dealer';viewTrailers()">🏬 By Dealer</button>
+    <button class="${trailerTab==='claims'?'active':''}" onclick="trailerTab='claims';viewTrailers()">🛠️ Warranty Claims</button></div>`;
+  let body='';
+  try{
+    if(trailerTab==='dealer') body=await trailersDealerTab();
+    else if(trailerTab==='claims') body=await trailersClaimsTab();
+    else body=await trailersVinsTab();
+  }catch(e){ body=`<div class="card">Error: ${esc(e.message)}</div>`; }
+  $('content').innerHTML=tabs+body;
+}
+async function trailersVinsTab(){
   const canAssign=canSee('accounting');
-  $('pActions').innerHTML=canAssign?`<button class="btn sec" onclick="vinSettings()">⚙ VIN Settings</button>`:'';
   const {config,pending,registry}=await api('/api/trailers');
   const needTotal=pending.reduce((s,o)=>s+o.needed,0);
   const pendingCard=`<div class="card" style="margin-bottom:16px">
@@ -1683,9 +1711,9 @@ async function viewTrailers(){
     </tbody></table>`:`<p class="muted">Every order has its VINs assigned. 🎉</p>`}
   </div>`;
   const registryCard=`<div class="card">
-    <h3 style="margin:0 0 10px">Trailer Registry <span class="muted" style="text-transform:none;letter-spacing:0">— ${registry.length} VIN${registry.length===1?'':'s'} issued · WMI <b>${esc(config.wmi)}</b></span></h3>
+    <h3 style="margin:0 0 10px">Trailer Registry <span class="muted" style="text-transform:none;letter-spacing:0">— ${registry.length} VIN${registry.length===1?'':'s'} issued · WMI <b>${esc(config.wmi)}</b> · click a row for build &amp; warranty</span></h3>
     ${registry.length?`<table><thead><tr><th>VIN</th><th>Model</th><th>Dealer</th><th>Order</th><th>Assigned</th></tr></thead><tbody>
-      ${registry.map(t=>`<tr>
+      ${registry.map(t=>`<tr style="cursor:pointer" onclick="openTrailerDetail('${esc(t.id)}')">
         <td><b style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:.5px">${esc(t.vin)}</b></td>
         <td>${esc(t.model||'')} <span class="badge b-buy">${esc(t.type||'')}</span></td>
         <td>${esc(t.customer||'')}</td><td>${esc(t.orderId||'')}</td>
@@ -1693,7 +1721,43 @@ async function viewTrailers(){
       </tr>`).join('')}
     </tbody></table>`:`<p class="muted">No VINs issued yet. Assign VINs to an order above to populate the registry.</p>`}
   </div>`;
-  $('content').innerHTML=pendingCard+registryCard;
+  return pendingCard+registryCard;
+}
+async function trailersDealerTab(){
+  const dealers=await api('/api/warranty/by-dealer');
+  if(!dealers.length) return `<div class="card"><p class="muted">No completed trailers yet. Assign VINs to populate the by-dealer inventory.</p></div>`;
+  return dealers.map(d=>`<div class="card" style="margin-bottom:14px">
+    <h3 style="margin:0 0 10px">${esc(d.dealer)} <span class="muted" style="text-transform:none;letter-spacing:0">— ${d.trailers.length} trailer${d.trailers.length===1?'':'s'}</span></h3>
+    <table><thead><tr><th>VIN</th><th>Model</th><th>Order</th><th>Warranty</th></tr></thead><tbody>
+    ${d.trailers.map(t=>`<tr style="cursor:pointer" onclick="openTrailerDetail('${esc(t.id)}')">
+      <td><b style="font-family:ui-monospace,monospace;font-size:12px">${esc(t.vin)}</b></td>
+      <td>${esc(t.model||'')} <span class="badge b-buy">${esc(t.type||'')}</span></td>
+      <td class="muted" style="font-size:12px">${esc(t.orderId||'')}</td>
+      <td>${warrantyBadge(t.warranty)}</td></tr>`).join('')}
+    </tbody></table></div>`).join('');
+}
+async function trailersClaimsTab(){
+  const [sum,claims]=await Promise.all([api('/api/warranty/summary'),api('/api/warranty/claims')]);
+  const kpis=`<div class="grid g4" style="margin-bottom:16px">
+    ${kpi('Total claims',sum.totalClaims,sum.openClaims+' open')}
+    ${kpi('Warranty cost',money(sum.totalCost),'parts + labor + shipping')}
+    ${kpi('Costliest model',sum.byModel[0]?esc(sum.byModel[0].model):'—',sum.byModel[0]?money(sum.byModel[0].cost):'')}
+    ${kpi('Costliest dealer',sum.byDealer[0]?esc(sum.byDealer[0].dealer):'—',sum.byDealer[0]?money(sum.byDealer[0].cost):'')}
+  </div>
+  <div class="card"><h3>Warranty Claims</h3>
+    ${claims.length?`<table><thead><tr><th>Claim</th><th>VIN</th><th>Model</th><th>Dealer</th><th>Issue</th><th class="center">Status</th><th class="right">Cost</th><th></th></tr></thead><tbody>
+    ${claims.map(c=>`<tr>
+      <td><b>${esc(c.id)}</b></td>
+      <td style="font-family:ui-monospace,monospace;font-size:11px">${esc(c.vin||'')}</td>
+      <td>${esc(c.model||'')}</td><td>${esc(c.dealer||'')}</td>
+      <td style="max-width:180px">${esc(c.issue||'')}</td>
+      <td class="center">${c.status==='Open'?'<span class="badge b-low">Open</span>':'<span class="badge b-ok">Resolved</span>'}</td>
+      <td class="right">${money(c.total)}</td>
+      <td><button class="btn sm sec" onclick="openTrailerDetail('${esc(c.trailerId)}')">View</button></td>
+    </tr>`).join('')}
+    </tbody></table>`:`<p class="muted">No warranty claims filed.</p>`}
+  </div>`;
+  return kpis;
 }
 async function assignVins(orderId,needed){
   if(!confirm(`Assign ${needed} VIN${needed>1?'s':''} to ${orderId}? VINs are permanent once issued.`)) return;
@@ -1716,6 +1780,103 @@ async function vinSettings(){
 async function saveVinSettings(){
   try{ await api('/api/trailers/config',{method:'PUT',body:JSON.stringify({wmi:$('vsWmi').value,plant:$('vsPlant').value})}); $('modalBg').remove(); toast('VIN settings saved'); viewTrailers(); }
   catch(e){ toast(e.message); }
+}
+// ── Trailer detail: build history + warranty + claims ────────────────────────
+async function openTrailerDetail(id){
+  const ex=$('modalBg'); if(ex) ex.remove();
+  const d=await api('/api/trailers/'+encodeURIComponent(id)+'/detail');
+  const canW=canEdit(), w=d.warranty;
+  const buildRows=d.buildLog.map(s=>`<tr>
+    <td><b>${esc(s.label)}</b></td>
+    <td>${s.done?esc(s.by||'—'):'<span class="muted">—</span>'}</td>
+    <td class="muted" style="font-size:12px">${s.at?new Date(s.at).toLocaleString():''}</td>
+    ${canW?`<td><button class="btn sm ${s.done?'sec':''}" onclick="logStep('${esc(d.id)}','${s.step}')">${s.done?'Update':'Log'}</button></td>`:''}
+  </tr>`).join('');
+  const claimRows=d.claims.length?d.claims.map(c=>`<tr>
+    <td><b>${esc(c.id)}</b> ${c.status==='Open'?'<span class="badge b-low">Open</span>':'<span class="badge b-ok">Resolved</span>'}<br><span class="muted" style="font-size:11px">${esc(c.issue||'')}</span></td>
+    <td class="right" style="font-size:12px">parts ${money(c.partsCost)} · labor ${money(c.laborCost)} · ship ${money(c.shippingCost)}<br><b style="font-size:14px">${money(c.total)}</b></td>
+    ${canW&&c.status==='Open'?`<td><button class="btn sm" onclick="resolveClaim('${esc(c.id)}','${esc(d.id)}')">Resolve</button></td>`:'<td></td>'}
+  </tr>`).join(''):`<tr><td colspan="3" class="muted">No claims on this trailer.</td></tr>`;
+  modal('Trailer '+esc(d.vin||d.id),`
+    <div style="margin-bottom:6px"><span class="muted">${esc(d.model||'')} · ${esc(d.customer||'')} · order ${esc(d.orderId||'—')}</span></div>
+    <h3 style="font-size:13px;color:var(--accent);margin:14px 0 6px">Build history <span class="muted" style="text-transform:none">— who did each step</span></h3>
+    <table><thead><tr><th>Step</th><th>By</th><th>When</th>${canW?'<th></th>':''}</tr></thead><tbody>${buildRows}</tbody></table>
+    <h3 style="font-size:13px;color:var(--accent);margin:16px 0 6px">Warranty ${warrantyBadge(w)}</h3>
+    ${w.registered?`<p class="muted" style="font-size:12px;margin:0 0 6px">Owner: ${esc(w.ownerName||'—')}${w.ownerContact?' · '+esc(w.ownerContact):''} · ${w.termMonths} mo · expires ${w.expiresAt?new Date(w.expiresAt).toLocaleDateString():'—'}</p>`:'<p class="muted" style="font-size:12px;margin:0 0 6px">Not registered.</p>'}
+    ${canW?`<button class="btn sm sec" onclick="registerWarrantyForm('${esc(d.id)}')">${w.registered?'Update registration':'Register warranty'}</button>`:''}
+    <h3 style="font-size:13px;color:var(--accent);margin:16px 0 6px">Warranty claims</h3>
+    <table><tbody>${claimRows}</tbody></table>
+    ${canW?`<button class="btn sm" style="margin-top:8px" onclick="openClaimForm('${esc(d.id)}')">+ New claim</button>`:''}
+    <div style="margin-top:14px;text-align:right"><button class="btn sec" onclick="$('modalBg').remove()">Close</button></div>`);
+}
+async function logStep(trailerId,step){
+  const ex=$('modalBg'); if(ex) ex.remove();
+  const emps=await api('/api/employees').catch(()=>[]);
+  const opts=['<option value="">— select —</option>'].concat(emps.map(e=>`<option value="${esc(e.id)}" data-name="${esc(e.name)}">${esc(e.name)}${e.workstation?' ('+esc(e.workstation)+')':''}</option>`)).join('');
+  modal('Log build step — '+esc(step),`
+    <div class="field"><label>Who completed this step?</label><select id="bsEmp">${opts}</select></div>
+    <div class="field"><label>Note (optional)</label><input id="bsNote" placeholder="optional"></div>
+    <p class="muted" style="font-size:12px">Date &amp; time are recorded automatically.</p>
+    <div style="display:flex;gap:8px;justify-content:flex-end"><button class="btn sec" onclick="openTrailerDetail('${esc(trailerId)}')">Cancel</button>
+    <button class="btn" onclick="saveStep('${esc(trailerId)}','${esc(step)}')">Save</button></div>`);
+}
+async function saveStep(trailerId,step){
+  const sel=$('bsEmp'),opt=sel.options[sel.selectedIndex];
+  try{ await api('/api/trailers/'+encodeURIComponent(trailerId)+'/build-step',{method:'POST',body:JSON.stringify({step,employeeId:sel.value||undefined,employeeName:opt?opt.getAttribute('data-name'):undefined,note:$('bsNote').value||undefined})});
+    toast('Build step logged'); openTrailerDetail(trailerId);
+  }catch(e){ toast(e.message); }
+}
+async function registerWarrantyForm(trailerId){
+  const ex=$('modalBg'); if(ex) ex.remove();
+  const d=await api('/api/trailers/'+encodeURIComponent(trailerId)+'/detail'),w=d.warranty;
+  modal('Warranty registration',`
+    <div class="field"><label>Owner name</label><input id="wrOwner" value="${esc(w.ownerName||'')}" placeholder="End owner or dealer"></div>
+    <div class="field"><label>Owner contact (phone / email)</label><input id="wrContact" value="${esc(w.ownerContact||'')}"></div>
+    <div class="field"><label>Warranty term (months)</label><input id="wrTerm" type="number" min="1" value="${w.termMonths||12}"></div>
+    <div style="display:flex;gap:8px;justify-content:flex-end"><button class="btn sec" onclick="openTrailerDetail('${esc(trailerId)}')">Cancel</button>
+    <button class="btn" onclick="saveWarranty('${esc(trailerId)}')">Save</button></div>`);
+}
+async function saveWarranty(trailerId){
+  try{ await api('/api/trailers/'+encodeURIComponent(trailerId)+'/warranty',{method:'POST',body:JSON.stringify({ownerName:$('wrOwner').value||undefined,ownerContact:$('wrContact').value||undefined,termMonths:Number($('wrTerm').value)||12})});
+    toast('Warranty registered'); openTrailerDetail(trailerId);
+  }catch(e){ toast(e.message); }
+}
+async function openClaimForm(trailerId){
+  const ex=$('modalBg'); if(ex) ex.remove();
+  const parts=await api('/api/parts').catch(()=>[]);
+  window._claimParts=[];
+  const opts=['<option value="">— choose a part —</option>'].concat(parts.map(p=>`<option value="${esc(p.id)}" data-name="${esc(p.name)}" data-cost="${p.cost}">${esc(p.id)} · ${esc(p.name)} ($${p.cost})</option>`)).join('');
+  modal('New warranty claim',`
+    <div class="field"><label>Issue / description</label><input id="wcIssue" placeholder="e.g. Axle weld cracked"></div>
+    <div class="field"><label>Parts used (cost pulled from parts master)</label>
+      <div style="display:flex;gap:6px"><select id="wcPartSel" style="flex:1">${opts}</select><input id="wcPartQty" type="number" value="1" min="1" style="width:70px"><button class="btn sm sec" onclick="addClaimPart()">Add</button></div>
+      <div id="wcPartList" style="margin-top:8px"></div></div>
+    <div class="row"><div class="field"><label>Labor cost ($)</label><input id="wcLabor" type="number" min="0" value="0"></div>
+    <div class="field"><label>Shipping cost ($)</label><input id="wcShip" type="number" min="0" value="0"></div></div>
+    <div style="display:flex;gap:8px;justify-content:flex-end"><button class="btn sec" onclick="openTrailerDetail('${esc(trailerId)}')">Cancel</button>
+    <button class="btn" onclick="saveClaim('${esc(trailerId)}')">File claim</button></div>`);
+}
+function addClaimPart(){
+  const sel=$('wcPartSel'); if(!sel||!sel.value) return;
+  const opt=sel.options[sel.selectedIndex];
+  window._claimParts.push({partId:sel.value,name:opt.getAttribute('data-name'),qty:Number($('wcPartQty').value)||1,unitCost:Number(opt.getAttribute('data-cost'))||0});
+  renderClaimParts();
+}
+function renderClaimParts(){
+  const el=$('wcPartList'); if(!el) return;
+  el.innerHTML=(window._claimParts||[]).map((p,i)=>`<span class="chip">${esc(p.name)} ×${p.qty} ($${Math.round(p.unitCost*p.qty)}) <a class="lnk" onclick="window._claimParts.splice(${i},1);renderClaimParts()">✕</a></span>`).join('')||'<span class="muted" style="font-size:12px">No parts added.</span>';
+}
+async function saveClaim(trailerId){
+  try{ await api('/api/warranty/claims',{method:'POST',body:JSON.stringify({trailerId,issue:$('wcIssue').value||undefined,laborCost:Number($('wcLabor').value)||0,shippingCost:Number($('wcShip').value)||0,parts:window._claimParts||[]})});
+    toast('Warranty claim filed'); openTrailerDetail(trailerId);
+  }catch(e){ toast(e.message); }
+}
+async function resolveClaim(claimId,trailerId){
+  const note=prompt('Resolution note (optional):','Repaired under warranty');
+  if(note===null) return;
+  try{ await api('/api/warranty/claims/'+encodeURIComponent(claimId)+'/resolve',{method:'POST',body:JSON.stringify({resolution:note||undefined})});
+    toast('Claim resolved'); openTrailerDetail(trailerId);
+  }catch(e){ toast(e.message); }
 }
 async function loadQBOErrors(){
   const el=$('qboErrOut'); if(!el) return;

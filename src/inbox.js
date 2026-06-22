@@ -67,6 +67,13 @@ export async function actionItemsFor(user) {
       label: `${plural(n, 'order')} due within 7 days`, count: n, link: 'orders' });
   }
 
+  // 5b. Open warranty claims (trailers section)
+  if (has('trailers')) {
+    const n = await count(`SELECT COUNT(*)::int AS n FROM warranty_claim WHERE status='Open'`);
+    if (n) items.push({ key: 'warranty_claims', icon: '🛠️',
+      label: `${plural(n, 'open warranty claim')}`, count: n, link: 'trailers' });
+  }
+
   // 6. Time-off requests from MY direct reports waiting on my approval
   const myTimeoff = await count(
     `SELECT COUNT(*)::int AS n FROM time_off t JOIN employee e ON e.id=t.emp_id
