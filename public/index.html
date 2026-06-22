@@ -1452,7 +1452,7 @@ async function saveNewVendor(){
 async function viewAccounting(){
   $('pTitle').textContent='Accounting';$('pSub').textContent='QuickBooks sync — invoices on ship, bills on PO receipt; OCR invoice intake updates costs';
   $('pActions').innerHTML=canEdit()?`<button class="btn" onclick="pullFromQB()">⬇ Pull from QuickBooks</button>&nbsp;<button class="btn sec" onclick="syncQB()">⟳ Push pending</button>`:'';
-  const [acct,invoices,custs,bomCRs]=await Promise.all([api('/api/accounting'),api('/api/invoices'),api('/api/customers').catch(()=>[]),api('/api/bom-change-requests?status=pending')]);
+  const [acct,invoices,custs,bomCRs,batches]=await Promise.all([api('/api/accounting'),api('/api/invoices'),api('/api/customers').catch(()=>[]),api('/api/bom-change-requests?status=pending'),api('/api/invoice-batches').catch(()=>[])]);
   const t=acct.totals;
   const modeBadge=acct.mode==='quickbooks'?(acct.configured?'<span class="badge b-ok">QuickBooks connected</span>':'<span class="badge b-low">QuickBooks selected — credentials pending</span>'):'<span class="badge b-buy">Simulated mode</span>';
   // vendor list for scan
@@ -1477,6 +1477,23 @@ async function viewAccounting(){
      ${kpi('Bills posted',t.bills,money(t.billAmt)+' owed to vendors')}
      ${kpi('Net (AR − AP)',money(t.invoiceAmt-t.billAmt),'invoices minus bills')}
      ${kpi('Pending sync',t.pending,acct.mode==='simulated'?'simulated (local)':'awaiting QuickBooks')}
+   </div>
+   <div class="card" style="margin-bottom:16px">
+     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;flex-wrap:wrap;gap:8px">
+       <h3 style="margin:0">📑 Invoice Batches <span class="muted" style="text-transform:none;letter-spacing:0">— bill a dealer for a group of trailers at once</span></h3>
+       ${canSee('accounting')?`<button class="btn sm" onclick="newBatch()">➕ New Batch</button>`:''}
+     </div>
+     ${batches.length?`<table><thead><tr><th>Batch</th><th>Dealer</th><th class="right">Trailers</th><th class="right">Total</th><th class="center">Status</th><th>Created</th><th></th></tr></thead><tbody>
+       ${batches.map(b=>`<tr>
+         <td><b>${esc(b.id)}</b></td>
+         <td>${esc(b.customer||'')}</td>
+         <td class="right">${b.orderCount}</td>
+         <td class="right">${money(b.total)}</td>
+         <td class="center">${batchStatusBadge(b.status)}</td>
+         <td class="muted" style="font-size:12px">${b.createdAt?new Date(b.createdAt).toLocaleDateString():''}</td>
+         <td><button class="btn sm sec" onclick="viewBatch('${esc(b.id)}')">View</button></td>
+       </tr>`).join('')}
+     </tbody></table>`:`<p class="muted" style="font-size:13px">No invoice batches yet.${canSee('accounting')?' Click <b>New Batch</b> to group a dealer&apos;s trailers into a single invoice.':''}</p>`}
    </div>
    <div class="split">
      <div class="card"><h3>Scan / upload vendor invoice (OCR)</h3>
@@ -1517,6 +1534,79 @@ async function viewAccounting(){
      </tbody></table>
    </div>`;
   loadQBOErrors();
+}
+// ── Invoice Batches ──────────────────────────────────────────────────────────
+function batchStatusBadge(s){const m={'Draft':'b-low','Invoiced':'b-buy','Paid':'b-ok'};return `<span class="badge ${m[s]||'b-buy'}">${esc(s)}</span>`;}
+async function newBatch(){
+  const custs=await api('/api/customers');
+  modal('New Invoice Batch',`
+    <div class="field"><label>Dealer / customer</label>
+      <select id="nbCust" onchange="nbLoadOrders()">${custs.map(c=>`<option value="${esc(c.id)}">${esc(c.name)} — ${esc(c.kind||'')}</option>`).join('')}</select></div>
+    <div class="field"><label>Note (optional)</label><input id="nbNote" placeholder="e.g. June delivery — net 30"></div>
+    <div id="nbOrders" class="muted" style="font-size:13px">Loading orders…</div>
+    <div style="margin-top:14px;display:flex;gap:8px;justify-content:flex-end">
+      <button class="btn sec" onclick="$('modalBg').remove()">Cancel</button>
+      <button class="btn" onclick="createBatch()">Create batch</button>
+    </div>`);
+  nbLoadOrders();
+}
+async function nbLoadOrders(){
+  const cid=$('nbCust').value;
+  const orders=await api('/api/invoice-batches/eligible?customerId='+encodeURIComponent(cid)).catch(()=>[]);
+  window._nbOrders=orders;
+  $('nbOrders').innerHTML=orders.length?`
+    <label style="font-size:12px;color:var(--muted)">Unbilled orders — check the trailers to include</label>
+    <table><thead><tr><th></th><th>Order</th><th>Trailer</th><th>Stage</th><th class="right">Amount</th></tr></thead><tbody>
+    ${orders.map(o=>`<tr>
+      <td><input type="checkbox" class="nb-cb" data-id="${esc(o.id)}" data-amt="${o.amount}" checked onchange="nbTotal()"></td>
+      <td><b>${esc(o.id)}</b></td><td>${o.qty}× ${esc(o.model||'')}</td><td>${stageBadge(o.stage)}</td>
+      <td class="right">${money(o.amount)}</td></tr>`).join('')}
+    </tbody></table>
+    <div style="text-align:right;margin-top:8px;font-weight:700">Selected total: <span id="nbTotalV">${money(orders.reduce((s,o)=>s+o.amount,0))}</span></div>`
+    :`<p class="muted">No unbilled orders for this dealer. (Orders already invoiced or in another batch won't appear.)</p>`;
+}
+function nbTotal(){
+  const t=[...document.querySelectorAll('.nb-cb:checked')].reduce((s,c)=>s+Number(c.dataset.amt),0);
+  const el=$('nbTotalV'); if(el) el.textContent=money(t);
+}
+async function createBatch(){
+  const cid=$('nbCust').value;
+  const orderIds=[...document.querySelectorAll('.nb-cb:checked')].map(c=>c.dataset.id);
+  if(!orderIds.length) return toast('Select at least one order');
+  try{
+    const r=await api('/api/invoice-batches',{method:'POST',body:JSON.stringify({customerId:cid,orderIds,note:$('nbNote').value||undefined})});
+    $('modalBg').remove(); toast('Batch '+r.id+' created'); await viewAccounting(); viewBatch(r.id);
+  }catch(e){ toast(e.message); }
+}
+async function viewBatch(id){
+  const b=await api('/api/invoice-batches/'+encodeURIComponent(id));
+  const isDraft=b.status==='Draft', canAct=canSee('accounting');
+  modal('Invoice Batch '+esc(b.id)+' — '+esc(b.customer||''),`
+    <div style="display:flex;gap:8px;align-items:center;margin-bottom:10px">${batchStatusBadge(b.status)}
+      <span class="muted">${b.orders.length} trailer(s)</span>
+      <span style="margin-left:auto;font-weight:700;font-size:18px">${money(b.total)}</span></div>
+    ${b.note?`<p class="muted" style="font-size:12px;margin-bottom:8px">${esc(b.note)}</p>`:''}
+    ${b.orders.length?`<table><thead><tr><th>Order</th><th>Trailer</th><th>Stage</th><th class="right">Amount</th>${isDraft&&canAct?'<th></th>':''}</tr></thead><tbody>
+    ${b.orders.map(o=>`<tr><td><b>${esc(o.id)}</b></td><td>${o.qty}× ${esc(o.model||'')}</td><td>${stageBadge(o.stage)}</td><td class="right">${money(o.amount)}</td>
+      ${isDraft&&canAct?`<td><button class="btn sm sec" onclick="removeBatchOrder('${esc(b.id)}','${esc(o.id)}')">Remove</button></td>`:''}</tr>`).join('')}
+    </tbody></table>`:'<p class="muted">No orders in this batch.</p>'}
+    ${canAct?`<div style="margin-top:14px;display:flex;gap:8px;justify-content:flex-end">
+      ${isDraft?`<button class="btn" onclick="postBatch('${esc(b.id)}')">📤 Post Invoice (${money(b.total)})</button>`:''}
+      ${b.status==='Invoiced'?`<button class="btn" onclick="payBatch('${esc(b.id)}')">✓ Mark Paid</button>`:''}
+    </div>`:''}`);
+}
+async function postBatch(id){
+  if(!confirm('Post ONE combined invoice for this batch? Every trailer in it will be marked billed.')) return;
+  try{ await api('/api/invoice-batches/'+encodeURIComponent(id)+'/post',{method:'POST'}); $('modalBg').remove(); toast('Invoice posted'); viewAccounting(); }
+  catch(e){ toast(e.message); }
+}
+async function payBatch(id){
+  try{ await api('/api/invoice-batches/'+encodeURIComponent(id)+'/paid',{method:'POST'}); $('modalBg').remove(); toast('Marked paid'); viewAccounting(); }
+  catch(e){ toast(e.message); }
+}
+async function removeBatchOrder(bid,oid){
+  try{ await api('/api/invoice-batches/'+encodeURIComponent(bid)+'/orders/'+encodeURIComponent(oid),{method:'DELETE'}); viewBatch(bid); }
+  catch(e){ toast(e.message); }
 }
 async function syncQB(){ try{const r=await api('/api/accounting/sync',{method:'POST'});toast(r.mode==='quickbooks'?('Pushed '+r.pushed+' to QuickBooks'):'Simulated mode — '+r.pushed+' pushed (set QBO creds to go live)');viewAccounting();}catch(e){toast(e.message);} }
 async function loadQBOErrors(){
