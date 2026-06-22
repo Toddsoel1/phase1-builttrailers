@@ -584,11 +584,32 @@ function showHelp(section){
   modal(h.title,style+`<div class="help-body" style="max-height:65vh;overflow-y:auto;padding-right:4px">${h.body}</div>`);
 }
 
+// ── Action Inbox ─────────────────────────────────────────────────────────────
+function greeting(){const h=new Date().getHours();return h<12?'Good morning':h<18?'Good afternoon':'Good evening';}
+function renderInbox(items){
+  const first=(ME.name||'').split(' ')[0];
+  const head=`<div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px">
+      <h3 style="margin:0;font-size:16px;color:var(--txt);text-transform:none;letter-spacing:0">👋 ${greeting()}, ${esc(first)}</h3>
+      ${items.length?`<span class="badge b-low">${items.length} thing${items.length===1?'':'s'} need you</span>`:`<span class="badge b-ok">All caught up</span>`}</div>`;
+  if(!items.length){
+    return `<div class="card" style="border-color:var(--green);margin-bottom:16px">${head}
+      <p class="muted" style="margin:10px 0 0">✅ Nothing needs your attention right now. Nicely done.</p></div>`;
+  }
+  const rows=items.map((i,idx)=>`<div style="display:flex;align-items:center;gap:12px;padding:11px 0;${idx<items.length-1?'border-bottom:1px solid var(--panel2)':''}">
+      <span style="font-size:20px;line-height:1">${i.icon}</span>
+      <span style="flex:1">${esc(i.label)}</span>
+      <button class="btn sm" onclick="go('${i.link}')">Open →</button>
+    </div>`).join('');
+  return `<div class="card" style="border-color:var(--accent);margin-bottom:16px">${head}
+    <div style="margin-top:6px">${rows}</div></div>`;
+}
+
 async function viewDash(){
   $('pTitle').textContent='Dashboard';$('pSub').textContent='Phase 1 — single source of truth (live from the database)';$('pActions').innerHTML='';
-  const [inv,models]=await Promise.all([api('/api/inventory/summary'),api('/api/models')]);
+  const [inv,models,inbox]=await Promise.all([api('/api/inventory/summary'),api('/api/models'),api('/api/inbox').catch(()=>({items:[]}))]);
   const avgMargin=models.reduce((s,m)=>s+m.margin,0)/models.length*100;
   $('content').innerHTML=`
+   ${renderInbox(inbox.items||[])}
    <div class="banner">✅ Connected to the live API and database. Every figure below is computed server-side from stored data.</div>
    <div class="grid g4">
     ${kpi('Inventory value',money(inv.totalValue),inv.skuCount+' SKUs on hand')}
@@ -1095,11 +1116,16 @@ async function savePassword(id){
 function modal(title,html){const d=document.createElement('div');d.className='modal-bg';d.id='modalBg';d.onclick=e=>{if(e.target===d)d.remove();};d.innerHTML=`<div class="modal"><h2 style="margin-bottom:14px">${title}</h2>${html}</div>`;document.body.appendChild(d);}
 function closeModal(){const m=$('modalBg');if(m)m.remove();}
 
-let ordFilter='All';
+let ordFilter='All', ordView='board';
+const canReorder=()=>ME&&(ME.role==='admin'||['Sales','Rep Specialist','General Manager','Shop Manager','Office Manager'].includes(ME.title));
+function stageBadge(s){const m={'Quote':'b-low','Confirmed':'b-buy','Scheduled':'b-buy','In Production':'b-mfg','QC':'b-low','Ready / Shipped':'b-ok'};return `<span class="badge ${m[s]||'b-buy'}">${esc(s)}</span>`;}
 async function viewOrders(){
-  $('pTitle').textContent='Orders & Fulfillment';$('pSub').textContent='Pipeline by trailer type — '+(canEdit()?'drag a card to change its stage':'read-only');
+  $('pTitle').textContent='Orders & Fulfillment';
+  $('pSub').textContent=ordView==='queue'?('Production priority — '+(canReorder()?'use ↑ ↓ to resequence':'read-only')):('Pipeline by trailer type — '+(canEdit()?'drag a card to change its stage':'read-only'));
   $('pActions').innerHTML=canSell()?`<button class="btn" onclick="go('neworder')">➕ New Order</button>`:'';
   const {stages,orders}=await api('/api/orders');
+  const viewToggle=`<div class="tabs" style="margin-bottom:12px"><button class="${ordView==='board'?'active':''}" onclick="ordView='board';viewOrders()">🗂️ Board</button><button class="${ordView==='queue'?'active':''}" onclick="ordView='queue';viewOrders()">🏭 Production Queue</button></div>`;
+  if(ordView==='queue'){ $('content').innerHTML=viewToggle+renderQueue(orders); return; }
   const types=['All',...Array.from(new Set(orders.map(o=>o.type)))];
   const filtered=ordFilter==='All'?orders:orders.filter(o=>o.type===ordFilter);
   const tabs=`<div class="tabs">${types.map(t=>`<button class="${ordFilter===t?'active':''}" onclick="ordFilter='${t}';viewOrders()">${t}<span style="opacity:.7;margin-left:5px">${t==='All'?orders.length:orders.filter(o=>o.type===t).length}</span></button>`).join('')}</div>`;
@@ -1116,7 +1142,34 @@ async function viewOrders(){
    <table><thead><tr><th>Type</th><th class="right">Open orders</th><th class="right">Units</th><th class="right">Backlog value</th></tr></thead><tbody>
    ${Array.from(new Set(orders.map(o=>o.type))).map(t=>{const os=orders.filter(o=>o.type===t&&o.stage!=='Ready / Shipped');return `<tr><td><b>${t}</b></td><td class="right">${os.length}</td><td class="right">${os.reduce((a,o)=>a+o.qty,0)}</td><td class="right">${money(os.reduce((a,o)=>a+o.revenue,0))}</td></tr>`;}).join('')}
    </tbody></table></div>`;
-  $('content').innerHTML=tabs+board+summary;
+  $('content').innerHTML=viewToggle+tabs+board+summary;
+}
+function renderQueue(orders){
+  const q=orders.filter(o=>o.stage!=='Ready / Shipped').sort((a,b)=>(a.prodSeq??1e9)-(b.prodSeq??1e9));
+  window._queue=q.map(o=>o.id);
+  const editable=canReorder();
+  if(!q.length) return `<div class="card"><p class="muted">No active orders in the production queue. Orders appear here until they ship.</p></div>`;
+  const rows=q.map((o,i)=>`<tr>
+      <td class="center" style="font-weight:700;color:var(--accent);font-size:15px">${i+1}</td>
+      <td><b>${esc(o.id)}</b><br><span class="muted" style="font-size:11px">${esc(o.customer||'')}</span></td>
+      <td>${o.qty}× ${esc(o.model||'')} <span class="badge b-buy" style="margin-left:4px">${esc(o.type||'')}</span></td>
+      <td>${stageBadge(o.stage)}</td>
+      <td class="right muted" style="font-size:12px">${esc(o.due?String(o.due).slice(0,10):'—')}</td>
+      ${editable?`<td class="center" style="white-space:nowrap">
+        <button class="btn sm sec" ${i===0?'disabled':''} onclick="moveQueue(${i},-1)" title="Move up">↑</button>
+        <button class="btn sm sec" ${i===q.length-1?'disabled':''} onclick="moveQueue(${i},1)" title="Move down">↓</button></td>`:''}
+    </tr>`).join('');
+  return `<div class="card"><h3>Production Queue <span class="muted" style="text-transform:none;letter-spacing:0">— built top to bottom · ${q.length} active</span></h3>
+    <table><thead><tr><th class="center">#</th><th>Order</th><th>Trailer</th><th>Stage</th><th class="right">Due</th>${editable?'<th class="center">Move</th>':''}</tr></thead>
+    <tbody>${rows}</tbody></table>
+    ${editable?'':`<p class="muted" style="font-size:12px;margin-top:10px">🔒 Reordering is limited to Sales, the GM, the Shop Manager, and the Office Manager.</p>`}</div>`;
+}
+async function moveQueue(i,dir){
+  const arr=window._queue; if(!arr) return;
+  const j=i+dir; if(j<0||j>=arr.length) return;
+  [arr[i],arr[j]]=[arr[j],arr[i]];
+  try{ await api('/api/orders/production-order',{method:'POST',body:JSON.stringify({order:arr})}); toast('Production queue updated'); viewOrders(); }
+  catch(e){ toast(e.message); }
 }
 async function dropOrder(e,stage){
   e.preventDefault();e.currentTarget.classList.remove('over');

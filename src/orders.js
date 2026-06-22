@@ -4,9 +4,14 @@ import { postInvoice } from './accounting.js';
 
 export const STAGES = ['Quote', 'Confirmed', 'Scheduled', 'In Production', 'QC', 'Ready / Shipped'];
 const SALES_TITLES = ['Sales', 'Rep Specialist', 'General Manager'];
+// Titles allowed to reorder the production queue (in addition to any admin)
+const PRODUCTION_TITLES = ['Sales', 'Rep Specialist', 'General Manager', 'Shop Manager', 'Office Manager'];
 
 export function canSell(user) {
   return user && (user.role === 'admin' || SALES_TITLES.includes(user.title));
+}
+export function canReorderProduction(user) {
+  return user && (user.role === 'admin' || PRODUCTION_TITLES.includes(user.title));
 }
 
 export async function trailerTypes() {
@@ -37,13 +42,23 @@ export async function ordersFull() {
       LEFT JOIN model m ON m.id=o.model_id
       LEFT JOIN customer c ON c.id=o.customer_id
       LEFT JOIN app_user u ON u.id=o.rep_id
-     ORDER BY o.id`, []);
+     ORDER BY o.production_seq NULLS LAST, o.created_at, o.id`, []);
   return rows.map(o => ({
     id: o.id, customerId: o.customer_id, customer: o.customer_name, modelId: o.model_id,
     model: o.model_name, type: o.type || 'Custom', qty: o.qty, stage: o.stage, due: o.due,
     deposit: Number(o.deposit), channel: o.channel, rep: o.rep_name, consumed: o.consumed,
+    prodSeq: o.production_seq == null ? null : Number(o.production_seq),
     price: Number(o.price || 0), revenue: Number(o.price || 0) * o.qty
   }));
+}
+
+// Resequence the production queue. `ids` is the full ordered list of order IDs;
+// each is assigned production_seq = its 1-based position.
+export async function setProductionOrder(ids) {
+  for (let i = 0; i < ids.length; i++) {
+    await q('UPDATE sales_order SET production_seq=$1 WHERE id=$2', [i + 1, ids[i]]);
+  }
+  return ids.length;
 }
 
 // consume finished-goods inventory for an order's BOM (called once at ship)
