@@ -221,6 +221,26 @@ app.post('/api/dealer/orders', dealer.dealerAuth, async (req, res) => {
 });
 app.get('/api/dealer/notifications', dealer.dealerAuth, async (req, res) => res.json(await dealernotify.myNotifications(req.dealer)));
 app.post('/api/dealer/notifications/read', dealer.dealerAuth, async (req, res) => res.json(await dealernotify.markRead(req.dealer)));
+app.get('/api/dealer/invoices', dealer.dealerAuth, async (req, res) => res.json(await dealer.myInvoices(req.dealer)));
+app.get('/api/dealer/team', dealer.dealerAuth, async (req, res) => res.json(await dealer.team(req.dealer)));
+
+// ---- Document library (manuals, spec sheets, warranty terms) ----
+app.get('/api/public/documents', portalLimiter, async (_req, res) => res.json(await portal.listDocuments()));
+app.get('/api/public/document/:id', portalLimiter, async (req, res) => {
+  const doc = await portal.getDocumentPath(req.params.id);
+  if (!doc) return res.status(404).json({ error: 'not found' });
+  const base = path.resolve(process.env.UPLOAD_DIR || './uploads');
+  const abs = path.resolve(doc.path);
+  if (!abs.startsWith(base)) return res.status(400).json({ error: 'invalid path' });
+  res.sendFile(abs, err => { if (err) res.status(404).end(); });
+});
+app.post('/api/documents', authMiddleware, requireTier('admin'), async (req, res) => {
+  try { const r = await portal.addDocument(req.body || {}, req.user.id); await audit(req, 'doc.add', `${r.id} ${req.body?.title || ''}`); res.json(r); }
+  catch (e) { res.status(400).json({ error: e.message }); }
+});
+app.delete('/api/documents/:id', authMiddleware, requireTier('admin'), async (req, res) => {
+  try { res.json(await portal.deleteDocument(req.params.id)); } catch (e) { res.status(400).json({ error: e.message }); }
+});
 
 app.get('/t&cs',    (_req, res) => res.sendFile(path.join(__dir, '..', 'public', 'terms.html')));
 
@@ -1278,6 +1298,7 @@ if (kind === 'postgres' || kind === 'pglite') {
     `CREATE TABLE IF NOT EXISTS attachment (id SERIAL PRIMARY KEY, entity_type TEXT NOT NULL, entity_id TEXT NOT NULL, kind TEXT, file_path TEXT NOT NULL, original_name TEXT, content_type TEXT, uploaded_by TEXT, created_at TIMESTAMPTZ NOT NULL DEFAULT now())`,
     `CREATE INDEX IF NOT EXISTS idx_attach_entity ON attachment(entity_type, entity_id)`,
     `CREATE TABLE IF NOT EXISTS dealer_notification (id SERIAL PRIMARY KEY, customer_id TEXT NOT NULL, kind TEXT, body TEXT NOT NULL, ref TEXT, read BOOLEAN NOT NULL DEFAULT false, created_at TIMESTAMPTZ NOT NULL DEFAULT now())`,
+    `CREATE TABLE IF NOT EXISTS document (id SERIAL PRIMARY KEY, title TEXT NOT NULL, model_id TEXT, category TEXT, file_path TEXT NOT NULL, content_type TEXT, uploaded_by TEXT, created_at TIMESTAMPTZ NOT NULL DEFAULT now())`,
   ];
   // Migrate existing app_user.title into user_title junction (idempotent)
   await q(`INSERT INTO user_title(user_id,role_name)

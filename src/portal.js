@@ -62,6 +62,28 @@ export async function attachmentsFor(entityType, entityId) {
     .map(a => ({ id: a.id, kind: a.kind, path: a.file_path, name: a.original_name, at: a.created_at }));
 }
 
+// ---- document library (manuals, spec sheets, warranty terms) ----
+export async function addDocument({ title, modelId, category, dataUrl }, by) {
+  if (!title) throw new Error('A title is required.');
+  if (!dataUrl || !dataUrl.startsWith('data:')) throw new Error('Please choose a file.');
+  const filePath = await saveUpload('doc', dataUrl);
+  if (!filePath) throw new Error('Could not save the file.');
+  const ct = (/^data:([^;]+)/.exec(dataUrl) || [])[1] || null;
+  const r = await one(`INSERT INTO document(title,model_id,category,file_path,content_type,uploaded_by) VALUES($1,$2,$3,$4,$5,$6) RETURNING id`,
+    [title, modelId || null, category || null, filePath, ct, by || null]);
+  return { id: r.id };
+}
+export async function listDocuments() {
+  return (await all(`SELECT d.id,d.title,d.category,d.model_id,m.name AS model,d.created_at
+                       FROM document d LEFT JOIN model m ON m.id=d.model_id
+                      ORDER BY d.category NULLS FIRST, d.title`, []).catch(() => []))
+    .map(d => ({ id: d.id, title: d.title, category: d.category, modelId: d.model_id, model: d.model, at: d.created_at }));
+}
+export async function getDocumentPath(id) {
+  return one(`SELECT file_path AS path, content_type AS ct FROM document WHERE id=$1`, [id]);
+}
+export async function deleteDocument(id) { await q(`DELETE FROM document WHERE id=$1`, [id]); return { ok: true }; }
+
 export async function submitRegistration(data) {
   const { vin, ownerName, saleDate, warrantyAddress, email, phone, sellingDealer,
           smsOptIn, emailOptIn, proofOfSale, source, termMonths, dealerCustomerId, attachments } = data || {};

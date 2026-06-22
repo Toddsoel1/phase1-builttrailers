@@ -51,6 +51,7 @@ footer a{color:var(--accent)}
     <button id="tabRegister" class="active" onclick="showTab('register')">Register Warranty</button>
     <button id="tabClaim" onclick="showTab('claim')">Submit a Claim</button>
     <button id="tabMaint" onclick="showTab('maint')">Maintenance Log</button>
+    <button id="tabDocs" onclick="showTab('docs')">Documents</button>
   </div>
 
   <!-- REGISTER -->
@@ -134,6 +135,15 @@ footer a{color:var(--accent)}
       <div id="mMsg" class="msg"></div>
     </div>
   </div>
+
+  <!-- DOCUMENTS -->
+  <div id="paneDocs" class="hidden">
+    <div class="card">
+      <h2>Documents</h2>
+      <p class="lead">Owner's manuals, maintenance schedules, and warranty terms for your trailer.</p>
+      <div id="docsBody"><p class="lead">Loading…</p></div>
+    </div>
+  </div>
 </div>
 
 <footer>
@@ -144,10 +154,19 @@ footer a{color:var(--accent)}
 <script>
 const $=id=>document.getElementById(id);
 function showTab(t){
-  for(const k of ['register','claim','maint']){
-    $('pane'+k[0].toUpperCase()+k.slice(1)).classList.toggle('hidden',k!==t);
-    $('tab'+k[0].toUpperCase()+k.slice(1)).classList.toggle('active',k===t);
+  for(const k of ['register','claim','maint','docs']){
+    const pe=$('pane'+k[0].toUpperCase()+k.slice(1)),tb=$('tab'+k[0].toUpperCase()+k.slice(1));
+    if(pe)pe.classList.toggle('hidden',k!==t);if(tb)tb.classList.toggle('active',k===t);
   }
+  if(t==='docs')loadDocs();
+}
+async function loadDocs(){
+  const el=$('docsBody');if(!el)return;
+  try{const docs=await api('/api/public/documents');
+    el.innerHTML=docs.length?docs.map(d=>`<div style="display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-bottom:1px solid var(--line)">
+      <div><b>${d.title}</b>${d.category?` <span style="color:var(--muted);font-size:12px">${d.category}</span>`:''}<div style="color:var(--muted);font-size:12px">${d.model||'All models'}</div></div>
+      <a class="btn sec" style="text-decoration:none" href="/api/public/document/${d.id}" target="_blank">Download</a></div>`).join(''):'<p class="lead">No documents posted yet.</p>';
+  }catch(e){el.innerHTML='<p class="msg err">'+e.message+'</p>';}
 }
 function setMsg(id,cls,html){const e=$(id);e.className='msg '+cls;e.innerHTML=html;}
 async function api(path,opts){const r=await fetch(path,opts);const d=await r.json().catch(()=>({}));if(!r.ok)throw new Error(d.error||('Error '+r.status));return d;}

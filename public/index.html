@@ -1691,12 +1691,14 @@ async function viewTrailers(){
     <button class="${trailerTab==='vins'?'active':''}" onclick="trailerTab='vins';viewTrailers()">🏷️ VINs</button>
     <button class="${trailerTab==='dealer'?'active':''}" onclick="trailerTab='dealer';viewTrailers()">🏬 By Dealer</button>
     <button class="${trailerTab==='regs'?'active':''}" onclick="trailerTab='regs';viewTrailers()">📝 Registrations${pendN?` <span class="badge b-low" style="margin-left:2px">${pendN}</span>`:''}</button>
-    <button class="${trailerTab==='claims'?'active':''}" onclick="trailerTab='claims';viewTrailers()">🛠️ Warranty Claims</button></div>`;
+    <button class="${trailerTab==='claims'?'active':''}" onclick="trailerTab='claims';viewTrailers()">🛠️ Warranty Claims</button>
+    <button class="${trailerTab==='docs'?'active':''}" onclick="trailerTab='docs';viewTrailers()">📚 Documents</button></div>`;
   let body='';
   try{
     if(trailerTab==='dealer') body=await trailersDealerTab();
     else if(trailerTab==='claims') body=await trailersClaimsTab();
     else if(trailerTab==='regs') body=await trailersRegsTab();
+    else if(trailerTab==='docs') body=await trailersDocsTab();
     else body=await trailersVinsTab();
   }catch(e){ body=`<div class="card">Error: ${esc(e.message)}</div>`; }
   $('content').innerHTML=tabs+body;
@@ -1744,6 +1746,40 @@ async function approveDealerAcct(id){
 }
 async function rejectDealerAcct(id){
   try{ await api('/api/dealers/'+encodeURIComponent(id)+'/reject',{method:'POST'}); toast('Dealership rejected'); viewTrailers(); }
+  catch(e){ toast(e.message); }
+}
+async function trailersDocsTab(){
+  const [docs,models]=await Promise.all([api('/api/public/documents'),api('/api/models').catch(()=>[])]);
+  const admin=isAdmin();
+  const uploadCard=admin?`<div class="card" style="margin-bottom:16px">
+    <h3>📚 Post a document <span class="muted" style="text-transform:none;letter-spacing:0">— visible to dealers &amp; owners in their portals</span></h3>
+    <div style="display:flex;gap:10px;flex-wrap:wrap">
+      <div class="field" style="flex:2;min-width:180px"><label>Title</label><input id="docTitle" placeholder="e.g. Utility Trailer Owner's Manual"></div>
+      <div class="field" style="flex:1;min-width:110px"><label>Category</label><input id="docCat" placeholder="Manual / Spec / Terms"></div>
+      <div class="field" style="flex:1;min-width:130px"><label>Model</label><select id="docModel"><option value="">All models</option>${models.map(m=>`<option value="${esc(m.id)}">${esc(m.name)}</option>`).join('')}</select></div>
+    </div>
+    <div class="field"><label>File</label><input id="docFile" type="file"></div>
+    <button class="btn sm" onclick="uploadDoc()">Upload</button>
+  </div>`:'';
+  const listCard=`<div class="card"><h3>Documents (${docs.length})</h3>
+    ${docs.length?`<table><thead><tr><th>Title</th><th>Category</th><th>Model</th>${admin?'<th></th>':''}</tr></thead><tbody>
+      ${docs.map(d=>`<tr><td><a class="lnk" href="/api/public/document/${d.id}" target="_blank">${esc(d.title)}</a></td><td>${esc(d.category||'')}</td><td>${esc(d.model||'All')}</td>
+        ${admin?`<td><button class="btn sm sec" onclick="deleteDoc(${d.id})">Delete</button></td>`:''}</tr>`).join('')}
+    </tbody></table>`:'<p class="muted">No documents posted yet.</p>'}
+  </div>`;
+  return uploadCard+listCard;
+}
+async function uploadDoc(){
+  const title=$('docTitle').value.trim(),f=$('docFile').files[0];
+  if(!title||!f){ toast('Title and file are required'); return; }
+  if(f.size>10*1024*1024){ toast('File must be under 10 MB'); return; }
+  const dataUrl=await new Promise((res,rej)=>{const r=new FileReader();r.onload=()=>res(r.result);r.onerror=rej;r.readAsDataURL(f);});
+  try{ await api('/api/documents',{method:'POST',body:JSON.stringify({title,category:$('docCat').value.trim()||undefined,modelId:$('docModel').value||undefined,dataUrl})}); toast('Document posted'); viewTrailers(); }
+  catch(e){ toast(e.message); }
+}
+async function deleteDoc(id){
+  if(!confirm('Delete this document?')) return;
+  try{ await api('/api/documents/'+id,{method:'DELETE'}); toast('Deleted'); viewTrailers(); }
   catch(e){ toast(e.message); }
 }
 async function reviewReg(trailerId,decision,fromModal){

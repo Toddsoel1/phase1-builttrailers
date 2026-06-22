@@ -113,6 +113,26 @@ export async function myOrders(d) {
     createdAt: o.created_at, price: Number(o.price || 0), revenue: Number(o.price || 0) * o.qty, vinsAssigned: Number(o.vins) }));
 }
 
+// ---- invoices & team ----
+export async function myInvoices(d) {
+  if (!d.customer_id) return { invoices: [], owed: 0, paid: 0 };
+  const rows = await all(`SELECT id, status, total, invoiced_at, paid_at FROM invoice_batch
+                           WHERE customer_id=$1 AND status<>'Draft' ORDER BY invoiced_at DESC NULLS LAST, id DESC`, [d.customer_id]);
+  let owed = 0, paid = 0;
+  const invoices = rows.map(b => {
+    const t = Number(b.total) || 0;
+    if (b.status === 'Paid') paid += t; else if (b.status === 'Invoiced') owed += t;
+    return { id: b.id, status: b.status, total: t, invoicedAt: b.invoiced_at, paidAt: b.paid_at };
+  });
+  return { invoices, owed, paid };
+}
+// All login accounts under this dealership (multiple logins per dealership).
+export async function team(d) {
+  if (!d.customer_id) return [];
+  return (await all(`SELECT name,email,status,created_at FROM dealer_user WHERE customer_id=$1 ORDER BY created_at`, [d.customer_id]))
+    .map(u => ({ name: u.name, email: u.email, status: u.status, createdAt: u.created_at }));
+}
+
 // ---- staff side ----
 export async function pendingDealers() {
   return (await all(`SELECT id,email,name,dealership_name,created_at FROM dealer_user WHERE status='pending' ORDER BY created_at DESC`, []))
