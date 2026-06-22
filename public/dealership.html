@@ -86,6 +86,12 @@ footer a{color:var(--accent)}
       <button id="tabReg" onclick="showDash('reg')">Register a Trailer</button>
       <button id="tabMine" onclick="showDash('mine')">My Registrations</button>
       <button id="tabClaims" onclick="showDash('claims')">Claims</button>
+      <button id="tabNotif" onclick="showDash('notif')">🔔<span id="notifBadge"></span></button>
+    </div>
+    <div id="paneNotif" class="card hidden">
+      <h2>Updates</h2>
+      <p class="lead">Order status changes, registration approvals, and claim resolutions appear here.</p>
+      <div id="notifBody"><p class="lead">Loading…</p></div>
     </div>
 
     <div id="paneOrders" class="card">
@@ -158,7 +164,16 @@ async function api(path,opts={}){
   if(!r.ok) throw new Error(d.error||('Error '+r.status)); return d;
 }
 function showAuth(t){$('paneLogin').classList.toggle('hidden',t!=='login');$('paneSignup').classList.toggle('hidden',t!=='signup');$('tabLogin').classList.toggle('active',t==='login');$('tabSignup').classList.toggle('active',t==='signup');}
-function showDash(t){for(const k of ['orders','reg','mine','claims']){$('pane'+k[0].toUpperCase()+k.slice(1)).classList.toggle('hidden',k!==t);$('tab'+k[0].toUpperCase()+k.slice(1)).classList.toggle('active',k===t);}if(t==='orders')loadOrders();if(t==='mine')loadMine();if(t==='claims')loadClaims();}
+function showDash(t){for(const k of ['orders','reg','mine','claims','notif']){$('pane'+k[0].toUpperCase()+k.slice(1)).classList.toggle('hidden',k!==t);$('tab'+k[0].toUpperCase()+k.slice(1)).classList.toggle('active',k===t);}if(t==='orders')loadOrders();if(t==='mine')loadMine();if(t==='claims')loadClaims();if(t==='notif')loadNotifs();}
+async function refreshNotifBadge(){try{const n=await api('/api/dealer/notifications');const b=$('notifBadge');if(b)b.textContent=n.unread?' '+n.unread:'';if(b)b.style.cssText=n.unread?'background:#ff7a18;color:#1a1206;border-radius:10px;padding:0 6px;font-size:11px;margin-left:3px':'';}catch(e){}}
+async function loadNotifs(){
+  try{const n=await api('/api/dealer/notifications');
+    $('notifBody').innerHTML=n.items.length?n.items.map(it=>`<div style="padding:9px 0;border-bottom:1px solid #f0f2f5;${it.read?'':'font-weight:600'}">
+      <span style="margin-right:6px">${it.kind==='order'?'📦':it.kind==='claim'?'🛠️':'📝'}</span>${it.body}
+      <div class="muted" style="font-size:11px;font-weight:400">${new Date(it.at).toLocaleString()}</div></div>`).join(''):'<p class="lead">No updates yet.</p>';
+    await api('/api/dealer/notifications/read',{method:'POST'});refreshNotifBadge();
+  }catch(e){$('notifBody').innerHTML='<p class="msg err">'+e.message+'</p>';}
+}
 
 async function signup(){
   const dealershipName=$('sDealer').value.trim(),name=$('sName').value.trim(),email=$('sEmail').value.trim(),password=$('sPass').value;
@@ -179,7 +194,7 @@ function enterDash(){
   $('auth').classList.add('hidden');$('dash').classList.remove('hidden');
   $('who').innerHTML=`<span>${DEALER.dealership||DEALER.name||''}</span><button class="btn ghost" onclick="logout()">Log out</button>`;
   $('regDealer').textContent=DEALER.dealership||'(your dealership)';
-  showDash('orders');
+  showDash('orders');refreshNotifBadge();
 }
 let _models=[];
 function orderStatus(s){return `<span class="badge ${s==='Ready / Shipped'?'b-ok':'b-pend'}">${s||''}</span>`;}

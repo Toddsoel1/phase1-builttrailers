@@ -5,6 +5,7 @@
 import { all, one, q } from './db.js';
 import { writeFile, mkdir } from 'fs/promises';
 import path from 'path';
+import { notifyDealer } from './dealernotify.js';
 
 const REG_WINDOW_DAYS = 15;       // dealer must register within 15 days of sale
 const UPLOAD_DIR = process.env.UPLOAD_DIR || './uploads';
@@ -143,6 +144,8 @@ export async function reviewRegistration(trailerId, decision) {
   if (!await one('SELECT trailer_id FROM warranty_registration WHERE trailer_id=$1', [trailerId])) throw new Error('registration not found');
   const status = decision === 'approve' ? 'verified' : 'rejected';
   await q(`UPDATE warranty_registration SET verification_status=$1 WHERE trailer_id=$2`, [status, trailerId]);
+  const t = await one('SELECT customer_id, vin FROM trailer WHERE id=$1', [trailerId]);
+  if (t) await notifyDealer(t.customer_id, 'registration', `Warranty registration for VIN ${t.vin} was ${status === 'verified' ? 'verified' : 'rejected'}.`, t.vin);
   return { status };
 }
 

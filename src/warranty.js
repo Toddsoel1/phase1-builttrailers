@@ -6,6 +6,7 @@
 //   - rollups: completed inventory by dealer, and warranty cost by model / dealer
 import { all, one, q } from './db.js';
 import { attachmentsFor } from './portal.js';
+import { notifyDealer } from './dealernotify.js';
 
 export const BUILD_STEPS = [
   { key: 'Parts',     label: 'Parts built' },
@@ -116,8 +117,11 @@ export async function openClaim(trailerId, { issue, laborCost, shippingCost, par
 }
 
 export async function resolveClaim(claimId, resolution) {
-  if (!await one('SELECT id FROM warranty_claim WHERE id=$1', [claimId])) throw new Error('claim not found');
+  const c = await one('SELECT trailer_id FROM warranty_claim WHERE id=$1', [claimId]);
+  if (!c) throw new Error('claim not found');
   await q(`UPDATE warranty_claim SET status='Resolved', resolved_at=now(), resolution=$1 WHERE id=$2`, [resolution || null, claimId]);
+  const t = await one('SELECT customer_id, vin FROM trailer WHERE id=$1', [c.trailer_id]);
+  if (t) await notifyDealer(t.customer_id, 'claim', `Warranty claim ${claimId} (VIN ${t.vin}) was resolved.`, claimId);
   return claimId;
 }
 
