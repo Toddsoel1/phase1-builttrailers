@@ -152,7 +152,7 @@ function logout(){TOKEN=null;ME=null;$('app').classList.add('hidden');$('login')
 $('liPass').addEventListener('keydown',e=>{if(e.key==='Enter')login();});
 
 // ---- nav/render ----
-const NAV=[['dashboard','📊 Dashboard'],['orders','📋 Orders & Fulfillment'],['neworder','➕ New Order'],['customers','🏬 Customers & Dealers'],['parts','📦 Parts Master'],['predict','🤖 Predictive Ordering'],['pos','🧾 Purchase Orders'],['boms','🧩 BOMs & Cost'],['inventory','📈 Inventory Value'],['accounting','💵 Accounting'],['team','👷 Team & Payroll'],['timeoff','📅 Schedule & Time Off'],['outcomes','🎯 Goals & Outcomes'],['wins','🎉 Wins'],['forecast','🔮 Forecasting & Planning'],['notify','💬 Notifications'],['support','🆘 Support'],['users','👤 Users & Roles']];
+const NAV=[['dashboard','📊 Dashboard'],['orders','📋 Orders & Fulfillment'],['neworder','➕ New Order'],['customers','🏬 Customers & Dealers'],['parts','📦 Parts Master'],['predict','🤖 Predictive Ordering'],['pos','🧾 Purchase Orders'],['boms','🧩 BOMs & Cost'],['inventory','📈 Inventory Value'],['accounting','💵 Accounting'],['trailers','🚛 Trailers & VINs'],['team','👷 Team & Payroll'],['timeoff','📅 Schedule & Time Off'],['outcomes','🎯 Goals & Outcomes'],['wins','🎉 Wins'],['forecast','🔮 Forecasting & Planning'],['notify','💬 Notifications'],['support','🆘 Support'],['users','👤 Users & Roles']];
 function canSee(section){
   if(isAdmin()) return true;
   if(!ME.sections) return true; // null = all sections (admin)
@@ -171,7 +171,7 @@ function renderNav(){
 function go(p){page=p;render();}
 async function render(){
   renderNav();
-  const map={dashboard:viewDash,orders:viewOrders,neworder:viewNewOrder,customers:viewCustomers,parts:viewParts,predict:viewPredict,pos:viewPOs,boms:viewBoms,inventory:viewInv,accounting:viewAccounting,team:viewTeam,timeoff:viewTimeoff,outcomes:viewOutcomes,wins:viewWins,forecast:viewForecast,notify:viewNotify,support:viewSupport,users:viewUsers};
+  const map={dashboard:viewDash,orders:viewOrders,neworder:viewNewOrder,customers:viewCustomers,parts:viewParts,predict:viewPredict,pos:viewPOs,boms:viewBoms,inventory:viewInv,accounting:viewAccounting,trailers:viewTrailers,team:viewTeam,timeoff:viewTimeoff,outcomes:viewOutcomes,wins:viewWins,forecast:viewForecast,notify:viewNotify,support:viewSupport,users:viewUsers};
   try{
     await (map[page]||viewDash)();
     const pa=$('pActions');
@@ -415,6 +415,23 @@ const HELP={
       <li><em>403 / auth error</em> → click Re-authorize and complete sign-in again</li>
       <li><em>Simulated mode badge</em> → set ACCOUNTING_MODE=quickbooks in server environment</li>
       <li><em>Pending events stuck</em> → click "Push pending" to retry; check QB Error Log for details</li>
+    </ul>`},
+  trailers:{title:'🚛 Trailers & VINs',body:`
+    <p>The per-trailer registry. Every order becomes one or more physical trailer units, each getting its own 17-character VIN.</p>
+    <h4 style="color:var(--accent);margin:14px 0 6px">Assigning VINs</h4>
+    <ol>
+      <li>The <strong>Awaiting VINs</strong> card lists orders whose trailers don't all have VINs yet (shows assigned / quantity).</li>
+      <li>Click <strong>Assign VINs</strong> on an order — one compliant VIN is generated per trailer and the units move into the registry.</li>
+      <li>VIN assignment requires <strong>Accounting</strong> access. Everyone with Trailers access can view the registry.</li>
+    </ol>
+    <h4 style="color:var(--accent);margin:14px 0 6px">VIN format</h4>
+    <p>Each VIN is a standard 17 characters: your WMI (manufacturer code) + a model descriptor + a calculated check digit + the model-year code + plant code + a sequential serial. The check digit is computed automatically so every VIN validates.</p>
+    <h4 style="color:var(--accent);margin:14px 0 6px">VIN Settings</h4>
+    <p>Click <strong>⚙ VIN Settings</strong> (Accounting only) to set your <strong>WMI</strong> — the 3-character manufacturer code NHTSA assigns you — and your plant code. Set the real WMI before issuing live VINs; it defaults to a placeholder.</p>
+    <h4 style="color:var(--accent);margin:14px 0 6px">Notes</h4>
+    <ul>
+      <li>VINs are permanent once issued — there's no un-assign, by design.</li>
+      <li>The registry is the basis for warranty tracking and completed-inventory-by-dealer.</li>
     </ul>`},
   team:{title:'👷 Team & Payroll',body:`
     <p>Employee roster and payroll summary.</p>
@@ -1609,6 +1626,61 @@ async function removeBatchOrder(bid,oid){
   catch(e){ toast(e.message); }
 }
 async function syncQB(){ try{const r=await api('/api/accounting/sync',{method:'POST'});toast(r.mode==='quickbooks'?('Pushed '+r.pushed+' to QuickBooks'):'Simulated mode — '+r.pushed+' pushed (set QBO creds to go live)');viewAccounting();}catch(e){toast(e.message);} }
+
+// ── Trailers & VINs ──────────────────────────────────────────────────────────
+async function viewTrailers(){
+  $('pTitle').textContent='Trailers & VINs';
+  $('pSub').textContent='Per-trailer VIN registry — VINs are assigned by Accounting';
+  const canAssign=canSee('accounting');
+  $('pActions').innerHTML=canAssign?`<button class="btn sec" onclick="vinSettings()">⚙ VIN Settings</button>`:'';
+  const {config,pending,registry}=await api('/api/trailers');
+  const needTotal=pending.reduce((s,o)=>s+o.needed,0);
+  const pendingCard=`<div class="card" style="margin-bottom:16px">
+    <h3>Awaiting VINs ${needTotal?`<span class="badge b-low">${needTotal} trailer${needTotal===1?'':'s'}</span>`:''}</h3>
+    ${pending.length?`<table><thead><tr><th>Order</th><th>Dealer</th><th>Model</th><th class="center">Qty</th><th class="center">VINs</th>${canAssign?'<th></th>':''}</tr></thead><tbody>
+      ${pending.map(o=>`<tr>
+        <td><b>${esc(o.orderId)}</b></td><td>${esc(o.customer||'')}</td>
+        <td>${esc(o.model||'')} <span class="badge b-buy">${esc(o.type||'')}</span></td>
+        <td class="center">${o.qty}</td><td class="center">${o.assigned}/${o.qty}</td>
+        ${canAssign?`<td><button class="btn sm" onclick="assignVins('${esc(o.orderId)}',${o.needed})">Assign ${o.needed} VIN${o.needed>1?'s':''}</button></td>`:''}
+      </tr>`).join('')}
+    </tbody></table>`:`<p class="muted">Every order has its VINs assigned. 🎉</p>`}
+  </div>`;
+  const registryCard=`<div class="card">
+    <h3 style="margin:0 0 10px">Trailer Registry <span class="muted" style="text-transform:none;letter-spacing:0">— ${registry.length} VIN${registry.length===1?'':'s'} issued · WMI <b>${esc(config.wmi)}</b></span></h3>
+    ${registry.length?`<table><thead><tr><th>VIN</th><th>Model</th><th>Dealer</th><th>Order</th><th>Assigned</th></tr></thead><tbody>
+      ${registry.map(t=>`<tr>
+        <td><b style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:.5px">${esc(t.vin)}</b></td>
+        <td>${esc(t.model||'')} <span class="badge b-buy">${esc(t.type||'')}</span></td>
+        <td>${esc(t.customer||'')}</td><td>${esc(t.orderId||'')}</td>
+        <td class="muted" style="font-size:12px">${t.assignedAt?new Date(t.assignedAt).toLocaleDateString():''}</td>
+      </tr>`).join('')}
+    </tbody></table>`:`<p class="muted">No VINs issued yet. Assign VINs to an order above to populate the registry.</p>`}
+  </div>`;
+  $('content').innerHTML=pendingCard+registryCard;
+}
+async function assignVins(orderId,needed){
+  if(!confirm(`Assign ${needed} VIN${needed>1?'s':''} to ${orderId}? VINs are permanent once issued.`)) return;
+  try{ const r=await api('/api/trailers/assign',{method:'POST',body:JSON.stringify({orderId})}); toast(r.assigned.length+' VIN(s) assigned'); viewTrailers(); }
+  catch(e){ toast(e.message); }
+}
+async function vinSettings(){
+  const {config}=await api('/api/trailers');
+  modal('VIN Settings',`
+    <p class="muted" style="font-size:12px;margin-bottom:12px">Controls how VINs are generated. The <b>WMI</b> is your NHTSA-assigned 3-character manufacturer code — set this before issuing live VINs. (Currently a placeholder.)</p>
+    <div class="row">
+      <div class="field"><label>WMI (3 characters)</label><input id="vsWmi" maxlength="3" value="${esc(config.wmi)}" style="text-transform:uppercase;font-family:ui-monospace,monospace"></div>
+      <div class="field"><label>Plant code (1 char)</label><input id="vsPlant" maxlength="1" value="${esc(config.plant)}" style="text-transform:uppercase;font-family:ui-monospace,monospace"></div>
+    </div>
+    <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:8px">
+      <button class="btn sec" onclick="$('modalBg').remove()">Cancel</button>
+      <button class="btn" onclick="saveVinSettings()">Save</button>
+    </div>`);
+}
+async function saveVinSettings(){
+  try{ await api('/api/trailers/config',{method:'PUT',body:JSON.stringify({wmi:$('vsWmi').value,plant:$('vsPlant').value})}); $('modalBg').remove(); toast('VIN settings saved'); viewTrailers(); }
+  catch(e){ toast(e.message); }
+}
 async function loadQBOErrors(){
   const el=$('qboErrOut'); if(!el) return;
   try{

@@ -27,6 +27,7 @@ import * as support from './support.js';
 import { actionItemsFor, resolveUserForInbox } from './inbox.js';
 import { sendMorningBriefings, previewBriefingFor } from './briefing.js';
 import * as invoicing from './invoicing.js';
+import * as trailers from './trailers.js';
 
 // Crash fast if JWT_SECRET is unset in production — predictable fallback is a critical vuln
 if (!process.env.JWT_SECRET) {
@@ -963,6 +964,25 @@ app.post('/api/invoice-batches/:id/paid', authMiddleware, requireSection('accoun
   } catch (e) { res.status(400).json({ error: e.message }); }
 });
 
+// ---- Trailer units & VIN assignment ----
+app.get('/api/trailers', authMiddleware, requireSection('trailers'), async (_req, res) =>
+  res.json(await trailers.listTrailers()));
+// VIN assignment is an Accounting function
+app.post('/api/trailers/assign', authMiddleware, requireSection('accounting'), async (req, res) => {
+  const { orderId } = req.body || {};
+  if (!orderId) return res.status(400).json({ error: 'orderId required' });
+  try {
+    const assigned = await trailers.assignVinsForOrder(orderId, req.user);
+    await audit(req, 'vin.assign', `${orderId}: ${assigned.length} VIN(s)`);
+    res.json({ assigned });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+app.put('/api/trailers/config', authMiddleware, requireSection('accounting'), async (req, res) => {
+  const cfg = await trailers.setVinConfig(req.body || {});
+  await audit(req, 'vin.config', JSON.stringify(cfg));
+  res.json(cfg);
+});
+
 // ---- audit ----
 app.get('/api/audit', authMiddleware, requireTier('admin'), async (_req, res) =>
   res.json(await all('SELECT * FROM audit_log ORDER BY id DESC LIMIT 100', [])));
@@ -1084,13 +1104,14 @@ if (kind === 'postgres' || kind === 'pglite') {
     `CREATE TABLE IF NOT EXISTS invoice_batch (id TEXT PRIMARY KEY, customer_id TEXT, customer_name TEXT, status TEXT NOT NULL DEFAULT 'Draft', total NUMERIC(12,2) NOT NULL DEFAULT 0, note TEXT, created_by TEXT, created_at TIMESTAMPTZ NOT NULL DEFAULT now(), invoiced_at TIMESTAMPTZ, paid_at TIMESTAMPTZ, external_id TEXT)`,
     `ALTER TABLE sales_order ADD COLUMN IF NOT EXISTS invoice_batch_id TEXT`,
     `ALTER TABLE sales_order ADD COLUMN IF NOT EXISTS billed BOOLEAN NOT NULL DEFAULT false`,
+    `CREATE TABLE IF NOT EXISTS trailer (id TEXT PRIMARY KEY, order_id TEXT, model_id TEXT, customer_id TEXT, vin TEXT UNIQUE, serial INTEGER, status TEXT NOT NULL DEFAULT 'Pending', created_at TIMESTAMPTZ NOT NULL DEFAULT now(), vin_assigned_at TIMESTAMPTZ, vin_assigned_by TEXT)`,
   ];
   // Migrate existing app_user.title into user_title junction (idempotent)
   await q(`INSERT INTO user_title(user_id,role_name)
     SELECT u.id, u.title FROM app_user u JOIN role r ON r.name=u.title
     WHERE u.title IS NOT NULL ON CONFLICT DO NOTHING`).catch(()=>{});
   // Seed default sections for roles that have none yet
-  const ALL_SECTIONS = ['dashboard','orders','neworder','customers','parts','predict','pos','boms','inventory','accounting','team','timeoff','outcomes','wins','forecast','notify','support','users'];
+  const ALL_SECTIONS = ['dashboard','orders','neworder','customers','parts','predict','pos','boms','inventory','accounting','trailers','team','timeoff','outcomes','wins','forecast','notify','support','users'];
   const EDITOR_SECTIONS = ALL_SECTIONS.filter(s=>s!=='users');
   const VIEWER_SECTIONS = ['dashboard','orders','customers','inventory','notify','support'];
   const rolesWithoutSections = await all(`SELECT r.name,r.tier FROM role r WHERE NOT EXISTS (SELECT 1 FROM role_section rs WHERE rs.role_name=r.name)`, []);
@@ -1107,6 +1128,10 @@ if (kind === 'postgres' || kind === 'pglite') {
              FROM (SELECT id, row_number() OVER (ORDER BY created_at, id) AS rn
                      FROM sales_order WHERE production_seq IS NULL) sub
             WHERE s.id = sub.id`).catch(e => console.warn('production_seq backfill:', e.message));
+  // Grant the 'trailers' section to any role that can already see orders (admins see all).
+  await q(`INSERT INTO role_section(role_name, section)
+             SELECT DISTINCT role_name, 'trailers' FROM role_section WHERE section='orders'
+             ON CONFLICT DO NOTHING`).catch(e => console.warn('trailers section grant:', e.message));
   console.log('Migrations applied.');
 }
 
