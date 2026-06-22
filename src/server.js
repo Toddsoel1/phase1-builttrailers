@@ -1129,11 +1129,13 @@ app.get('/api/warranty/registrations/pending', authMiddleware, requireSection('t
   res.json(await portal.pendingRegistrations()));
 app.post('/api/warranty/registrations/:trailerId/review', authMiddleware, requireTier('editor'), requireSection('trailers'), async (req, res) => {
   try {
-    const r = await portal.reviewRegistration(req.params.trailerId, req.body?.decision);
+    const r = await portal.reviewRegistration(req.params.trailerId, req.body?.decision, { salePrice: req.body?.salePrice, accessories: req.body?.accessories });
     await audit(req, 'warranty.reg_review', `${req.params.trailerId} -> ${r.status}`);
     res.json(r);
   } catch (e) { res.status(400).json({ error: e.message }); }
 });
+// Dealer-margin intelligence (sale price + accessories) — Built Trailers staff only
+app.get('/api/warranty/margins', authMiddleware, requireSection('trailers'), async (_req, res) => res.json(await portal.marginReport()));
 // View an uploaded proof-of-sale (staff only — never public)
 app.get('/api/warranty/proof', authMiddleware, requireSection('trailers'), async (req, res) => {
   const rel = String(req.query.path || '');
