@@ -1,6 +1,11 @@
 // Built Trailers — Phase 1 API + static UI
 import 'dotenv/config';
 import express from 'express';
+// Routes async route-handler rejections to Express error handling automatically,
+// so an unexpected DB/query error returns 500 (see error handler below) instead of
+// becoming an unhandledRejection that crashes the process. Must be imported before
+// any routes are registered. (Patches Express 4; Express 5 handles this natively.)
+import 'express-async-errors';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import helmet from 'helmet';
@@ -10,7 +15,7 @@ import { createHmac, timingSafeEqual } from 'crypto';
 import { initDb, dbKind, q, all, one } from './db.js';
 import { authMiddleware, requireTier, signToken, checkPassword, hashPassword } from './auth.js';
 import { modelRollup, modelsSummary, inventoryValuation, partUnitCost } from './cost.js';
-import { STAGES, canSell, trailerTypes, customersWithTypes, allowedTypesFor, ordersFull, consumeInventory } from './orders.js';
+import { STAGES, canSell, canReorderProduction, trailerTypes, customersWithTypes, allowedTypesFor, ordersFull, consumeInventory, setProductionOrder } from './orders.js';
 import { mrp, poList, createPO, receivePO } from './mrp.js';
 import { accountingMode, qboConfigured, ledger, totals, sync, scanInvoice, invoiceList } from './accounting.js';
 import { getAuthUrl, exchangeCode, syncCustomersFromQBO, syncItemsFromQBO, syncInvoicesFromQBO, previewItemsFromQBO, QBOAuthError, QBOFeatureError, qboErrorLog } from './qbo.js';
@@ -19,6 +24,8 @@ import { forecast, workingCapital, scenario } from './forecast.js';
 import * as sms from './sms.js';
 import * as approvals from './approvals.js';
 import * as support from './support.js';
+import { actionItemsFor, resolveUserForInbox } from './inbox.js';
+import { sendMorningBriefings, previewBriefingFor } from './briefing.js';
 
 // Crash fast if JWT_SECRET is unset in production — predictable fallback is a critical vuln
 if (!process.env.JWT_SECRET) {
@@ -26,8 +33,19 @@ if (!process.env.JWT_SECRET) {
   process.exit(1);
 }
 
+// Last-resort safety net: a stray promise rejection or sync throw outside the
+// request lifecycle (e.g. the briefing scheduler, a background timer) should be
+// logged rather than crash the process. Route-handler errors are handled cleanly
+// by express-async-errors + the error middleware below; these are the backstop.
+process.on('unhandledRejection', (err) => console.error('unhandledRejection:', err));
+process.on('uncaughtException', (err) => console.error('uncaughtException:', err));
+
 function requireSales(req, res, next) {
   if (!canSell(req.user)) return res.status(403).json({ error: 'Order management is controlled by Sales' });
+  next();
+}
+function requireProductionPlanner(req, res, next) {
+  if (!canReorderProduction(req.user)) return res.status(403).json({ error: 'Reordering production is limited to Sales, the GM, the Shop Manager, and the Office Manager' });
   next();
 }
 // Admins have all sections; other users must have the section explicitly assigned
@@ -593,10 +611,19 @@ app.post('/api/orders', authMiddleware, requireSales, async (req, res) => {
   if (!allowed.includes(mdl.category))
     return res.status(403).json({ error: `${cust.name} is not authorized to order ${mdl.category} trailers` });
   const id = 'SO-' + (1049 + (await all('SELECT id FROM sales_order', [])).length);
-  await q('INSERT INTO sales_order(id,customer_id,model_id,qty,stage,due,deposit,channel,rep_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)',
-    [id, customerId, modelId, Math.max(1, Number(qty) || 1), 'Quote', due || null, 0, 'Sales', req.user.id]);
+  const seqRow = await one('SELECT COALESCE(MAX(production_seq),0)+1 AS n FROM sales_order', []);
+  await q('INSERT INTO sales_order(id,customer_id,model_id,qty,stage,due,deposit,channel,rep_id,production_seq) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)',
+    [id, customerId, modelId, Math.max(1, Number(qty) || 1), 'Quote', due || null, 0, 'Sales', req.user.id, seqRow?.n || 1]);
   await audit(req, 'order.create', `${id} ${cust.name} ${mdl.category} x${qty}`);
   res.json({ id });
+});
+// Resequence the production queue — order = full ordered array of order IDs
+app.post('/api/orders/production-order', authMiddleware, requireProductionPlanner, async (req, res) => {
+  const ids = Array.isArray(req.body?.order) ? req.body.order.filter(x => typeof x === 'string') : null;
+  if (!ids || !ids.length) return res.status(400).json({ error: 'order array required' });
+  const n = await setProductionOrder(ids);
+  await audit(req, 'order.reorder', `${n} orders resequenced`);
+  res.json({ ok: true, count: n });
 });
 app.patch('/api/orders/:id/stage', authMiddleware, requireTier('editor'), async (req, res) => {
   const stage = req.body?.stage;
@@ -871,6 +898,28 @@ app.post('/api/notifications/send', authMiddleware, requireTier('editor'), async
   res.json(r);
 });
 
+// ---- Action Inbox ----
+// Personalized "what do I need to do" list for the signed-in user.
+app.get('/api/inbox', authMiddleware, async (req, res) => {
+  try { res.json({ items: await actionItemsFor(req.user) }); }
+  catch (e) { res.status(500).json({ error: String(e.message || e) }); }
+});
+
+// ---- Morning briefing jobs ----
+// Preview MY briefing text without sending (used to test before opting in).
+app.get('/api/briefing/preview', authMiddleware, async (req, res) => {
+  try { res.json(await previewBriefingFor(req.user, req.user.name)); }
+  catch (e) { res.status(500).json({ error: String(e.message || e) }); }
+});
+// Fire the whole morning briefing now (admin only — also runs automatically at BRIEFING_HOUR).
+app.post('/api/briefing/run', authMiddleware, requireTier('admin'), async (req, res) => {
+  try {
+    const r = await sendMorningBriefings(req.user.id);
+    await audit(req, 'briefing.run', `manual: sent=${r.sent} skipped=${r.skipped} errors=${r.errors}`);
+    res.json(r);
+  } catch (e) { res.status(500).json({ error: String(e.message || e) }); }
+});
+
 // ---- audit ----
 app.get('/api/audit', authMiddleware, requireTier('admin'), async (_req, res) =>
   res.json(await all('SELECT * FROM audit_log ORDER BY id DESC LIMIT 100', [])));
@@ -942,12 +991,25 @@ app.delete('/api/support/tickets/:id', authMiddleware, requireTier('admin'), asy
 app.use(express.static(path.join(__dir, '..', 'public')));
 app.get('*', (_req, res) => res.sendFile(path.join(__dir, '..', 'public', 'index.html')));
 
+// ---- final error handler (4-arg, must be registered after all routes) ----
+// Catches synchronous throws and (via express-async-errors) async route rejections.
+// Logs the full error server-side and returns a generic 500 so stack traces and
+// internal details never leak to the client.
+app.use((err, req, res, next) => {
+  console.error('Unhandled route error:', err);
+  if (res.headersSent) return next(err); // response already started — let Express finish/abort it
+  res.status(500).json({ error: 'Internal error' });
+});
+
 const PORT = process.env.PORT || 3000;
 const kind = await initDb();
 
 // Run idempotent migrations: create missing tables + add missing columns.
-// Safe to re-run on every boot (all statements are IF NOT EXISTS).
-if (kind === 'postgres') {
+// Safe to re-run on every boot (all statements are IF NOT EXISTS). Runs for both
+// Postgres (production) and PGlite (local dev) so the two schemas never drift —
+// the runtime column migrations (model_labor.rate, bom_change_request, app_config,
+// unique indexes) are not in schema.sql, so PGlite needs them applied here too.
+if (kind === 'postgres' || kind === 'pglite') {
   const { readFileSync } = await import('fs');
   const { fileURLToPath: ftu } = await import('url');
   const schemaPath = new URL('../db/schema.sql', import.meta.url);
@@ -970,6 +1032,8 @@ if (kind === 'postgres') {
     `CREATE UNIQUE INDEX IF NOT EXISTS idx_bom_line_uq ON bom_line(model_id,part_id)`,
     `CREATE UNIQUE INDEX IF NOT EXISTS idx_ml_ws_uq ON model_labor(model_id,ws)`,
     `CREATE TABLE IF NOT EXISTS bom_change_request (id SERIAL PRIMARY KEY, model_id TEXT NOT NULL, model_name TEXT, requested_by TEXT NOT NULL, requester_name TEXT, created_at TIMESTAMPTZ NOT NULL DEFAULT now(), op TEXT NOT NULL, payload JSONB NOT NULL, status TEXT NOT NULL DEFAULT 'pending', reviewed_by TEXT, reviewer_name TEXT, reviewed_at TIMESTAMPTZ, review_note TEXT)`,
+    `CREATE TABLE IF NOT EXISTS app_config (key TEXT PRIMARY KEY, value TEXT)`,
+    `ALTER TABLE sales_order ADD COLUMN IF NOT EXISTS production_seq INTEGER`,
   ];
   // Migrate existing app_user.title into user_title junction (idempotent)
   await q(`INSERT INTO user_title(user_id,role_name)
@@ -988,6 +1052,11 @@ if (kind === 'postgres') {
   for (const m of colMigrations) {
     await q(m).catch(e => console.warn('col migration:', e.message));
   }
+  // Backfill production_seq for any orders missing it, defaulting to confirmation/creation order.
+  await q(`UPDATE sales_order s SET production_seq = sub.rn + COALESCE((SELECT MAX(production_seq) FROM sales_order), 0)
+             FROM (SELECT id, row_number() OVER (ORDER BY created_at, id) AS rn
+                     FROM sales_order WHERE production_seq IS NULL) sub
+            WHERE s.id = sub.id`).catch(e => console.warn('production_seq backfill:', e.message));
   console.log('Migrations applied.');
 }
 
@@ -995,4 +1064,35 @@ try {
   const has = await one("SELECT to_regclass('public.part') AS t", []).catch(() => null);
   if (!has || !has.t) console.log('Note: run `npm run init-db` to create schema + seed.');
 } catch {}
+
+// ---- Morning briefing scheduler (in-process) ----
+// Sends each employee their action-item text once a day at BRIEFING_HOUR (local
+// to BRIEFING_TZ). Idempotent: the send date is recorded in app_config so a
+// restart — or a second instance — can never double-send. For belt-and-suspenders
+// reliability you can also run `node scripts/send-briefing.js` from a Render Cron Job.
+const BRIEFING_HOUR = Number(process.env.BRIEFING_HOUR || 7);
+const BRIEFING_TZ = process.env.BRIEFING_TZ || 'America/Denver';
+const partsIn = tz => Object.fromEntries(
+  new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', hour12: false })
+    .formatToParts(new Date()).map(p => [p.type, p.value]));
+
+async function maybeRunBriefing() {
+  try {
+    const p = partsIn(BRIEFING_TZ);
+    if (Number(p.hour) < BRIEFING_HOUR) return;            // not time yet today
+    const today = `${p.year}-${p.month}-${p.day}`;
+    const last = await one(`SELECT value FROM app_config WHERE key='briefing_last_run'`, []).catch(() => null);
+    if (last && last.value === today) return;              // already ran today
+    // Claim the day BEFORE sending so overlapping checks can't double-fire
+    await q(`INSERT INTO app_config(key,value) VALUES('briefing_last_run',$1)
+             ON CONFLICT(key) DO UPDATE SET value=$1`, [today]);
+    const r = await sendMorningBriefings(null);
+    console.log(`Morning briefing (${today}): sent ${r.sent}, skipped ${r.skipped}, errors ${r.errors}.`);
+  } catch (e) { console.warn('briefing scheduler:', e.message); }
+}
+if (kind === 'postgres' && process.env.BRIEFING_DISABLED !== 'true') {
+  setInterval(maybeRunBriefing, 5 * 60 * 1000);           // re-check every 5 minutes
+  setTimeout(maybeRunBriefing, 15 * 1000);                // and once shortly after boot
+}
+
 app.listen(PORT, () => console.log(`Built Trailers Phase 1 API on :${PORT} (db: ${kind})`));

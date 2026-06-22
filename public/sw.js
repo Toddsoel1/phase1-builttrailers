@@ -1,4 +1,4 @@
-const CACHE = 'bt-v1';
+const CACHE = 'bt-v2';
 const SHELL  = ['/', '/manifest.json', '/icons/icon-192.png', '/icons/icon-512.png'];
 
 // Install: cache the app shell
@@ -37,8 +37,10 @@ self.addEventListener('fetch', e => {
         return res;
       }).catch(() => null);
 
-      // Network-first for public pages, cache-first for app shell
-      const networkFirst = ['/optin', '/privacy', '/terms', '/t&cs'].includes(url.pathname);
+      // Network-first for the app shell (so deploys reach installed PWAs immediately)
+      // and public pages; cache-first only for static assets like icons.
+      const isNavigation = e.request.mode === 'navigate' || e.request.destination === 'document';
+      const networkFirst = isNavigation || url.pathname === '/' || url.pathname.endsWith('.html') || ['/optin', '/privacy', '/terms', '/t&cs'].includes(url.pathname);
       if (networkFirst) {
         return (await networkFetch) || cached || new Response('Offline', { status: 503 });
       }
