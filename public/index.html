@@ -1598,19 +1598,55 @@ async function createBatch(){
 async function viewBatch(id){
   const b=await api('/api/invoice-batches/'+encodeURIComponent(id));
   const isDraft=b.status==='Draft', canAct=canSee('accounting');
+  const lines=b.lineItems||[];
+  const vinCell=v=>v?`<b style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;letter-spacing:.3px">${esc(v)}</b>`:'<span class="badge b-low">VIN pending</span>';
   modal('Invoice Batch '+esc(b.id)+' — '+esc(b.customer||''),`
     <div style="display:flex;gap:8px;align-items:center;margin-bottom:10px">${batchStatusBadge(b.status)}
-      <span class="muted">${b.orders.length} trailer(s)</span>
+      <span class="muted">${lines.length} trailer(s)</span>
       <span style="margin-left:auto;font-weight:700;font-size:18px">${money(b.total)}</span></div>
     ${b.note?`<p class="muted" style="font-size:12px;margin-bottom:8px">${esc(b.note)}</p>`:''}
-    ${b.orders.length?`<table><thead><tr><th>Order</th><th>Trailer</th><th>Stage</th><th class="right">Amount</th>${isDraft&&canAct?'<th></th>':''}</tr></thead><tbody>
-    ${b.orders.map(o=>`<tr><td><b>${esc(o.id)}</b></td><td>${o.qty}× ${esc(o.model||'')}</td><td>${stageBadge(o.stage)}</td><td class="right">${money(o.amount)}</td>
-      ${isDraft&&canAct?`<td><button class="btn sm sec" onclick="removeBatchOrder('${esc(b.id)}','${esc(o.id)}')">Remove</button></td>`:''}</tr>`).join('')}
-    </tbody></table>`:'<p class="muted">No orders in this batch.</p>'}
-    ${canAct?`<div style="margin-top:14px;display:flex;gap:8px;justify-content:flex-end">
-      ${isDraft?`<button class="btn" onclick="postBatch('${esc(b.id)}')">📤 Post Invoice (${money(b.total)})</button>`:''}
-      ${b.status==='Invoiced'?`<button class="btn" onclick="payBatch('${esc(b.id)}')">✓ Mark Paid</button>`:''}
-    </div>`:''}`);
+    ${lines.length?`<table><thead><tr><th>Trailer</th><th>VIN</th><th>Order</th><th class="right">Amount</th></tr></thead><tbody>
+    ${lines.map(li=>`<tr><td>${esc(li.model||'')} <span class="badge b-buy">${esc(li.type||'')}</span></td>
+      <td>${vinCell(li.vin)}</td><td class="muted" style="font-size:12px">${esc(li.orderId||'')}</td>
+      <td class="right">${money(li.amount)}</td></tr>`).join('')}
+    </tbody></table>`:'<p class="muted">No trailers in this batch.</p>'}
+    ${isDraft&&canAct&&b.orders.length?`<div style="margin-top:10px"><span class="muted" style="font-size:12px">Remove an order: </span>
+      ${b.orders.map(o=>`<button class="btn sm sec" style="margin:2px" onclick="removeBatchOrder('${esc(b.id)}','${esc(o.id)}')">✕ ${esc(o.id)}</button>`).join('')}</div>`:''}
+    <div style="margin-top:14px;display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap">
+      ${lines.length?`<button class="btn sec" onclick="printBatchInvoice('${esc(b.id)}')">🖨 Print Invoice</button>`:''}
+      ${canAct&&isDraft?`<button class="btn" onclick="postBatch('${esc(b.id)}')">📤 Post Invoice (${money(b.total)})</button>`:''}
+      ${canAct&&b.status==='Invoiced'?`<button class="btn" onclick="payBatch('${esc(b.id)}')">✓ Mark Paid</button>`:''}
+    </div>`);
+}
+async function printBatchInvoice(id){
+  const b=await api('/api/invoice-batches/'+encodeURIComponent(id));
+  const lines=b.lineItems||[];
+  const rows=lines.map((li,i)=>`<tr><td>${i+1}</td><td>${esc(li.model||'')}</td><td class="vin">${li.vin?esc(li.vin):'VIN pending'}</td><td class="r">${money(li.amount)}</td></tr>`).join('');
+  const date=b.invoicedAt?new Date(b.invoicedAt):new Date();
+  const html=`<!doctype html><html><head><meta charset="utf-8"><title>Invoice ${esc(b.id)} — Built Trailers</title>
+    <style>body{font-family:Arial,Helvetica,sans-serif;color:#111;max-width:760px;margin:0 auto;padding:40px}
+    h1{margin:0;letter-spacing:1px}.sub{color:#666;font-size:13px}
+    .top{display:flex;justify-content:space-between;align-items:flex-start;border-bottom:2px solid #111;padding-bottom:14px}
+    .meta{text-align:right;font-size:13px;line-height:1.6}
+    .billto{margin:18px 0}.billto b{display:block;color:#666;font-size:11px;text-transform:uppercase;letter-spacing:.5px}
+    table{width:100%;border-collapse:collapse;margin-top:10px}
+    th{text-align:left;font-size:11px;text-transform:uppercase;color:#666;border-bottom:1px solid #ccc;padding:8px 6px}
+    td{padding:8px 6px;border-bottom:1px solid #eee;font-size:14px}.r{text-align:right}
+    .vin{font-family:'Courier New',monospace;font-size:13px;letter-spacing:.5px}
+    .tot{text-align:right;font-size:20px;font-weight:bold;margin-top:16px}
+    .foot{color:#888;font-size:11px;margin-top:40px;border-top:1px solid #eee;padding-top:10px}
+    @media print{body{padding:0}}</style></head><body>
+    <div class="top"><div><h1>BUILT TRAILERS</h1><div class="sub">Manufacturer Invoice</div></div>
+      <div class="meta"><div><b>Invoice #</b> ${esc(b.id)}</div><div><b>Date</b> ${date.toLocaleDateString()}</div><div><b>Status</b> ${esc(b.status)}</div></div></div>
+    <div class="billto"><b>Bill To</b>${esc(b.customer||'')}</div>
+    ${b.note?`<div class="sub">${esc(b.note)}</div>`:''}
+    <table><thead><tr><th>#</th><th>Trailer</th><th>VIN</th><th class="r">Amount</th></tr></thead><tbody>${rows}</tbody></table>
+    <div class="tot">Total: ${money(b.total)}</div>
+    <div class="foot">${lines.length} trailer(s) · Generated ${new Date().toLocaleString()} · Built Trailers</div>
+    </body></html>`;
+  const w=window.open('','_blank');
+  if(!w){ toast('Allow pop-ups to print/save the invoice'); return; }
+  w.document.write(html); w.document.close(); w.focus(); setTimeout(()=>{try{w.print();}catch(e){}},350);
 }
 async function postBatch(id){
   if(!confirm('Post ONE combined invoice for this batch? Every trailer in it will be marked billed.')) return;

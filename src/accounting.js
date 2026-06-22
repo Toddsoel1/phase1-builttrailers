@@ -12,14 +12,14 @@ export function accountingMode() {
 }
 export function qboConfigured() { return qboReady(); }
 
-async function record(kind, ref, party, amount, userId) {
+async function record(kind, ref, party, amount, userId, lines) {
   const mode = accountingMode();
   let status = 'posted', external = null;
   if (mode === 'quickbooks') {
     try {
       if (!qboReady()) throw new Error('QBO not configured');
       external = (kind === 'invoice')
-        ? await qboInvoice({ customer: party, amount, ref })
+        ? await qboInvoice({ customer: party, amount, ref, lines })
         : await qboBill({ vendor: party, amount, ref });
       status = 'synced';
     } catch (e) {
@@ -39,7 +39,7 @@ async function record(kind, ref, party, amount, userId) {
     [userId || null, 'acct.' + kind, `${ref} ${party} $${Math.round(amount)} (${status})`]);
 }
 
-export const postInvoice = (ref, party, amount, userId) => record('invoice', ref, party, amount, userId);
+export const postInvoice = (ref, party, amount, userId, lines) => record('invoice', ref, party, amount, userId, lines);
 export const postBill = (ref, party, amount, userId) => record('bill', ref, party, amount, userId);
 
 export async function ledger() {

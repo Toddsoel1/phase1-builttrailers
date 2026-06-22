@@ -60,6 +60,16 @@ export async function getBatch(id) {
     `SELECT o.id, o.qty, o.stage, o.due, m.name AS model, m.category AS type, m.price
        FROM sales_order o LEFT JOIN model m ON m.id = o.model_id
       WHERE o.invoice_batch_id = $1 ORDER BY o.id`, [id]);
+  // One invoice line per physical trailer, each carrying its VIN (or null if not
+  // assigned yet). A qty-N order produces N lines.
+  const lineItems = [];
+  for (const o of orders) {
+    const vins = await all('SELECT vin FROM trailer WHERE order_id=$1 AND vin IS NOT NULL ORDER BY serial', [o.id]);
+    const unit = Number(o.price || 0);
+    for (let i = 0; i < o.qty; i++) {
+      lineItems.push({ orderId: o.id, model: o.model, type: o.type, vin: vins[i] ? vins[i].vin : null, amount: unit });
+    }
+  }
   return {
     id: b.id, customerId: b.customer_id, customer: b.customer_name, status: b.status,
     note: b.note, createdAt: b.created_at, invoicedAt: b.invoiced_at, paidAt: b.paid_at,
@@ -68,6 +78,7 @@ export async function getBatch(id) {
       id: o.id, qty: o.qty, stage: o.stage, due: o.due, model: o.model, type: o.type,
       amount: Number(o.price || 0) * o.qty,
     })),
+    lineItems,
     total: await batchTotal(id),
   };
 }
@@ -115,7 +126,13 @@ export async function postBatchInvoice(batchId, user) {
   const orders = await all('SELECT id FROM sales_order WHERE invoice_batch_id=$1', [batchId]);
   if (!orders.length) throw new Error('batch has no orders to invoice');
   const total = await batchTotal(batchId);
-  await postInvoice(batchId, b.customer_name || 'Dealer', total, user?.id || null);
+  // One QuickBooks line per trailer, with its VIN in the description.
+  const { lineItems } = await getBatch(batchId);
+  const lines = lineItems.map(li => ({
+    description: `${li.model || 'Trailer'}${li.vin ? ' — VIN ' + li.vin : ''}`,
+    amount: li.amount,
+  }));
+  await postInvoice(batchId, b.customer_name || 'Dealer', total, user?.id || null, lines);
   await q(`UPDATE sales_order SET billed=true WHERE invoice_batch_id=$1`, [batchId]);
   await q(`UPDATE invoice_batch SET status='Invoiced', total=$1, invoiced_at=now() WHERE id=$2`, [total, batchId]);
   return getBatch(batchId);

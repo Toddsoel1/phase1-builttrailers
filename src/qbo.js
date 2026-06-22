@@ -257,17 +257,25 @@ async function anyExpenseAccountId() {
 }
 
 // ---- the two operations accounting.js calls ----
-export async function createInvoice({ customer, amount, ref }) {
+export async function createInvoice({ customer, amount, ref, lines }) {
   const customerId = await ensureCustomer(customer || 'Customer');
   const itemId = await anyItemId();
+  // One line per trailer (with VIN in the description) when provided; else a single line.
+  const Line = (Array.isArray(lines) && lines.length)
+    ? lines.map(l => ({
+        DetailType: 'SalesItemLineDetail', Amount: Number(l.amount),
+        Description: (l.description || `Built Trailers order ${ref || ''}`).toString().slice(0, 1000).trim(),
+        SalesItemLineDetail: { ItemRef: { value: itemId }, Qty: 1, UnitPrice: Number(l.amount) },
+      }))
+    : [{
+        DetailType: 'SalesItemLineDetail', Amount: Number(amount),
+        Description: `Built Trailers order ${ref || ''}`.trim(),
+        SalesItemLineDetail: { ItemRef: { value: itemId }, Qty: 1, UnitPrice: Number(amount) },
+      }];
   const inv = await call('POST', `invoice?minorversion=${MINOR}`, {
     CustomerRef: { value: customerId },
     DocNumber: (ref || '').slice(0, 21) || undefined,
-    Line: [{
-      DetailType: 'SalesItemLineDetail', Amount: Number(amount),
-      Description: `Built Trailers order ${ref || ''}`.trim(),
-      SalesItemLineDetail: { ItemRef: { value: itemId }, Qty: 1, UnitPrice: Number(amount) },
-    }],
+    Line,
   });
   return inv.Invoice.Id;
 }
