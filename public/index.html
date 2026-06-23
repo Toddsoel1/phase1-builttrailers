@@ -119,7 +119,10 @@ const money2 = n => '$' + (Math.round(n*100)/100).toLocaleString(undefined,{mini
 function esc(s){ const d=document.createElement('div');d.textContent=String(s??'');return d.innerHTML; }
 function toast(m){const t=document.createElement('div');t.className='toast';t.textContent=m;$('toast').appendChild(t);setTimeout(()=>t.remove(),3000);}
 async function api(path, opts={}){
-  const h = {'Content-Type':'application/json'};
+  // Accept:json is required — without it, endpoints that content-negotiate (e.g.
+  // /api/auth/qbo) fall back to a 302 redirect, which fetch follows cross-origin and
+  // dies with "Failed to fetch". Every api() response is parsed as JSON anyway.
+  const h = {'Content-Type':'application/json','Accept':'application/json'};
   if(TOKEN) h.Authorization='Bearer '+TOKEN;
   const r = await fetch(API+path,{...opts,headers:h});
   const d = await r.json().catch(()=>({}));
