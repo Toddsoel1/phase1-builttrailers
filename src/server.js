@@ -396,6 +396,17 @@ as long as the server makes at least one QuickBooks API call every 101 days.</p>
 });
 
 // ---- users (admin) ----
+// Highest permission tier (viewer < editor < admin) across a set of job titles —
+// a multi-title user gets the strongest tier among the titles they hold.
+async function maxTier(roleNames) {
+  if (!roleNames || !roleNames.length) return 'viewer';
+  const order = { viewer: 0, editor: 1, admin: 2 };
+  const allRoles = await all('SELECT name,tier FROM role', []);
+  const tierByName = Object.fromEntries(allRoles.map(r => [r.name, r.tier]));
+  let best = 'viewer';
+  for (const n of roleNames) { const t = tierByName[n]; if (t && (order[t] ?? 0) > (order[best] ?? 0)) best = t; }
+  return best;
+}
 app.get('/api/users', authMiddleware, async (_req, res) => {
   const users = await all('SELECT id,name,username,title,role,manager_id,phone,sms_consent,sms_consent_at,active FROM app_user ORDER BY active DESC,id', []);
   for (const u of users) {
@@ -405,9 +416,12 @@ app.get('/api/users', authMiddleware, async (_req, res) => {
   res.json(users);
 });
 app.post('/api/users', authMiddleware, requireTier('admin'), async (req, res) => {
-  const { name, title, password, phone, smsConsent } = req.body || {};
+  const { name, title, titles, password, phone, smsConsent } = req.body || {};
   if (!name) return res.status(400).json({ error: 'name required' });
-  const tier = (await one('SELECT tier FROM role WHERE name=$1', [title]))?.tier || 'viewer';
+  // Accept a list of job titles; fall back to the single `title` for older clients.
+  const roleList = (Array.isArray(titles) ? titles : (title ? [title] : [])).filter(Boolean);
+  const tier = await maxTier(roleList);
+  const primary = roleList[0] || null;
   const id = 'u' + Date.now();
   const base = name.trim().toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 12) || 'user';
   const normalizedPhone = phone ? sms.normalizePhone(phone) : null;
@@ -415,8 +429,10 @@ app.post('/api/users', authMiddleware, requireTier('admin'), async (req, res) =>
   const effectiveConsent = !!(smsConsent || priorOptin);
   const consentAt = effectiveConsent ? new Date().toISOString() : null;
   await q('INSERT INTO app_user(id,name,username,password_hash,title,role,manager_id,phone,sms_consent,sms_consent_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)',
-    [id, name, base, hashPassword(password || 'built2026'), title || null, tier, req.user.id, normalizedPhone || null, effectiveConsent, consentAt]);
-  await audit(req, 'user.create', `${name} (${title})${effectiveConsent ? ' [sms-consent]' : ''}`);
+    [id, name, base, hashPassword(password || 'built2026'), primary, tier, req.user.id, normalizedPhone || null, effectiveConsent, consentAt]);
+  // Sync the title junction so the new user's permissions (union of sections) take effect immediately.
+  for (const rn of roleList) await q('INSERT INTO user_title(user_id,role_name) VALUES($1,$2) ON CONFLICT DO NOTHING', [id, rn]);
+  await audit(req, 'user.create', `${name} (${roleList.join(', ') || 'no title'})${effectiveConsent ? ' [sms-consent]' : ''}`);
   res.json({ id, username: base });
 });
 app.post('/api/users/me/password', authMiddleware, async (req, res) => {
@@ -427,15 +443,25 @@ app.post('/api/users/me/password', authMiddleware, async (req, res) => {
   res.json({ ok: true });
 });
 app.patch('/api/users/:id', authMiddleware, requireTier('admin'), async (req, res) => {
-  const { title, role, manager_id, password, username, phone, smsConsent } = req.body || {};
+  const { title, titles, role, manager_id, password, username, phone, smsConsent } = req.body || {};
   const cur = await one('SELECT * FROM app_user WHERE id=$1', [req.params.id]);
   if (!cur) return res.status(404).json({ error: 'not found' });
-  let tier = role;
-  if (title) tier = (await one('SELECT tier FROM role WHERE name=$1', [title]))?.tier || cur.role;
+  let newTitle = title ?? cur.title;
+  let tier = role ?? cur.role;
+  if (Array.isArray(titles)) {
+    // Replace the user's whole set of job titles; permissions become the union of their sections.
+    const roleList = titles.filter(Boolean);
+    await q('DELETE FROM user_title WHERE user_id=$1', [req.params.id]);
+    for (const rn of roleList) await q('INSERT INTO user_title(user_id,role_name) VALUES($1,$2) ON CONFLICT DO NOTHING', [req.params.id, rn]);
+    newTitle = roleList[0] || null;
+    tier = await maxTier(roleList);
+  } else if (title) {
+    tier = (await one('SELECT tier FROM role WHERE name=$1', [title]))?.tier || cur.role;
+  }
   const consentAt = (smsConsent === true && !cur.sms_consent) ? new Date().toISOString() : cur.sms_consent_at;
   const { name } = req.body || {};
   await q('UPDATE app_user SET name=$1,title=$2,role=$3,manager_id=$4,username=$5,phone=$6,sms_consent=$7,sms_consent_at=$8 WHERE id=$9',
-    [name ?? cur.name, title ?? cur.title, tier ?? cur.role,
+    [name ?? cur.name, newTitle, tier,
      manager_id !== undefined ? (manager_id || null) : cur.manager_id,
      username ?? cur.username,
      phone !== undefined ? (phone || null) : cur.phone,
