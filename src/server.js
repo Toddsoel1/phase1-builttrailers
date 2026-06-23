@@ -80,6 +80,11 @@ function twilioSignatureValid(req) {
 const __dir = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
 
+// Behind Render's TLS-terminating proxy: trust the first hop so req.protocol reflects
+// the original https (via x-forwarded-proto). Without this, OAuth redirect_uris are
+// built as http:// and Intuit rejects them as unregistered.
+app.set('trust proxy', 1);
+
 // Security headers (CSP disabled — app uses inline scripts/styles)
 app.use(helmet({ contentSecurityPolicy: false, crossOriginEmbedderPolicy: false }));
 
