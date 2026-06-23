@@ -3,13 +3,12 @@
 // submit warranty claims, and log maintenance — all keyed by VIN. Submissions land
 // as "pending" for internal staff to verify against the uploaded proof of sale.
 import { all, one, q } from './db.js';
-import { writeFile, mkdir } from 'fs/promises';
-import path from 'path';
 import { notifyDealer } from './dealernotify.js';
 import { sendWarrantyWelcome } from './email.js';
+import { extractBuyersOrder } from './ocr.js';
+import { putDataUrl } from './storage.js';
 
 const REG_WINDOW_DAYS = 15;       // dealer must register within 15 days of sale
-const UPLOAD_DIR = process.env.UPLOAD_DIR || './uploads';
 const MAX_UPLOAD = 10 * 1024 * 1024;
 
 // Minimal public lookup: confirm a VIN exists and whether it's already registered.
@@ -27,17 +26,10 @@ function within15(saleDate) {
   return days >= 0 && days <= REG_WINDOW_DAYS;
 }
 
-// Decode a base64 data URL and save it; returns the stored path (or null).
-async function saveUpload(trailerId, dataUrl) {
-  const m = /^data:([^;]+);base64,(.+)$/s.exec(dataUrl || '');
-  if (!m) return null;
-  const buf = Buffer.from(m[2], 'base64');
-  if (buf.length > MAX_UPLOAD) throw new Error('Proof-of-sale file is too large (max 10 MB).');
-  const ext = (m[1].split('/')[1] || 'bin').replace(/[^a-z0-9]/gi, '').slice(0, 5);
-  await mkdir(UPLOAD_DIR, { recursive: true });
-  const name = `${trailerId}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}.${ext}`;
-  await writeFile(path.join(UPLOAD_DIR, name), buf);
-  return `${UPLOAD_DIR}/${name}`;
+// Decode a base64 data URL and store it (R2 in prod, local disk in dev) — returns the
+// opaque storage ref saved in the DB, or null when there's no data URL to store.
+async function saveUpload(prefix, dataUrl) {
+  return putDataUrl(prefix, dataUrl, { maxBytes: MAX_UPLOAD, tooLargeMsg: 'Proof-of-sale file is too large (max 10 MB).' });
 }
 
 // Save a list of attachments (photos / video / receipts) against a claim or
@@ -95,30 +87,45 @@ export async function submitRegistration(data) {
   const t = await one(`SELECT id, customer_id FROM trailer WHERE upper(vin)=upper($1)`, [String(vin).trim()]);
   if (!t) throw new Error('That VIN was not found. Please check the 17-character VIN on your trailer.');
 
-  const proofPath = (typeof proofOfSale === 'string' && proofOfSale.startsWith('data:')) ? await saveUpload(t.id, proofOfSale) : null;
+  const hasProof = typeof proofOfSale === 'string' && proofOfSale.startsWith('data:');
+  const proofPath = hasProof ? await saveUpload(t.id, proofOfSale) : null;
   const w15 = within15(saleDate);
-  // Self-validation: a dealership registering one of its OWN VINs (we already know
-  // which VINs were sold to whom) within the 15-day window is auto-verified — no
-  // staff step. Everything the system can't confirm defaults to the manual queue,
+
+  // OCR the buyer's order/invoice (when one is attached): confirm the sale date and
+  // capture sale price + accessories (staff-only margin intel) with no manual step.
+  // Returns null when OCR is unavailable or unreadable — we just fall back to manual.
+  let ocr = null;
+  if (hasProof) { try { ocr = await extractBuyersOrder(proofOfSale); } catch (e) { console.warn('OCR:', e.message); } }
+  const enteredDate = String(saleDate).slice(0, 10);
+  const dateConfirmed = !!(ocr?.saleDate && ocr.saleDate === enteredDate);
+
+  // Self-validation: auto-verify within the 15-day window when EITHER the VIN belongs
+  // to the submitting dealer (we already know which VINs went to whom) OR the uploaded
+  // document's date matches what was entered. Anything we can't confirm stays pending,
   // so dealers and owners are never blocked at submission time.
   const vinMatchesDealer = source === 'dealer' && dealerCustomerId && t.customer_id && String(t.customer_id) === String(dealerCustomerId);
-  const status = (vinMatchesDealer && w15 === true) ? 'verified' : 'pending';
+  const status = (w15 === true && (vinMatchesDealer || dateConfirmed)) ? 'verified' : 'pending';
 
   await q(`INSERT INTO warranty_registration
       (trailer_id, owner_name, owner_contact, registered_at, term_months, email, phone, warranty_address,
-       sale_date, selling_dealer, sms_opt_in, email_opt_in, proof_of_sale, verification_status, within_15_days, source, submitted_by)
-      VALUES ($1,$2,$3,now(),$4,$5,$6,$7,$8,$9,$10,$11,$12,$16,$13,$14,$15)
+       sale_date, selling_dealer, sms_opt_in, email_opt_in, proof_of_sale, verification_status, within_15_days, source, submitted_by,
+       sale_price, accessories, ocr_sale_date)
+      VALUES ($1,$2,$3,now(),$4,$5,$6,$7,$8,$9,$10,$11,$12,$16,$13,$14,$15,$17,$18,$19)
       ON CONFLICT(trailer_id) DO UPDATE SET owner_name=$2, owner_contact=$3, term_months=$4, email=$5, phone=$6,
         warranty_address=$7, sale_date=$8, selling_dealer=$9, sms_opt_in=$10, email_opt_in=$11,
         proof_of_sale=COALESCE($12, warranty_registration.proof_of_sale), verification_status=$16,
-        within_15_days=$13, source=$14, submitted_by=$15`,
+        within_15_days=$13, source=$14, submitted_by=$15,
+        sale_price=COALESCE($17, warranty_registration.sale_price),
+        accessories=COALESCE($18, warranty_registration.accessories),
+        ocr_sale_date=COALESCE($19, warranty_registration.ocr_sale_date)`,
     [t.id, ownerName, phone || email || null, Number(termMonths) || 12, email || null, phone || null, warrantyAddress || null,
-     saleDate, sellingDealer || null, !!smsOptIn, !!emailOptIn, proofPath, w15, source || 'owner', ownerName, status]);
+     saleDate, sellingDealer || null, !!smsOptIn, !!emailOptIn, proofPath, w15, source || 'owner', ownerName, status,
+     ocr?.salePrice ?? null, ocr?.accessories ?? null, ocr?.saleDate ?? null]);
 
   // NOTE: opt-in delivery of the maintenance schedule / T&Cs / app link is captured here;
   // SMS uses the existing Twilio path, email delivery needs an email provider (flagged).
   await saveAttachments('registration', t.id, attachments, ownerName);
-  return { ok: true, within15: w15, status, autoVerified: status === 'verified' };
+  return { ok: true, within15: w15, status, autoVerified: status === 'verified', dateConfirmed };
 }
 
 export async function submitPublicClaim(data) {
@@ -148,7 +155,7 @@ export async function submitMaintenance(data) {
 export async function pendingRegistrations() {
   const rows = await all(`SELECT r.trailer_id, r.owner_name, r.email, r.phone, r.warranty_address, r.sale_date,
                                  r.selling_dealer, r.sms_opt_in, r.email_opt_in, r.proof_of_sale, r.within_15_days,
-                                 r.registered_at, r.source, r.sale_price, r.accessories, t.vin, m.name AS model, m.price AS our_price, c.name AS dealer
+                                 r.registered_at, r.source, r.sale_price, r.accessories, r.ocr_sale_date, t.vin, m.name AS model, m.price AS our_price, c.name AS dealer
                             FROM warranty_registration r
                             JOIN trailer t ON t.id=r.trailer_id
                             LEFT JOIN model m ON m.id=t.model_id
@@ -162,6 +169,7 @@ export async function pendingRegistrations() {
     registeredAt: r.registered_at, source: r.source,
     // Built Trailers staff only — never exposed to dealer/owner endpoints
     salePrice: r.sale_price != null ? Number(r.sale_price) : null, accessories: r.accessories || null, ourPrice: Number(r.our_price || 0),
+    ocrSaleDate: r.ocr_sale_date || null, dateConfirmed: !!(r.ocr_sale_date && r.sale_date && String(r.ocr_sale_date).slice(0, 10) === String(r.sale_date).slice(0, 10)),
   }));
 }
 

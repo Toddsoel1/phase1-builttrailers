@@ -32,6 +32,7 @@ import * as warranty from './warranty.js';
 import * as portal from './portal.js';
 import * as dealer from './dealer.js';
 import * as dealernotify from './dealernotify.js';
+import * as storage from './storage.js';
 
 // Crash fast if JWT_SECRET is unset in production — predictable fallback is a critical vuln
 if (!process.env.JWT_SECRET) {
@@ -243,10 +244,9 @@ app.get('/api/public/documents', portalLimiter, async (_req, res) => res.json(aw
 app.get('/api/public/document/:id', portalLimiter, async (req, res) => {
   const doc = await portal.getDocumentPath(req.params.id);
   if (!doc) return res.status(404).json({ error: 'not found' });
-  const base = path.resolve(process.env.UPLOAD_DIR || './uploads');
-  const abs = path.resolve(doc.path);
-  if (!abs.startsWith(base)) return res.status(400).json({ error: 'invalid path' });
-  res.sendFile(abs, err => { if (err) res.status(404).end(); });
+  const file = await storage.getFile(doc.path);
+  if (!file) return res.status(404).end();
+  res.type(doc.ct || file.contentType).send(file.buffer);
 });
 app.post('/api/documents', authMiddleware, requireTier('admin'), async (req, res) => {
   try { const r = await portal.addDocument(req.body || {}, req.user.id); await audit(req, 'doc.add', `${r.id} ${req.body?.title || ''}`); res.json(r); }
@@ -1138,11 +1138,11 @@ app.post('/api/warranty/registrations/:trailerId/review', authMiddleware, requir
 app.get('/api/warranty/margins', authMiddleware, requireSection('trailers'), async (_req, res) => res.json(await portal.marginReport()));
 // View an uploaded proof-of-sale (staff only — never public)
 app.get('/api/warranty/proof', authMiddleware, requireSection('trailers'), async (req, res) => {
-  const rel = String(req.query.path || '');
-  const base = path.resolve(process.env.UPLOAD_DIR || './uploads');
-  const abs = path.resolve(rel);
-  if (!abs.startsWith(base)) return res.status(400).json({ error: 'invalid path' });
-  res.sendFile(abs, err => { if (err) res.status(404).json({ error: 'not found' }); });
+  // storage.getFile confines the ref to the uploads namespace (R2) or UPLOAD_DIR (local),
+  // so a client-supplied path can't escape to arbitrary files.
+  const file = await storage.getFile(String(req.query.path || ''));
+  if (!file) return res.status(404).json({ error: 'not found' });
+  res.type(file.contentType).send(file.buffer);
 });
 // Staff review of dealership account signups
 app.get('/api/dealers/pending', authMiddleware, requireSection('trailers'), async (_req, res) =>
@@ -1320,6 +1320,8 @@ if (kind === 'postgres' || kind === 'pglite') {
     // Margin intelligence captured from the buyer's order at verification — Built Trailers staff only.
     `ALTER TABLE warranty_registration ADD COLUMN IF NOT EXISTS sale_price NUMERIC(12,2)`,
     `ALTER TABLE warranty_registration ADD COLUMN IF NOT EXISTS accessories TEXT`,
+    // Sale date read off the uploaded buyer's order by OCR; used to auto-confirm the registration date.
+    `ALTER TABLE warranty_registration ADD COLUMN IF NOT EXISTS ocr_sale_date DATE`,
   ];
   // Migrate existing app_user.title into user_title junction (idempotent)
   await q(`INSERT INTO user_title(user_id,role_name)

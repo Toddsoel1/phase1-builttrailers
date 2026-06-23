@@ -1726,12 +1726,12 @@ async function trailersRegsTab(){
     </tbody></table></div>`:'';
   const regCard=!pend.length?`<div class="card"><p class="muted">No warranty registrations awaiting verification. Submissions from the owner &amp; dealer portals appear here for review.</p></div>`
     :`<div class="card"><h3>Registrations awaiting verification <span class="badge b-low">${pend.length}</span></h3>
-    <p class="muted" style="font-size:12px;margin-bottom:10px">Verify the purchase date against the uploaded proof of sale, then approve or reject. Flagged ⚠️ = submitted outside the 15-day window.</p>
+    <p class="muted" style="font-size:12px;margin-bottom:10px">When a buyer's order is attached, OCR auto-confirms the sale date and pre-fills sold-for / accessories below — just confirm or correct, then approve. Matching dates inside the 15-day window are auto-verified and skip this queue. Flagged ⚠️ = late, or the document's date differs from what was entered.</p>
     <table><thead><tr><th>VIN</th><th>Owner</th><th>Sale date</th><th>Contact</th><th>Proof</th><th>15-day</th>${canReview?'<th>Sold for / accessories <span style="color:var(--muted);font-weight:400">(staff-only — from the buyer\'s order)</span></th><th></th>':''}</tr></thead><tbody>
     ${pend.map(r=>`<tr>
       <td><b style="font-family:ui-monospace,monospace;font-size:11px">${esc(r.vin)}</b><br><span class="muted" style="font-size:11px">${esc(r.model||'')}</span></td>
       <td>${esc(r.ownerName||'')}${r.sellingDealer?`<br><span class="muted" style="font-size:11px">via ${esc(r.sellingDealer)}</span>`:''}</td>
-      <td>${r.saleDate?String(r.saleDate).slice(0,10):'—'}</td>
+      <td>${r.saleDate?String(r.saleDate).slice(0,10):'—'}${r.dateConfirmed?'<br><span class="badge b-ok" style="font-size:10px">✓ OCR-confirmed</span>':r.ocrSaleDate?`<br><span class="badge b-below" style="font-size:10px" title="Date read off the uploaded document">⚠️ doc says ${String(r.ocrSaleDate).slice(0,10)}</span>`:''}</td>
       <td style="font-size:12px">${esc(r.email||'')}${r.phone?`<br>${esc(r.phone)}`:''}</td>
       <td>${r.proofOfSale?`<a class="lnk" onclick="viewProof('${encodeURIComponent(r.proofOfSale)}')">View</a>`:'<span class="muted">none</span>'}</td>
       <td>${r.within15===false?'<span class="badge b-below">⚠️ late</span>':r.within15===true?'<span class="badge b-ok">✓</span>':'<span class="muted">—</span>'}</td>
