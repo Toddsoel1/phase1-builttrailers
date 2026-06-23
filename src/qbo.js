@@ -83,7 +83,7 @@ export async function getAuthUrl(redirectUri) {
   })}`;
 }
 
-export async function exchangeCode(code, redirectUri, state) {
+export async function exchangeCode(code, redirectUri, state, realmId) {
   const savedState = await getConfig('qbo_oauth_state');
   if (!savedState) throw new Error('No OAuth state found — restart the authorization flow');
   if (state !== savedState) throw new Error('State mismatch — possible CSRF attack; restart the authorization flow');
@@ -98,6 +98,8 @@ export async function exchangeCode(code, redirectUri, state) {
   if (!res.ok) { const b = await res.text(); throw new Error(parseQBOFault(b, `QBO token exchange ${res.status}: ${b}`)); }
   const j = await res.json();
   await setConfig('qbo_refresh_token', j.refresh_token);
+  // Capture the company you just authorized so it becomes the active realm automatically.
+  if (realmId) await setConfig('qbo_realm_id', String(realmId));
   return { refreshToken: j.refresh_token, accessToken: j.access_token };
 }
 
@@ -116,6 +118,19 @@ export async function getRefreshTokenInfo() {
   if (dbTok) return { token: dbTok, source: 'db' };
   if (process.env.QBO_REFRESH_TOKEN) return { token: process.env.QBO_REFRESH_TOKEN, source: 'env' };
   return { token: null, source: 'none' };
+}
+
+// The active QuickBooks company (realm). Prefers the realm captured during OAuth (DB)
+// over the QBO_REALM_ID env var, so whatever company you authorize becomes the active
+// one — no env var to hand-set, and a stale/typo'd env value can't cause a mismatch.
+export async function getRealmInfo() {
+  const dbRealm = await getConfig('qbo_realm_id');
+  if (dbRealm) return { realmId: dbRealm, source: 'db' };
+  if (process.env.QBO_REALM_ID) return { realmId: process.env.QBO_REALM_ID, source: 'env' };
+  return { realmId: null, source: 'none' };
+}
+export async function activeRealmId() {
+  return (await getRealmInfo()).realmId;
 }
 
 async function accessToken() {
@@ -150,7 +165,7 @@ export async function disconnectQBO() {
       });
     } catch { /* best-effort — clearing locally is what matters */ }
   }
-  try { await ensureConfigTable(); await q("DELETE FROM config WHERE key='qbo_refresh_token'"); } catch {}
+  try { await ensureConfigTable(); await q("DELETE FROM config WHERE key IN ('qbo_refresh_token','qbo_realm_id')"); } catch {}
   tokenCache = { access: null, exp: 0 };
   return { ok: true };
 }
@@ -198,7 +213,8 @@ export async function qboErrorLog(limit = 100) {
 
 async function call(method, path, body, { _retry401 = false, _attempt = 0 } = {}) {
   const tok = await accessToken();
-  const res = await fetch(`${API_BASE}/v3/company/${process.env.QBO_REALM_ID}/${path}`, {
+  const realm = await activeRealmId();
+  const res = await fetch(`${API_BASE}/v3/company/${realm}/${path}`, {
     method,
     headers: { Authorization: `Bearer ${tok}`, 'Content-Type': 'application/json', Accept: 'application/json' },
     body: body ? JSON.stringify(body) : undefined,
