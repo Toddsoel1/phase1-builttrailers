@@ -105,8 +105,17 @@ export async function exchangeCode(code, redirectUri, state) {
 let tokenCache = { access: null, exp: 0 };
 
 async function activeRefreshToken() {
-  // DB token is more current than env var (it rotates on each use)
-  return (await getConfig('qbo_refresh_token')) || process.env.QBO_REFRESH_TOKEN;
+  return (await getRefreshTokenInfo()).token;
+}
+
+// Where the live refresh token comes from — the rotating DB copy first, the env var only
+// as a seed fallback. Exported so the /api/qbo/test diagnostic checks the SAME token the
+// app actually uses, instead of only the static env var.
+export async function getRefreshTokenInfo() {
+  const dbTok = await getConfig('qbo_refresh_token');
+  if (dbTok) return { token: dbTok, source: 'db' };
+  if (process.env.QBO_REFRESH_TOKEN) return { token: process.env.QBO_REFRESH_TOKEN, source: 'env' };
+  return { token: null, source: 'none' };
 }
 
 async function accessToken() {
@@ -124,6 +133,26 @@ async function accessToken() {
   tokenCache = { access: j.access_token, exp: Date.now() + (j.expires_in - 60) * 1000 };
   await setConfig('qbo_refresh_token', j.refresh_token);  // persist the rotated token
   return tokenCache.access;
+}
+
+// Disconnect QuickBooks: best-effort revoke at Intuit, drop the rotating refresh token
+// from the config table, and clear the cached access token. (A QBO_REFRESH_TOKEN env var,
+// if set, remains as a seed — unset it in the environment for a hard disconnect.)
+export async function disconnectQBO() {
+  const rt = await activeRefreshToken();
+  if (rt) {
+    try {
+      const basic = Buffer.from(`${process.env.QBO_CLIENT_ID}:${process.env.QBO_CLIENT_SECRET}`).toString('base64');
+      await fetch(await revocationEndpoint(), {
+        method: 'POST',
+        headers: { Authorization: `Basic ${basic}`, 'Content-Type': 'application/json', Accept: 'application/json' },
+        body: JSON.stringify({ token: rt }),
+      });
+    } catch { /* best-effort — clearing locally is what matters */ }
+  }
+  try { await ensureConfigTable(); await q("DELETE FROM config WHERE key='qbo_refresh_token'"); } catch {}
+  tokenCache = { access: null, exp: 0 };
+  return { ok: true };
 }
 
 // ---- API helpers ----
