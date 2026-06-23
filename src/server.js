@@ -18,7 +18,7 @@ import { modelRollup, modelsSummary, inventoryValuation, partUnitCost } from './
 import { STAGES, canSell, canReorderProduction, trailerTypes, customersWithTypes, allowedTypesFor, ordersFull, consumeInventory, setProductionOrder } from './orders.js';
 import { mrp, poList, createPO, receivePO } from './mrp.js';
 import { accountingMode, qboConfigured, ledger, totals, sync, scanInvoice, invoiceList } from './accounting.js';
-import { getAuthUrl, exchangeCode, syncCustomersFromQBO, syncItemsFromQBO, syncInvoicesFromQBO, previewItemsFromQBO, QBOAuthError, QBOFeatureError, qboErrorLog } from './qbo.js';
+import { getAuthUrl, exchangeCode, syncCustomersFromQBO, syncItemsFromQBO, syncInvoicesFromQBO, previewItemsFromQBO, QBOAuthError, QBOFeatureError, qboErrorLog, getRefreshTokenInfo, disconnectQBO } from './qbo.js';
 import * as people from './people.js';
 import { forecast, workingCapital, scenario } from './forecast.js';
 import * as sms from './sms.js';
@@ -306,9 +306,11 @@ app.get('/api/auth/me', authMiddleware, (req, res) => res.json({ user: req.user 
 app.get('/api/qbo/test', authMiddleware, requireTier('admin'), async (_req, res) => {
   const steps = [];
   try {
-    // Step 1: refresh token present?
-    const rt = process.env.QBO_REFRESH_TOKEN;
-    steps.push({ step: 'refresh_token_in_env', ok: !!rt, value: rt ? rt.slice(0, 12) + '…' : null });
+    // Step 1: refresh token present? Check the SAME source the live app uses — the
+    // rotating DB token first, the env var only as a seed fallback — so the diagnostic
+    // can't disagree with reality.
+    const { token: rt, source } = await getRefreshTokenInfo();
+    steps.push({ step: 'refresh_token_available', ok: !!rt, source, value: rt ? rt.slice(0, 12) + '…' : null });
     if (!rt) return res.json({ steps });
 
     // Step 2: can we get an access token?
@@ -349,14 +351,12 @@ app.get('/api/auth/qbo', authMiddleware, requireTier('admin'), async (req, res) 
   if (req.headers.accept?.includes('application/json')) return res.json({ url });
   res.redirect(url);
 });
-app.get('/api/auth/qbo/disconnect', async (req, res) => {
+app.get('/api/auth/qbo/disconnect', authMiddleware, requireTier('admin'), async (req, res) => {
   try {
-    const { setConfig } = await import('./qbo.js').then(m => ({ setConfig: m.setConfig })).catch(() => null) || {};
-    // Clear the stored refresh token so qboConfigured() returns false
-    await q("DELETE FROM app_config WHERE key='qbo_refresh_token'").catch(() => {});
+    await disconnectQBO();   // revoke at Intuit + clear the stored (config) token + access cache
     await audit(req, 'qbo.disconnect', 'QBO access revoked');
-  } catch {}
-  res.redirect('/');
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 app.get('/api/auth/qbo/callback', async (req, res) => {
   const { code, realmId, state, error } = req.query;
