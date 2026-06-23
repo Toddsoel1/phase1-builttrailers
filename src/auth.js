@@ -1,7 +1,7 @@
 // Authentication & authorization — bcrypt password hashing + JWT sessions + role guards.
 import jwt from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
-import { one } from './db.js';
+import { one, all } from './db.js';
 
 export const JWT_SECRET = process.env.JWT_SECRET || 'dev-only-change-me';
 const TIER_RANK = { viewer: 0, editor: 1, admin: 2 };
@@ -21,6 +21,14 @@ export async function authMiddleware(req, res, next) {
     if (payload.kind === 'dealer') return res.status(403).json({ error: 'Staff access required' });
     const u = await one('SELECT id,name,username,title,role,manager_id FROM app_user WHERE id=$1', [payload.id]);
     if (!u) return res.status(401).json({ error: 'User not found' });
+    // Live section permissions = union across all the user's job titles (admins see all).
+    // Resolved per request so title changes take effect without re-login.
+    if (u.role === 'admin') {
+      u.sections = null;
+    } else {
+      const rows = await all('SELECT DISTINCT rs.section FROM user_title ut JOIN role_section rs ON rs.role_name=ut.role_name WHERE ut.user_id=$1', [u.id]);
+      u.sections = rows.map(r => r.section);
+    }
     req.user = u;
     next();
   } catch {
