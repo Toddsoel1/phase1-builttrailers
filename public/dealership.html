@@ -103,6 +103,7 @@ footer a{color:var(--accent)}
     <div id="paneNotif" class="card hidden">
       <h2>Updates</h2>
       <p class="lead">Order status changes, registration approvals, and claim resolutions appear here.</p>
+      <button class="btn" id="pushBtn" style="margin-bottom:12px" onclick="enablePush('/api/dealer/push/subscribe')">🔔 Enable phone alerts</button>
       <div id="notifBody"><p class="lead">Loading…</p></div>
     </div>
 
@@ -318,6 +319,24 @@ async function submitClaim(){
     const d=await api('/api/dealer/claim',{method:'POST',body:JSON.stringify({vin,issue,attachments})});
     setMsg('cMsg','ok','✓ Claim '+d.id+' submitted'+(d.attachments?' with '+d.attachments+' file(s)':'')+'.');$('cVin').value='';$('cIssue').value='';if($('cFiles'))$('cFiles').value='';loadClaims();
   }catch(e){setMsg('cMsg','err',e.message);}
+}
+
+// ---- Web push opt-in (dealer) ----
+if('serviceWorker' in navigator){ navigator.serviceWorker.register('/sw.js').catch(e=>console.warn('SW:',e)); }
+function urlB64ToUint8(b){const p='='.repeat((4-b.length%4)%4);const s=(b+p).replace(/-/g,'+').replace(/_/g,'/');const raw=atob(s);return Uint8Array.from([...raw].map(c=>c.charCodeAt(0)));}
+async function enablePush(subUrl){
+  const btn=document.getElementById('pushBtn');
+  try{
+    if(!('serviceWorker'in navigator)||!('PushManager'in window)){alert('Notifications aren\'t supported on this device/browser.');return;}
+    const vk=await (await fetch('/api/push/vapid')).json();
+    if(!vk.publicKey){alert('Push notifications aren\'t turned on by Built Trailers yet.');return;}
+    const reg=await navigator.serviceWorker.register('/sw.js'); await navigator.serviceWorker.ready;
+    const perm=await Notification.requestPermission();
+    if(perm!=='granted'){alert('Notifications are blocked. Enable them in your browser settings.');return;}
+    const sub=await reg.pushManager.subscribe({userVisibleOnly:true,applicationServerKey:urlB64ToUint8(vk.publicKey)});
+    await api(subUrl,{method:'POST',body:JSON.stringify(sub)});
+    if(btn){btn.textContent='🔔 Phone alerts on ✓';btn.disabled=true;}
+  }catch(e){alert(e.message||'Could not enable notifications');}
 }
 
 // auto-resume session

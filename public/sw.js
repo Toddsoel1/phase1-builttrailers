@@ -17,6 +17,29 @@ self.addEventListener('activate', e => {
   self.clients.claim();
 });
 
+// ---- Web push: order status, approvals, warranty updates ----
+self.addEventListener('push', e => {
+  let data = {};
+  try { data = e.data ? e.data.json() : {}; } catch (_) { data = {}; }
+  e.waitUntil(self.registration.showNotification(data.title || 'Built Trailers', {
+    body: data.body || '',
+    icon: '/icons/icon-192.png',
+    badge: '/icons/icon-192.png',
+    data: { url: data.url || '/' },
+    tag: data.tag || undefined,
+    renotify: !!data.tag,
+  }));
+});
+
+self.addEventListener('notificationclick', e => {
+  e.notification.close();
+  const url = (e.notification.data && e.notification.data.url) || '/';
+  e.waitUntil(self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(wins => {
+    for (const w of wins) { if ('focus' in w) { w.focus(); if ('navigate' in w) w.navigate(url); return; } }
+    if (self.clients.openWindow) return self.clients.openWindow(url);
+  }));
+});
+
 // Fetch strategy:
 //   /api/*        → network only (always fresh data)
 //   /webhooks/*   → network only

@@ -99,7 +99,8 @@ a.lnk{color:var(--blue);cursor:pointer}
     <div class="brand"><h1>BUILT <span class="t">TRAILERS</span></h1><small>Phase 1 · live</small></div>
     <nav class="nav" id="nav"></nav>
     <div class="who"><div class="muted">Signed in as</div><b id="whoName"></b><span id="whoPill"></span>
-      <button class="btn sec sm" style="width:100%;margin-top:8px" onclick="logout()">Log out</button></div>
+      <button class="btn sec sm" id="pushBtn" style="width:100%;margin-top:8px" onclick="enablePush('/api/push/subscribe')">🔔 Enable notifications</button>
+      <button class="btn sec sm" style="width:100%;margin-top:6px" onclick="logout()">Log out</button></div>
   </aside>
   <main class="main">
     <div class="topbar"><div><h2 id="pTitle">Dashboard</h2><div class="sub" id="pSub"></div></div><div id="pActions"></div></div>
@@ -2504,6 +2505,23 @@ if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => {
     navigator.serviceWorker.register('/sw.js').catch(e => console.warn('SW:', e));
   });
+}
+// ---- Web push opt-in (staff) ----
+function urlB64ToUint8(b){const p='='.repeat((4-b.length%4)%4);const s=(b+p).replace(/-/g,'+').replace(/_/g,'/');const raw=atob(s);return Uint8Array.from([...raw].map(c=>c.charCodeAt(0)));}
+async function enablePush(subUrl){
+  const btn=document.getElementById('pushBtn');
+  try{
+    if(!('serviceWorker'in navigator)||!('PushManager'in window)){toast('Notifications aren\'t supported on this device.');return;}
+    const vk=await (await fetch('/api/push/vapid')).json();
+    if(!vk.publicKey){toast('Push isn\'t configured on the server yet.');return;}
+    const reg=await navigator.serviceWorker.register('/sw.js'); await navigator.serviceWorker.ready;
+    const perm=await Notification.requestPermission();
+    if(perm!=='granted'){toast('Notifications are blocked in your browser.');return;}
+    const sub=await reg.pushManager.subscribe({userVisibleOnly:true,applicationServerKey:urlB64ToUint8(vk.publicKey)});
+    await api(subUrl,{method:'POST',body:JSON.stringify(sub)});
+    if(btn){btn.textContent='🔔 Notifications on ✓';btn.disabled=true;}
+    toast('🔔 Notifications enabled');
+  }catch(e){toast(e.message||'Could not enable notifications');}
 }
 </script>
 </body>

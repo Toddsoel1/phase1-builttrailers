@@ -33,6 +33,7 @@ import * as portal from './portal.js';
 import * as dealer from './dealer.js';
 import * as dealernotify from './dealernotify.js';
 import * as storage from './storage.js';
+import * as push from './push.js';
 
 // Crash fast if JWT_SECRET is unset in production — predictable fallback is a critical vuln
 if (!process.env.JWT_SECRET) {
@@ -173,6 +174,26 @@ app.get('/api/sms/optin-check', authMiddleware, async (req, res) => {
   if (!phone) return res.json({ optedIn: false });
   const row = await sms.checkOptin(phone);
   res.json({ optedIn: !!row, audience: row?.audience || null });
+});
+
+// ---- Web push: phone/desktop notifications (the "coming soon" SMS replacement) ----
+app.get('/api/push/vapid', (_req, res) => res.json({ publicKey: push.vapidPublicKey() }));
+app.post('/api/push/subscribe', authMiddleware, async (req, res) => {
+  await push.saveSubscription('staff', req.user.id, req.body || {});
+  res.json({ ok: true });
+});
+app.post('/api/push/unsubscribe', authMiddleware, async (req, res) => {
+  await push.removeSubscription((req.body || {}).endpoint);
+  res.json({ ok: true });
+});
+app.post('/api/dealer/push/subscribe', dealer.dealerAuth, async (req, res) => {
+  if (!req.dealer.customer_id) return res.status(400).json({ error: 'Your dealership is not linked yet.' });
+  await push.saveSubscription('dealer', req.dealer.customer_id, req.body || {});
+  res.json({ ok: true });
+});
+app.post('/api/dealer/push/unsubscribe', dealer.dealerAuth, async (req, res) => {
+  await push.removeSubscription((req.body || {}).endpoint);
+  res.json({ ok: true });
 });
 
 // ---- Serve public opt-in, privacy, and terms pages ----
@@ -1316,6 +1337,9 @@ if (kind === 'postgres' || kind === 'pglite') {
     `CREATE TABLE IF NOT EXISTS attachment (id SERIAL PRIMARY KEY, entity_type TEXT NOT NULL, entity_id TEXT NOT NULL, kind TEXT, file_path TEXT NOT NULL, original_name TEXT, content_type TEXT, uploaded_by TEXT, created_at TIMESTAMPTZ NOT NULL DEFAULT now())`,
     `CREATE INDEX IF NOT EXISTS idx_attach_entity ON attachment(entity_type, entity_id)`,
     `CREATE TABLE IF NOT EXISTS dealer_notification (id SERIAL PRIMARY KEY, customer_id TEXT NOT NULL, kind TEXT, body TEXT NOT NULL, ref TEXT, read BOOLEAN NOT NULL DEFAULT false, created_at TIMESTAMPTZ NOT NULL DEFAULT now())`,
+    // Web-push subscriptions: owner_type 'staff' (app_user id) or 'dealer' (customer_id).
+    `CREATE TABLE IF NOT EXISTS push_subscription (id SERIAL PRIMARY KEY, owner_type TEXT NOT NULL, owner_id TEXT NOT NULL, endpoint TEXT NOT NULL UNIQUE, sub_json TEXT NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT now())`,
+    `CREATE INDEX IF NOT EXISTS idx_push_owner ON push_subscription(owner_type, owner_id)`,
     `CREATE TABLE IF NOT EXISTS document (id SERIAL PRIMARY KEY, title TEXT NOT NULL, model_id TEXT, category TEXT, file_path TEXT NOT NULL, content_type TEXT, uploaded_by TEXT, created_at TIMESTAMPTZ NOT NULL DEFAULT now())`,
     // Dealership user roles (admin/sales/service/warranty); existing accounts default to admin to keep access.
     `ALTER TABLE dealer_user ADD COLUMN IF NOT EXISTS role TEXT NOT NULL DEFAULT 'admin'`,
