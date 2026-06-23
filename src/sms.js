@@ -43,6 +43,10 @@ export async function checkOptin(phone) {
 
 export function smsMode() { return process.env.SMS_MODE === 'twilio' ? 'twilio' : 'simulated'; }
 export function twilioConfigured() { return !!(process.env.TWILIO_SID && process.env.TWILIO_TOKEN && process.env.TWILIO_FROM); }
+// Master switch. SMS is paused ("coming soon") until the A2P campaign is approved and
+// SMS_ENABLED=true is set. While off, no texts are sent or logged — notifications go
+// through the in-app feed and web push instead.
+export function smsEnabled() { return process.env.SMS_ENABLED === 'true'; }
 
 async function deliver(to, body) {
   const sid = process.env.TWILIO_SID;
@@ -63,6 +67,8 @@ async function deliver(to, body) {
 }
 
 export async function send({ recipient, body, kind, ref }, userId) {
+  // Paused until SMS_ENABLED=true — short-circuit so nothing is sent or recorded.
+  if (!smsEnabled()) return { status: 'disabled', mode: 'off' };
   const mode = smsMode();
   let status = 'sent';
   if (mode === 'twilio') {

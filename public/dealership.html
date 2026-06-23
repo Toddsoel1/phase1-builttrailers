@@ -103,6 +103,7 @@ footer a{color:var(--accent)}
     <div id="paneNotif" class="card hidden">
       <h2>Updates</h2>
       <p class="lead">Order status changes, registration approvals, and claim resolutions appear here.</p>
+      <button class="btn" id="pushBtn" style="margin-bottom:12px" onclick="enablePush('/api/dealer/push/subscribe')">🔔 Enable phone alerts</button>
       <div id="notifBody"><p class="lead">Loading…</p></div>
     </div>
 
@@ -139,7 +140,6 @@ footer a{color:var(--accent)}
       <input id="rProof" type="file" accept="image/*,application/pdf">
       <div class="note">The warranty start date is the purchase date on this document. Built Trailers verifies it before the warranty is active.</div>
       <label style="margin-top:14px">Send the owner their maintenance schedule, warranty terms, and the app link by:</label>
-      <div class="chk"><input type="checkbox" id="rSms"><label for="rSms" style="margin:0;font-weight:500">Text</label></div>
       <div class="chk"><input type="checkbox" id="rEmailOpt" checked><label for="rEmailOpt" style="margin:0;font-weight:500">Email</label></div>
       <button class="btn" id="rBtn" onclick="registerTrailer()">Register Warranty</button>
       <div id="rMsg" class="msg"></div>
@@ -289,7 +289,7 @@ async function registerTrailer(){
   const btn=$('rBtn');btn.disabled=true;btn.textContent='Submitting…';
   try{
     let proof=null;const f=$('rProof').files[0]; if(f){if(f.size>10*1024*1024)throw new Error('Proof file must be under 10 MB.');proof=await readFile(f);}
-    const d=await api('/api/dealer/register',{method:'POST',body:JSON.stringify({vin,ownerName:owner,saleDate:sale,email,phone:$('rPhone').value.trim()||undefined,warrantyAddress:$('rAddr').value.trim()||undefined,smsOptIn:$('rSms').checked,emailOptIn:$('rEmailOpt').checked,proofOfSale:proof||undefined})});
+    const d=await api('/api/dealer/register',{method:'POST',body:JSON.stringify({vin,ownerName:owner,saleDate:sale,email,phone:$('rPhone').value.trim()||undefined,warrantyAddress:$('rAddr').value.trim()||undefined,smsOptIn:false,emailOptIn:$('rEmailOpt').checked,proofOfSale:proof||undefined})});
     setMsg('rMsg','ok','✓ Registration submitted for verification by Built Trailers.'+(d.within15===false?' <b>Note:</b> past the 15-day window.':''));
     $('rVin').value='';$('rOwner').value='';$('rSale').value='';$('rEmail').value='';$('rPhone').value='';$('rAddr').value='';$('rProof').value='';$('rLookup').textContent='';
   }catch(e){setMsg('rMsg','err',e.message);}
@@ -319,6 +319,24 @@ async function submitClaim(){
     const d=await api('/api/dealer/claim',{method:'POST',body:JSON.stringify({vin,issue,attachments})});
     setMsg('cMsg','ok','✓ Claim '+d.id+' submitted'+(d.attachments?' with '+d.attachments+' file(s)':'')+'.');$('cVin').value='';$('cIssue').value='';if($('cFiles'))$('cFiles').value='';loadClaims();
   }catch(e){setMsg('cMsg','err',e.message);}
+}
+
+// ---- Web push opt-in (dealer) ----
+if('serviceWorker' in navigator){ navigator.serviceWorker.register('/sw.js').catch(e=>console.warn('SW:',e)); }
+function urlB64ToUint8(b){const p='='.repeat((4-b.length%4)%4);const s=(b+p).replace(/-/g,'+').replace(/_/g,'/');const raw=atob(s);return Uint8Array.from([...raw].map(c=>c.charCodeAt(0)));}
+async function enablePush(subUrl){
+  const btn=document.getElementById('pushBtn');
+  try{
+    if(!('serviceWorker'in navigator)||!('PushManager'in window)){alert('Notifications aren\'t supported on this device/browser.');return;}
+    const vk=await (await fetch('/api/push/vapid')).json();
+    if(!vk.publicKey){alert('Push notifications aren\'t turned on by Built Trailers yet.');return;}
+    const reg=await navigator.serviceWorker.register('/sw.js'); await navigator.serviceWorker.ready;
+    const perm=await Notification.requestPermission();
+    if(perm!=='granted'){alert('Notifications are blocked. Enable them in your browser settings.');return;}
+    const sub=await reg.pushManager.subscribe({userVisibleOnly:true,applicationServerKey:urlB64ToUint8(vk.publicKey)});
+    await api(subUrl,{method:'POST',body:JSON.stringify(sub)});
+    if(btn){btn.textContent='🔔 Phone alerts on ✓';btn.disabled=true;}
+  }catch(e){alert(e.message||'Could not enable notifications');}
 }
 
 // auto-resume session

@@ -1,6 +1,7 @@
 import crypto from 'crypto';
 import { q, all, one } from './db.js';
 import * as sms from './sms.js';
+import { sendPush } from './push.js';
 
 function genToken() { return crypto.randomBytes(24).toString('hex'); }
 
@@ -24,6 +25,14 @@ async function notifyApprover(rule, refId, amount, desc, token) {
   await q(`INSERT INTO notification(channel,recipient,body,kind,ref,mode,status)
            VALUES ('app',$1,$2,'approval-request',$3,'app','sent')`,
     [rule.approver_id, body, refId]);
+  // Phone/desktop push to the approver, deep-linked to the token approve page (no-ops until VAPID set).
+  try {
+    await sendPush('staff', rule.approver_id, {
+      title: 'Approval needed',
+      body: `${desc} (${rule.type.toUpperCase()}${amount ? ', $' + Number(amount).toFixed(2) : ''})`,
+      url: `/approve/${token}`, tag: `approval-${refId}`,
+    });
+  } catch (e) { console.warn('approver push:', e.message); }
   if ((rule.notify === 'sms' || rule.notify === 'both') && rule.approver_phone && rule.approver_sms_consent) {
     await sms.send({ recipient: rule.approver_phone, body, kind: 'approval-request', ref: refId }, null);
   }

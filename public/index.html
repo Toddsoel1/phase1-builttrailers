@@ -99,7 +99,8 @@ a.lnk{color:var(--blue);cursor:pointer}
     <div class="brand"><h1>BUILT <span class="t">TRAILERS</span></h1><small>Phase 1 · live</small></div>
     <nav class="nav" id="nav"></nav>
     <div class="who"><div class="muted">Signed in as</div><b id="whoName"></b><span id="whoPill"></span>
-      <button class="btn sec sm" style="width:100%;margin-top:8px" onclick="logout()">Log out</button></div>
+      <button class="btn sec sm" id="pushBtn" style="width:100%;margin-top:8px" onclick="enablePush('/api/push/subscribe')">🔔 Enable notifications</button>
+      <button class="btn sec sm" style="width:100%;margin-top:6px" onclick="logout()">Log out</button></div>
   </aside>
   <main class="main">
     <div class="topbar"><div><h2 id="pTitle">Dashboard</h2><div class="sub" id="pSub"></div></div><div id="pActions"></div></div>
@@ -526,27 +527,15 @@ const HELP={
     <h4 style="color:var(--accent);margin:14px 0 6px">Scenario modeling</h4>
     <p>Adjust volume, price, or cost assumptions to see the impact on margin and cash. Use scenarios to answer "what if we took 10 more orders this month?" before committing.</p>`},
   notify:{title:'💬 Notifications',body:`
-    <p>Manages SMS notifications to customers and approval alerts to employees.</p>
-    <h4 style="color:var(--accent);margin:14px 0 6px">SMS mode</h4>
+    <p><strong>Text alerts are paused — coming soon.</strong> While carrier (A2P) registration is completed, no SMS is sent. Notifications are delivered two ways instead:</p>
     <ul>
-      <li><strong>Simulated</strong> — texts are logged but not sent (safe for testing)</li>
-      <li><strong>Live (Twilio)</strong> — real texts sent via +1 (435) 900-8198</li>
-    </ul>
-    <p>To switch to live: set <code>SMS_MODE=twilio</code> in server environment and add Twilio credentials.</p>
-    <h4 style="color:var(--accent);margin:14px 0 6px">Customer SMS notifications</h4>
-    <p>Customers are texted automatically when their order changes stage. Requirements:</p>
-    <ul>
-      <li>Customer must have a phone number saved in Customers &amp; Dealers</li>
-      <li>SMS consent must be recorded (customer texted START to the number, or admin recorded consent)</li>
-      <li>SMS mode must be set to Twilio (not simulated)</li>
+      <li><strong>In-app feed</strong> — staff see the Action Inbox on the dashboard; dealers see the 🔔 feed in their portal.</li>
+      <li><strong>Phone push</strong> — staff and dealers can tap <strong>Enable notifications</strong> to get native phone/desktop alerts (order status, approvals, warranty updates), even when the app is closed.</li>
     </ul>
     <h4 style="color:var(--accent);margin:14px 0 6px">Employee approval notifications</h4>
-    <p>When a PO or BOM change requires an employee's approval, they receive an in-app notification. If their phone and SMS consent is on file, they also get a text.</p>
-    <h4 style="color:var(--accent);margin:14px 0 6px">Customer opt-in / opt-out</h4>
-    <ul>
-      <li>Opt in: customer texts <strong>START</strong>, <strong>YES</strong>, <strong>IN</strong>, or <strong>ENROLL</strong> to +1 (435) 900-8198</li>
-      <li>Opt out: customer texts <strong>STOP</strong> — they are immediately removed from all messages</li>
-    </ul>`},
+    <p>When a PO or BOM change needs an employee's approval, they get an in-app notification — and a phone push if they've enabled it.</p>
+    <h4 style="color:var(--accent);margin:14px 0 6px">Turning SMS back on later</h4>
+    <p>Once the A2P campaign is approved, set <code>SMS_ENABLED=true</code> (with <code>SMS_MODE=twilio</code> and Twilio credentials) to restore text alerts. The opt-in page and consent flow come back automatically.</p>`},
   support:{title:'🆘 Support',body:`
     <p>In-app help desk. You're using it right now.</p>
     <h4 style="color:var(--accent);margin:14px 0 6px">Ticket types</h4>
@@ -2516,6 +2505,23 @@ if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => {
     navigator.serviceWorker.register('/sw.js').catch(e => console.warn('SW:', e));
   });
+}
+// ---- Web push opt-in (staff) ----
+function urlB64ToUint8(b){const p='='.repeat((4-b.length%4)%4);const s=(b+p).replace(/-/g,'+').replace(/_/g,'/');const raw=atob(s);return Uint8Array.from([...raw].map(c=>c.charCodeAt(0)));}
+async function enablePush(subUrl){
+  const btn=document.getElementById('pushBtn');
+  try{
+    if(!('serviceWorker'in navigator)||!('PushManager'in window)){toast('Notifications aren\'t supported on this device.');return;}
+    const vk=await (await fetch('/api/push/vapid')).json();
+    if(!vk.publicKey){toast('Push isn\'t configured on the server yet.');return;}
+    const reg=await navigator.serviceWorker.register('/sw.js'); await navigator.serviceWorker.ready;
+    const perm=await Notification.requestPermission();
+    if(perm!=='granted'){toast('Notifications are blocked in your browser.');return;}
+    const sub=await reg.pushManager.subscribe({userVisibleOnly:true,applicationServerKey:urlB64ToUint8(vk.publicKey)});
+    await api(subUrl,{method:'POST',body:JSON.stringify(sub)});
+    if(btn){btn.textContent='🔔 Notifications on ✓';btn.disabled=true;}
+    toast('🔔 Notifications enabled');
+  }catch(e){toast(e.message||'Could not enable notifications');}
 }
 </script>
 </body>

@@ -96,8 +96,7 @@ footer a{color:var(--accent)}
       <div class="note">The warranty start date is the purchase date shown on this document. Built Trailers verifies the date against your upload before the warranty is active.</div>
 
       <label style="margin-top:16px">Send me my required maintenance schedule, warranty terms &amp; conditions, and the app download link by:</label>
-      <div class="chk"><input type="checkbox" id="rSms"><label for="rSms" style="margin:0;font-weight:500">Text message</label></div>
-      <div class="chk"><input type="checkbox" id="rEmailOpt"><label for="rEmailOpt" style="margin:0;font-weight:500">Email</label></div>
+      <div class="chk"><input type="checkbox" id="rEmailOpt" checked><label for="rEmailOpt" style="margin:0;font-weight:500">Email</label></div>
 
       <button class="btn" id="rBtn" onclick="submitRegistration()">Register Warranty</button>
       <div id="rMsg" class="msg"></div>
@@ -203,7 +202,7 @@ async function submitRegistration(){
     if(f){ if(f.size>10*1024*1024) throw new Error('Proof file must be under 10 MB.'); proof=await readFile(f); }
     const d=await api('/api/public/register',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({
       vin,ownerName:owner,saleDate:sale,warrantyAddress:$('rAddress').value.trim()||undefined,email:email||undefined,phone:phone||undefined,
-      sellingDealer:$('rDealer').value.trim()||undefined,smsOptIn:$('rSms').checked,emailOptIn:$('rEmailOpt').checked,
+      sellingDealer:$('rDealer').value.trim()||undefined,smsOptIn:false,emailOptIn:$('rEmailOpt').checked,
       proofOfSale:proof||undefined,source:'portal'})});
     const w15=d.within15;
     setMsg('rMsg','ok','✓ Registration received and pending verification by Built Trailers.'+
