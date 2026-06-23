@@ -97,6 +97,14 @@ footer a{color:var(--accent)}
       <button id="tabTeam" onclick="showDash('team')">Team</button>
       <button id="tabNotif" onclick="showDash('notif')">🔔<span id="notifBadge"></span></button>
     </div>
+
+    <div id="pushNudge" class="card hidden" style="border-left:4px solid #ff7a18">
+      <div style="font-size:14px;line-height:1.45;margin-bottom:10px">🔔 <b>Turn on phone alerts</b> — get notified the moment an order changes status or a registration is approved, even when this site is closed.</div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn" onclick="enablePushFromNudge()">Enable</button>
+        <button class="btn ghost" onclick="dismissPushNudge()">Not now</button>
+      </div>
+    </div>
     <div id="paneInvoices" class="card hidden"><h2>Invoices &amp; balance</h2><div id="invBody"><p class="lead">Loading…</p></div></div>
     <div id="paneDocs" class="card hidden"><h2>Documents</h2><p class="lead">Owner's manuals, spec sheets, and warranty terms.</p><div id="docsBody"><p class="lead">Loading…</p></div></div>
     <div id="paneTeam" class="card hidden"><h2>Your team</h2><p class="lead">Everyone with a login under your dealership. Colleagues can create their own account at this portal — Built Trailers approves them under your dealership.</p><div id="teamBody"><p class="lead">Loading…</p></div></div>
@@ -252,7 +260,7 @@ function enterDash(){
   $('regDealer').textContent=DEALER.dealership||'(your dealership)';
   const allowed=ROLE_TABS[role]||ROLE_TABS.admin;
   for(const k of ['orders','reg','mine','claims','invoices','docs','team','notif']){const tb=$('tab'+k[0].toUpperCase()+k.slice(1));if(tb)tb.style.display=allowed.includes(k)?'':'none';}
-  showDash(allowed[0]);refreshNotifBadge();
+  showDash(allowed[0]);refreshNotifBadge();maybeShowPushNudge();
 }
 let _models=[];
 function orderStatus(s){const label=s==='Quote'?'Pending approval':s;return `<span class="badge ${s==='Ready / Shipped'?'b-ok':'b-pend'}">${label||''}</span>`;}
@@ -338,6 +346,17 @@ async function enablePush(subUrl){
     if(btn){btn.textContent='🔔 Phone alerts on ✓';btn.disabled=true;}
   }catch(e){alert(e.message||'Could not enable notifications');}
 }
+
+// ---- Dashboard nudge to turn on phone alerts ----
+function pushSupported(){return ('serviceWorker'in navigator)&&('PushManager'in window)&&('Notification'in window);}
+function maybeShowPushNudge(){
+  const n=$('pushNudge'); if(!n) return;
+  if(!pushSupported()||Notification.permission!=='default') return; // unsupported, or already granted/denied
+  if(localStorage.getItem('pushNudgeDismissed')==='1') return;
+  n.classList.remove('hidden');
+}
+function dismissPushNudge(){const n=$('pushNudge');if(n)n.classList.add('hidden');localStorage.setItem('pushNudgeDismissed','1');}
+async function enablePushFromNudge(){const n=$('pushNudge');if(n)n.classList.add('hidden');await enablePush('/api/dealer/push/subscribe');}
 
 // auto-resume session
 (async()=>{ if(DTOKEN){ try{ DEALER=await api('/api/dealer/me'); enterDash(); }catch(e){ logout(); } } })();
