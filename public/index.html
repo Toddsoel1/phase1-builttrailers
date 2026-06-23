@@ -1487,7 +1487,7 @@ async function viewAccounting(){
      </tr>`).join('')}
      </tbody></table>
    </div>`:''}
-   <div class="banner">${modeBadge} &nbsp; Invoices post automatically when an order ships; bills post when a PO is received. ${acct.mode==='simulated'?'Set <code>ACCOUNTING_MODE=quickbooks</code> + QBO credentials to push live.':acct.configured?'<button class="btn sec" style="margin-left:12px;padding:2px 10px;font-size:12px" onclick="qboReauth()">Re-authorize</button>':''}</div>
+   <div class="banner">${modeBadge} &nbsp; Invoices post automatically when an order ships; bills post when a PO is received. ${acct.mode==='simulated'?'Set <code>ACCOUNTING_MODE=quickbooks</code> + QBO credentials to push live.':'<span style="margin-left:12px;display:inline-flex;gap:6px;flex-wrap:wrap;vertical-align:middle"><button class="btn sec" style="padding:2px 10px;font-size:12px" onclick="qboTest()">Test connection</button><button class="btn sec" style="padding:2px 10px;font-size:12px" onclick="qboReauth()">'+(acct.configured?'Re-authorize':'Connect QuickBooks')+'</button>'+(acct.configured?'<button class="btn sec" style="padding:2px 10px;font-size:12px" onclick="qboDisconnect()">Disconnect</button>':'')+'</span>'}</div>
    <div class="grid g4" style="margin-bottom:16px">
      ${kpi('Invoices posted',t.invoices,money(t.invoiceAmt)+' billed to customers')}
      ${kpi('Bills posted',t.bills,money(t.billAmt)+' owed to vendors')}
@@ -2025,6 +2025,31 @@ async function loadQBOErrors(){
   }catch(e){el.innerHTML=`<p class="muted" style="color:var(--danger)">${e.message}</p>`;}
 }
 async function qboReauth(){ try{const r=await api('/api/auth/qbo');window.location.href=r.url;}catch(e){toast(e.message);} }
+async function qboTest(){
+  toast('Testing QuickBooks…');
+  try{
+    const r=await api('/api/qbo/test');
+    const steps=r.steps||[];
+    const label={refresh_token_available:'Refresh token available',token_refresh:'Exchange token with Intuit',company_info:'Read company info'};
+    const rows=steps.map(s=>{
+      const ok=s.ok?'<span style="color:#2e7d32;font-weight:700">✓</span>':'<span style="color:#c0392b;font-weight:700">✗</span>';
+      let detail='';
+      if(s.step==='refresh_token_available') detail=s.ok?('from '+esc(s.source||'')):'no token — click Connect QuickBooks';
+      else if(s.step==='token_refresh') detail=s.ok?'tokens received':('HTTP '+(s.status||'?')+' — '+esc(String(s.body||'').slice(0,180)));
+      else if(s.step==='company_info') detail=s.ok?('Company: <b>'+esc(String(s.body))+'</b>'):('HTTP '+(s.status||'?')+' — '+esc(String(s.body||'').slice(0,180)));
+      return '<tr><td style="padding:5px 8px;vertical-align:top">'+ok+'</td><td style="padding:5px 8px;white-space:nowrap;vertical-align:top">'+(label[s.step]||esc(s.step))+'</td><td style="padding:5px 8px;color:var(--muted);font-size:12px">'+detail+'</td></tr>';
+    }).join('');
+    const allOk=steps.length>0&&steps.every(s=>s.ok);
+    const head=allOk?'<p style="color:#2e7d32;font-weight:600;margin-bottom:10px">✓ Connected'+(r.realmId?' — realm '+esc(r.realmId)+' ('+esc(r.env||'')+')':'')+'</p>':'<p style="color:#c0392b;font-weight:600;margin-bottom:10px">✗ Not fully connected — see steps below</p>';
+    const tip=allOk?'':'<p class="muted" style="margin-top:10px;font-size:12px">If the token step failed, click <b>Re-authorize</b> to reconnect.</p>';
+    modal('QuickBooks connection test',head+'<table style="width:100%;border-collapse:collapse">'+rows+'</table>'+tip);
+  }catch(e){ toast(e.message); }
+}
+async function qboDisconnect(){
+  if(!confirm('Disconnect QuickBooks? This revokes the stored token — you\'ll need to Re-authorize to reconnect.'))return;
+  try{ await api('/api/auth/qbo/disconnect'); toast('QuickBooks disconnected'); viewAccounting(); }
+  catch(e){ toast(e.message); }
+}
 function qboReconnectBanner(msg){
   return `<div class="banner" style="background:rgba(239,68,68,.08);border-color:var(--danger);display:flex;align-items:center;gap:12px">
     <span style="color:var(--danger)">⚠ ${msg}</span>
