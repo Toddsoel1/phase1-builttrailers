@@ -139,7 +139,6 @@ footer a{color:var(--accent)}
       <input id="rProof" type="file" accept="image/*,application/pdf">
       <div class="note">The warranty start date is the purchase date on this document. Built Trailers verifies it before the warranty is active.</div>
       <label style="margin-top:14px">Send the owner their maintenance schedule, warranty terms, and the app link by:</label>
-      <div class="chk"><input type="checkbox" id="rSms"><label for="rSms" style="margin:0;font-weight:500">Text</label></div>
       <div class="chk"><input type="checkbox" id="rEmailOpt" checked><label for="rEmailOpt" style="margin:0;font-weight:500">Email</label></div>
       <button class="btn" id="rBtn" onclick="registerTrailer()">Register Warranty</button>
       <div id="rMsg" class="msg"></div>
@@ -289,7 +288,7 @@ async function registerTrailer(){
   const btn=$('rBtn');btn.disabled=true;btn.textContent='Submitting…';
   try{
     let proof=null;const f=$('rProof').files[0]; if(f){if(f.size>10*1024*1024)throw new Error('Proof file must be under 10 MB.');proof=await readFile(f);}
-    const d=await api('/api/dealer/register',{method:'POST',body:JSON.stringify({vin,ownerName:owner,saleDate:sale,email,phone:$('rPhone').value.trim()||undefined,warrantyAddress:$('rAddr').value.trim()||undefined,smsOptIn:$('rSms').checked,emailOptIn:$('rEmailOpt').checked,proofOfSale:proof||undefined})});
+    const d=await api('/api/dealer/register',{method:'POST',body:JSON.stringify({vin,ownerName:owner,saleDate:sale,email,phone:$('rPhone').value.trim()||undefined,warrantyAddress:$('rAddr').value.trim()||undefined,smsOptIn:false,emailOptIn:$('rEmailOpt').checked,proofOfSale:proof||undefined})});
     setMsg('rMsg','ok','✓ Registration submitted for verification by Built Trailers.'+(d.within15===false?' <b>Note:</b> past the 15-day window.':''));
     $('rVin').value='';$('rOwner').value='';$('rSale').value='';$('rEmail').value='';$('rPhone').value='';$('rAddr').value='';$('rProof').value='';$('rLookup').textContent='';
   }catch(e){setMsg('rMsg','err',e.message);}

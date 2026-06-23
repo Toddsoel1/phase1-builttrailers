@@ -154,6 +154,7 @@ app.post('/webhooks/sms', async (req, res) => {
 
 // ---- Public SMS opt-in via web form (unauthenticated) ----
 app.post('/api/sms/optin', async (req, res) => {
+  if (!sms.smsEnabled()) return res.status(503).json({ error: 'Text alerts are coming soon.' });
   const { phone, audience } = req.body || {};
   const normalized = sms.normalizePhone(phone);
   if (!normalized) return res.status(400).json({ error: 'Valid phone number required' });
@@ -175,7 +176,8 @@ app.get('/api/sms/optin-check', authMiddleware, async (req, res) => {
 });
 
 // ---- Serve public opt-in, privacy, and terms pages ----
-app.get('/optin',   (_req, res) => res.sendFile(path.join(__dir, '..', 'public', 'optin.html')));
+// /optin is offline while SMS is paused; re-enabling SMS_ENABLED brings the A2P opt-in page back.
+app.get('/optin',   (_req, res) => sms.smsEnabled() ? res.sendFile(path.join(__dir, '..', 'public', 'optin.html')) : res.redirect('/'));
 app.get('/privacy', (_req, res) => res.sendFile(path.join(__dir, '..', 'public', 'privacy.html')));
 app.get('/terms',   (_req, res) => res.sendFile(path.join(__dir, '..', 'public', 'terms.html')));
 
