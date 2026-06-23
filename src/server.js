@@ -18,7 +18,7 @@ import { modelRollup, modelsSummary, inventoryValuation, partUnitCost } from './
 import { STAGES, canSell, canReorderProduction, trailerTypes, customersWithTypes, allowedTypesFor, ordersFull, consumeInventory, setProductionOrder } from './orders.js';
 import { mrp, poList, createPO, receivePO } from './mrp.js';
 import { accountingMode, qboConfigured, ledger, totals, sync, scanInvoice, invoiceList } from './accounting.js';
-import { getAuthUrl, exchangeCode, syncCustomersFromQBO, syncItemsFromQBO, syncInvoicesFromQBO, previewItemsFromQBO, QBOAuthError, QBOFeatureError, qboErrorLog, getRefreshTokenInfo, disconnectQBO } from './qbo.js';
+import { getAuthUrl, exchangeCode, syncCustomersFromQBO, syncItemsFromQBO, syncInvoicesFromQBO, previewItemsFromQBO, QBOAuthError, QBOFeatureError, qboErrorLog, getRefreshTokenInfo, disconnectQBO, getRealmInfo } from './qbo.js';
 import * as people from './people.js';
 import { forecast, workingCapital, scenario } from './forecast.js';
 import * as sms from './sms.js';
@@ -331,16 +331,18 @@ app.get('/api/qbo/test', authMiddleware, requireTier('admin'), async (_req, res)
     if (!tokRes.ok) return res.json({ steps });
     const tok = JSON.parse(tokBody);
 
-    // Step 3: can we hit the company info endpoint?
+    // Step 3: can we hit the company info endpoint? Use the SAME realm the app uses
+    // (the one captured at OAuth, DB-first) so the diagnostic can't disagree with reality.
     const API_BASE = process.env.QBO_ENV === 'production' ? 'https://quickbooks.api.intuit.com' : 'https://sandbox-quickbooks.api.intuit.com';
-    const infoRes = await fetch(`${API_BASE}/v3/company/${process.env.QBO_REALM_ID}/companyinfo/${process.env.QBO_REALM_ID}?minorversion=73`, {
+    const { realmId: realm, source: realmSource } = await getRealmInfo();
+    const infoRes = await fetch(`${API_BASE}/v3/company/${realm}/companyinfo/${realm}?minorversion=73`, {
       headers: { Authorization: `Bearer ${tok.access_token}`, Accept: 'application/json' },
     });
     const infoBody = await infoRes.text();
     steps.push({ step: 'company_info', status: infoRes.status, ok: infoRes.ok,
       body: infoRes.ok ? JSON.parse(infoBody)?.CompanyInfo?.CompanyName : infoBody.slice(0, 400) });
 
-    res.json({ steps, env: process.env.QBO_ENV, realmId: process.env.QBO_REALM_ID });
+    res.json({ steps, env: process.env.QBO_ENV, realmId: realm, realmSource });
   } catch (e) {
     res.json({ steps, error: e.message });
   }
@@ -370,7 +372,7 @@ app.get('/api/auth/qbo/callback', async (req, res) => {
   const esc = s => String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   try {
     const redirect = `${req.protocol}://${req.get('host')}/api/auth/qbo/callback`;
-    const { refreshToken } = await exchangeCode(String(code), redirect, String(state || ''));
+    const { refreshToken } = await exchangeCode(String(code), redirect, String(state || ''), realmId);
     await audit(req, 'qbo.oauth', `realm ${realmId}`);
     res.send(`<!DOCTYPE html><html><head><title>QuickBooks Connected</title>
 <style>body{font-family:sans-serif;padding:2rem;max-width:740px}
