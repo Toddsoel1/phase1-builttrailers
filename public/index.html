@@ -50,7 +50,7 @@ td{padding:8px;border-bottom:1px solid var(--panel2)}tr:hover td{background:var(
 .btn{background:var(--accent);color:#1a1206;border:none;padding:8px 14px;border-radius:8px;font-weight:700;font-size:13px;cursor:pointer}.btn.sec{background:var(--panel2);color:var(--txt);border:1px solid var(--line)}.btn.sm{padding:4px 9px;font-size:12px}
 input,select{background:var(--panel2);color:var(--txt);border:1px solid var(--line);border-radius:7px;padding:8px;font-size:13px;font-family:inherit}
 .login{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:var(--bg);z-index:100;padding:20px}
-.login .box{max-width:840px;width:100%;display:grid;grid-template-columns:1fr 1fr;border:1px solid var(--line);border-radius:16px;overflow:hidden}
+.login .box{max-width:430px;width:100%;display:grid;grid-template-columns:1fr;border:1px solid var(--line);border-radius:16px;overflow:hidden}
 @media(max-width:760px){.login .box{grid-template-columns:1fr}}
 .login .l{padding:32px;background:var(--panel)}.login .r{padding:22px;background:var(--panel2);max-height:520px;overflow:auto}
 .login .field{margin-bottom:12px}.login label{display:block;font-size:12px;color:var(--muted);margin-bottom:4px}.login input{width:100%}
@@ -91,11 +91,6 @@ a.lnk{color:var(--blue);cursor:pointer}
       <div class="err" id="liErr"></div>
       <button class="btn" style="width:100%" onclick="login()">Sign in</button>
       <p style="color:var(--muted);font-size:11px;margin-top:12px">Secure auth: passwords are bcrypt-hashed in the database; sessions use JWT.</p>
-    </div>
-    <div class="r">
-      <h3 style="font-size:12px;color:var(--muted);text-transform:uppercase;margin-bottom:8px">Demo accounts (click to fill)</h3>
-      <div style="color:var(--muted);font-size:12px;margin-bottom:8px">Password for all: <b>built2026</b></div>
-      <table id="acctList"><tbody></tbody></table>
     </div>
   </div>
 </div>
@@ -144,15 +139,6 @@ const isAdmin = () => ME && ME.role==='admin';
 const canSell = () => ME && (ME.role==='admin' || ['Sales','Rep Specialist','General Manager'].includes(ME.title));
 
 // ---- login ----
-async function loadAccts(){
-  // public hint list (names only) — fetched after we know usernames via a tiny unauthenticated call is not available,
-  // so we show the known seed accounts statically for the demo.
-  const seed=[['tsoelberg','Todd Soelberg','General Manager','admin'],['mchen','Maria Chen','Shop Manager','admin'],
-   ['dolsen','Dave Olsen','Office Manager','admin'],['aruiz','Angela Ruiz','Sales','editor'],
-   ['creyes','Carlos Reyes','Boat Lead','editor'],['rmendez','Rosa Mendez','QC Specialist','editor'],
-   ['ilender','Investor / Lender','External Viewer','viewer']];
-  $('acctList').querySelector('tbody').innerHTML = seed.map(s=>`<tr style="cursor:pointer" onclick="document.getElementById('liUser').value='${s[0]}';document.getElementById('liPass').value='built2026'"><td><b>${s[0]}</b></td><td class="muted">${s[1]}</td><td><span class="pill ${s[3]}">${s[2]}</span></td></tr>`).join('');
-}
 async function login(){
   try{
     const d = await api('/api/auth/login',{method:'POST',body:JSON.stringify({username:$('liUser').value.trim(),password:$('liPass').value})});
@@ -2542,8 +2528,6 @@ async function adminDecision(id, status){
   toast('Ticket updated');
   viewSupport();
 }
-
-loadAccts();
 </script>
 <script>
 if ('serviceWorker' in navigator) {
