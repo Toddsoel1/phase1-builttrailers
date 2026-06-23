@@ -1320,6 +1320,8 @@ if (kind === 'postgres' || kind === 'pglite') {
     // Margin intelligence captured from the buyer's order at verification — Built Trailers staff only.
     `ALTER TABLE warranty_registration ADD COLUMN IF NOT EXISTS sale_price NUMERIC(12,2)`,
     `ALTER TABLE warranty_registration ADD COLUMN IF NOT EXISTS accessories TEXT`,
+    // Sale date read off the uploaded buyer's order by OCR; used to auto-confirm the registration date.
+    `ALTER TABLE warranty_registration ADD COLUMN IF NOT EXISTS ocr_sale_date DATE`,
   ];
   // Migrate existing app_user.title into user_title junction (idempotent)
   await q(`INSERT INTO user_title(user_id,role_name)
