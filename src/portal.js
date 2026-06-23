@@ -3,14 +3,12 @@
 // submit warranty claims, and log maintenance — all keyed by VIN. Submissions land
 // as "pending" for internal staff to verify against the uploaded proof of sale.
 import { all, one, q } from './db.js';
-import { writeFile, mkdir } from 'fs/promises';
-import path from 'path';
 import { notifyDealer } from './dealernotify.js';
 import { sendWarrantyWelcome } from './email.js';
 import { extractBuyersOrder } from './ocr.js';
+import { putDataUrl } from './storage.js';
 
 const REG_WINDOW_DAYS = 15;       // dealer must register within 15 days of sale
-const UPLOAD_DIR = process.env.UPLOAD_DIR || './uploads';
 const MAX_UPLOAD = 10 * 1024 * 1024;
 
 // Minimal public lookup: confirm a VIN exists and whether it's already registered.
@@ -28,17 +26,10 @@ function within15(saleDate) {
   return days >= 0 && days <= REG_WINDOW_DAYS;
 }
 
-// Decode a base64 data URL and save it; returns the stored path (or null).
-async function saveUpload(trailerId, dataUrl) {
-  const m = /^data:([^;]+);base64,(.+)$/s.exec(dataUrl || '');
-  if (!m) return null;
-  const buf = Buffer.from(m[2], 'base64');
-  if (buf.length > MAX_UPLOAD) throw new Error('Proof-of-sale file is too large (max 10 MB).');
-  const ext = (m[1].split('/')[1] || 'bin').replace(/[^a-z0-9]/gi, '').slice(0, 5);
-  await mkdir(UPLOAD_DIR, { recursive: true });
-  const name = `${trailerId}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}.${ext}`;
-  await writeFile(path.join(UPLOAD_DIR, name), buf);
-  return `${UPLOAD_DIR}/${name}`;
+// Decode a base64 data URL and store it (R2 in prod, local disk in dev) — returns the
+// opaque storage ref saved in the DB, or null when there's no data URL to store.
+async function saveUpload(prefix, dataUrl) {
+  return putDataUrl(prefix, dataUrl, { maxBytes: MAX_UPLOAD, tooLargeMsg: 'Proof-of-sale file is too large (max 10 MB).' });
 }
 
 // Save a list of attachments (photos / video / receipts) against a claim or
