@@ -792,27 +792,35 @@ async function showBom(id){
     ${kpi('Margin',(m.margin*100).toFixed(1)+'%',money(m.marginDollars)+' on '+money(m.price))}
    </div>
    <div class="card"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px"><h3 style="margin:0">${esc(m.name)} — Bill of Materials</h3>${isAdmin()?`<button class="btn sm" onclick="addBomLine('${id}')">+ Propose Part</button>`:''}</div>
-   <table><thead><tr><th>Part</th><th class="right">Qty</th><th class="right">Unit cost</th><th class="right">Ext.</th>${isAdmin()?'<th></th>':''}</tr></thead><tbody>
+   <table><thead><tr><th>Part</th><th>Stage</th><th class="right">Qty</th><th class="right">Unit cost</th><th class="right">Ext.</th>${isAdmin()?'<th></th>':''}</tr></thead><tbody>
    ${m.bom.map(b=>`<tr>
      <td>${esc(b.name)}${b.type==='M'?' <span class="badge b-mfg">MAKE</span>':''}</td>
+     <td><select onchange="setBomStage('${id}','${b.partId||b.id}',this.value)" ${isAdmin()?'':'disabled'} style="font-size:12px;padding:2px 4px">${stageOpts(b.stage)}</select></td>
      <td class="right"><input type="number" value="${b.qty}" min="0.01" step="0.01" style="width:70px;text-align:right" onchange="saveBomQty('${id}','${b.partId||b.id}',${JSON.stringify(b.name)},${b.qty},this.value,this)" ${isAdmin()?'':'disabled'}></td>
      <td class="right">${money2(b.unitCost)}</td>
      <td class="right">${money2(b.ext)}</td>
      ${isAdmin()?`<td><button class="btn" style="padding:2px 8px;font-size:11px;background:var(--danger,#c0392b)" title="Propose removal" onclick="delBomLine('${id}','${b.partId||b.id}',${JSON.stringify(b.name)})">✕</button></td>`:''}
    </tr>`).join('')}
-   <tr><td colspan="${isAdmin()?4:3}" class="right"><b>Material</b></td><td class="right"><b>${money2(m.material)}</b></td></tr>
+   <tr><td colspan="${isAdmin()?5:4}" class="right"><b>Material</b></td><td class="right"><b>${money2(m.material)}</b></td></tr>
    </tbody></table></div>
    <div class="card" style="margin-top:14px"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px"><h3 style="margin:0">Labor routing</h3>${isAdmin()?`<button class="btn sm" onclick="addLaborStep('${id}')">+ Propose Step</button>`:''}</div>
-   <table><thead><tr><th>Workstation</th><th class="right">Hours</th><th class="right">$/hr</th><th class="right">Ext.</th>${isAdmin()?'<th></th>':''}</tr></thead><tbody>
+   <table><thead><tr><th>Workstation</th><th>Stage</th><th class="right">Hours</th><th class="right">$/hr</th><th class="right">Ext.</th>${isAdmin()?'<th></th>':''}</tr></thead><tbody>
    ${m.labor.map(l=>`<tr>
      <td>${esc(l.ws)}</td>
+     <td><select onchange="setLaborStage('${id}','${encodeURIComponent(l.ws)}',this.value)" ${isAdmin()?'':'disabled'} style="font-size:12px;padding:2px 4px">${stageOpts(l.stage)}</select></td>
      <td class="right"><input type="number" value="${l.hours}" min="0.01" step="0.01" style="width:70px;text-align:right" onchange="saveLaborChange('${id}','${encodeURIComponent(l.ws)}',${l.hours},${l.rate},this.value,${l.rate},this)" ${isAdmin()?'':'disabled'}></td>
      <td class="right"><input type="number" value="${l.rate}" min="1" step="1" style="width:70px;text-align:right" onchange="saveLaborChange('${id}','${encodeURIComponent(l.ws)}',${l.hours},${l.rate},${l.hours},this.value,this)" ${isAdmin()?'':'disabled'}></td>
      <td class="right">${money2(l.ext)}</td>
      ${isAdmin()?`<td><button class="btn" style="padding:2px 8px;font-size:11px;background:var(--danger,#c0392b)" title="Propose removal" onclick="delLaborStep('${id}','${encodeURIComponent(l.ws)}',${JSON.stringify(l.ws)})">✕</button></td>`:''}
    </tr>`).join('')}
-   <tr><td colspan="${isAdmin()?4:3}" class="right"><b>Labor</b></td><td class="right"><b>${money2(m.laborCost)}</b></td></tr>
+   <tr><td colspan="${isAdmin()?5:4}" class="right"><b>Labor</b></td><td class="right"><b>${money2(m.laborCost)}</b></td></tr>
    </tbody></table></div>
+   <div class="card" style="margin-top:14px"><h3 style="margin:0 0 10px">Cost by build stage</h3>
+   <table><thead><tr><th>Stage</th><th class="right">Material</th><th class="right">Labor hrs</th><th class="right">Labor $</th><th class="right">Stage total</th></tr></thead><tbody>
+   ${['Build','Paint/Powder Coat','Finish'].map(s=>{const v=(m.byStage&&m.byStage[s])||{material:0,laborHrs:0,laborCost:0,total:0};return `<tr><td>${esc(s)}</td><td class="right">${money2(v.material)}</td><td class="right">${(+v.laborHrs||0).toFixed(1)}</td><td class="right">${money2(v.laborCost)}</td><td class="right"><b>${money2(v.total)}</b></td></tr>`;}).join('')}
+   <tr><td class="right"><b>Total</b></td><td class="right"><b>${money2(m.material)}</b></td><td class="right"><b>${(+m.laborHrs||0).toFixed(1)}</b></td><td class="right"><b>${money2(m.laborCost)}</b></td><td class="right"><b>${money2(m.totalCost)}</b></td></tr>
+   </tbody></table>
+   <p class="muted" style="font-size:11px;margin-top:8px">Per-stage cost basis for work-in-process valuation — as a trailer moves Build → Paint/Powder Coat → Finish, each stage's material + labor accrues into inventory value.</p></div>
    ${pendingSec}
    <div id="bomPartOpts" style="display:none">${partOpts}</div>`;
 }
@@ -836,6 +844,17 @@ async function rejectBomCR(id){
   const note=prompt('Reason for rejection (optional):');if(note===null)return;
   try{await api('/api/bom-change-requests/'+id+'/reject',{method:'POST',body:JSON.stringify({note:note||''})});toast('Change rejected');if(page==='boms')showBom(_currentBomId);else viewAccounting();}
   catch(e){toast(e.message);}
+}
+const STAGE_OPTS=['Build','Paint/Powder Coat','Finish'];
+function stageOpts(sel){const s=STAGE_OPTS.includes(sel)?sel:'Build';return STAGE_OPTS.map(o=>`<option value="${esc(o)}" ${o===s?'selected':''}>${esc(o)}</option>`).join('');}
+// Stage-tagging is a direct admin edit (operational — controls when cost accrues, not the amount).
+async function setBomStage(modelId,partId,stage){
+  try{ await api('/api/models/'+modelId+'/bom/'+encodeURIComponent(partId)+'/stage',{method:'PATCH',body:JSON.stringify({stage})}); toast('Stage updated'); showBom(modelId); }
+  catch(e){ toast(e.message); }
+}
+async function setLaborStage(modelId,wsEnc,stage){
+  try{ await api('/api/models/'+modelId+'/labor/'+wsEnc+'/stage',{method:'PATCH',body:JSON.stringify({stage})}); toast('Stage updated'); showBom(modelId); }
+  catch(e){ toast(e.message); }
 }
 async function saveBomQty(modelId,partId,partName,oldQty,newQty,el){
   const m=_bomModels.find(x=>x.id===modelId);

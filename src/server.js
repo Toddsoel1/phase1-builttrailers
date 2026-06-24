@@ -597,6 +597,21 @@ app.delete('/api/models/:id/labor/:ws', authMiddleware, requireTier('admin'), as
   await audit(req, 'labor.delete', `${req.params.id} ${req.params.ws}`);
   res.json({ ok: true });
 });
+// Stage-tag a BOM line or labor step. This is operational (it controls WHEN cost accrues,
+// not the amount) so it's a direct admin edit, not part of the cost-change approval flow.
+const BOM_STAGES = ['Build', 'Paint/Powder Coat', 'Finish'];
+app.patch('/api/models/:id/bom/:partId/stage', authMiddleware, requireTier('admin'), async (req, res) => {
+  if (!BOM_STAGES.includes(req.body?.stage)) return res.status(400).json({ error: 'invalid stage' });
+  await q('UPDATE bom_line SET stage=$1 WHERE model_id=$2 AND part_id=$3', [req.body.stage, req.params.id, req.params.partId]);
+  await audit(req, 'bom.stage', `${req.params.id} ${req.params.partId} → ${req.body.stage}`);
+  res.json({ ok: true });
+});
+app.patch('/api/models/:id/labor/:ws/stage', authMiddleware, requireTier('admin'), async (req, res) => {
+  if (!BOM_STAGES.includes(req.body?.stage)) return res.status(400).json({ error: 'invalid stage' });
+  await q('UPDATE model_labor SET stage=$1 WHERE model_id=$2 AND ws=$3', [req.body.stage, req.params.id, req.params.ws]);
+  await audit(req, 'labor.stage', `${req.params.id} ${req.params.ws} → ${req.body.stage}`);
+  res.json({ ok: true });
+});
 // ---- BOM change requests (accounting approval workflow) ----
 app.post('/api/bom-change-requests', authMiddleware, requireTier('editor'), async (req, res) => {
   const { modelId, modelName, op, payload } = req.body || {};
@@ -1441,6 +1456,10 @@ if (kind === 'postgres' || kind === 'pglite') {
     // Orders imported from QuickBooks are already invoiced there — mark them billed so they
     // drop off the Build board and can never re-post a duplicate invoice.
     `UPDATE sales_order SET billed=true WHERE channel='QuickBooks' AND billed=false`,
+    // BOM stage-tagging: each material line and labor step is assigned a build stage
+    // (Build / Paint/Powder Coat / Finish) — drives when cost accrues in WIP (phase 4).
+    `ALTER TABLE bom_line    ADD COLUMN IF NOT EXISTS stage TEXT NOT NULL DEFAULT 'Build'`,
+    `ALTER TABLE model_labor ADD COLUMN IF NOT EXISTS stage TEXT NOT NULL DEFAULT 'Build'`,
     // Align terminology: the two account kinds are now "Dealership" and "Customer".
     `UPDATE customer SET kind='Customer' WHERE kind='Retail'`,
   ];
