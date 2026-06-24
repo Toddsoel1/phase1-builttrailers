@@ -15,7 +15,9 @@ export function qboConfigured() { return qboReady(); }
 async function record(kind, ref, party, amount, userId, lines) {
   const mode = accountingMode();
   let status = 'posted', external = null;
-  if (mode === 'quickbooks') {
+  // Only invoices and bills push to QuickBooks. COGS is recorded to the local ledger for now
+  // (a QB journal / inventory posting can layer on later without changing callers).
+  if (mode === 'quickbooks' && (kind === 'invoice' || kind === 'bill')) {
     try {
       if (!qboReady()) throw new Error('QBO not configured');
       external = (kind === 'invoice')
@@ -41,6 +43,8 @@ async function record(kind, ref, party, amount, userId, lines) {
 
 export const postInvoice = (ref, party, amount, userId, lines) => record('invoice', ref, party, amount, userId, lines);
 export const postBill = (ref, party, amount, userId) => record('bill', ref, party, amount, userId);
+// Cost of goods sold — the WIP cost relieved into COGS when an order is invoiced.
+export const postCOGS = (ref, amount, userId) => record('cogs', ref, 'COGS', amount, userId);
 
 export async function ledger() {
   return (await all('SELECT * FROM accounting_event ORDER BY id DESC LIMIT 200', []))

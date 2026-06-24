@@ -153,7 +153,7 @@ function logout(){TOKEN=null;ME=null;$('app').classList.add('hidden');$('login')
 $('liPass').addEventListener('keydown',e=>{if(e.key==='Enter')login();});
 
 // ---- nav/render ----
-const NAV=[['dashboard','📊 Dashboard'],['orders','🔨 Build'],['neworder','➕ New Order'],['customers','🏬 Customers & Dealers'],['parts','📦 Parts Master'],['predict','🤖 Predictive Ordering'],['pos','🧾 Purchase Orders'],['boms','🧩 BOMs & Cost'],['inventory','📈 Inventory Value'],['accounting','💵 Accounting'],['trailers','🚛 Trailers & Warranty'],['team','👷 Team & Payroll'],['timeoff','📅 Schedule & Time Off'],['outcomes','🎯 Goals & Outcomes'],['wins','🎉 Wins'],['forecast','🔮 Forecasting & Planning'],['notify','💬 Notifications'],['support','🆘 Support'],['users','👤 Users & Roles']];
+const NAV=[['dashboard','📊 Dashboard'],['orders','🔨 Build'],['daily','📋 Daily Update'],['neworder','➕ New Order'],['customers','🏬 Customers & Dealers'],['parts','📦 Parts Master'],['predict','🤖 Predictive Ordering'],['pos','🧾 Purchase Orders'],['boms','🧩 BOMs & Cost'],['inventory','📈 Inventory Value'],['accounting','💵 Accounting'],['trailers','🚛 Trailers & Warranty'],['team','👷 Team & Payroll'],['timeoff','📅 Schedule & Time Off'],['outcomes','🎯 Goals & Outcomes'],['wins','🎉 Wins'],['forecast','🔮 Forecasting & Planning'],['notify','💬 Notifications'],['support','🆘 Support'],['users','👤 Users & Roles']];
 function canSee(section){
   if(isAdmin()) return true;
   if(!ME.sections) return true; // null = all sections (admin)
@@ -172,7 +172,7 @@ function renderNav(){
 function go(p){page=p;render();}
 async function render(){
   renderNav();
-  const map={dashboard:viewDash,orders:viewOrders,neworder:viewNewOrder,customers:viewCustomers,parts:viewParts,predict:viewPredict,pos:viewPOs,boms:viewBoms,inventory:viewInv,accounting:viewAccounting,trailers:viewTrailers,team:viewTeam,timeoff:viewTimeoff,outcomes:viewOutcomes,wins:viewWins,forecast:viewForecast,notify:viewNotify,support:viewSupport,users:viewUsers};
+  const map={dashboard:viewDash,orders:viewOrders,daily:viewDaily,neworder:viewNewOrder,customers:viewCustomers,parts:viewParts,predict:viewPredict,pos:viewPOs,boms:viewBoms,inventory:viewInv,accounting:viewAccounting,trailers:viewTrailers,team:viewTeam,timeoff:viewTimeoff,outcomes:viewOutcomes,wins:viewWins,forecast:viewForecast,notify:viewNotify,support:viewSupport,users:viewUsers};
   try{
     await (map[page]||viewDash)();
     const pa=$('pActions');
@@ -185,6 +185,14 @@ function kpi(t,v,s){return `<div class="card kpi"><h3>${t}</h3><div class="v">${
 
 // ── In-app Help System ──────────────────────────────────────────────────────
 const HELP={
+  daily:{title:'📋 Daily Update',body:`
+    <p>Where the shop floor logs what got done each day — <strong>by user and workstation</strong>. This is what keeps inventory and WIP value accurate.</p>
+    <h4 style="color:var(--accent);margin:14px 0 6px">How it works</h4>
+    <ul>
+      <li>Pick the <strong>trailer</strong>, your <strong>workstation</strong>, the <strong>stage</strong>, and the <strong>hours</strong> you worked.</li>
+      <li>Tick <strong>"completes the stage"</strong> when a stage is finished — the app consumes that stage's tagged materials, capitalizes them (plus standard labor) into the trailer's <strong>WIP value</strong>, and advances the trailer to the next stage.</li>
+      <li>The <strong>daily summary</strong> shows hours and material consumed per workstation. <strong>Inventory Value</strong> shows live raw / WIP / finished totals.</li>
+    </ul>`},
   dashboard:{title:'📊 Dashboard',body:`
     <p>Your daily command center. Everything here is <strong>read-only</strong> — it's a live snapshot of the business right now.</p>
     <h4 style="color:var(--accent);margin:14px 0 6px">What you're looking at</h4>
@@ -922,21 +930,81 @@ async function saveNewLaborStep(modelId){
 }
 
 async function viewInv(){
-  $('pTitle').textContent='Inventory Value';$('pSub').textContent='Live valuation of all parts on hand';$('pActions').innerHTML='';
-  const [inv,parts]=await Promise.all([api('/api/inventory/summary'),api('/api/parts')]);
+  $('pTitle').textContent='Inventory Value';$('pSub').textContent='Live valuation across raw stock, WIP and finished goods';$('pActions').innerHTML='';
+  const [inv,parts,wip]=await Promise.all([api('/api/inventory/summary'),api('/api/parts'),api('/api/wip').catch(()=>[])]);
   const top=parts.slice().sort((a,b)=>b.extValue-a.extValue).slice(0,15);
   $('content').innerHTML=`<div class="grid g4">
-    ${kpi('Total inventory value',money(inv.totalValue),'at current unit costs')}
-    ${kpi('SKUs',inv.skuCount,inv.purchased+' buy / '+inv.manufactured+' make')}
+    ${kpi('Total inventory value',money(inv.totalValue),'raw + WIP + finished')}
+    ${kpi('Raw materials',money(inv.rawPurchased),'purchased parts on hand')}
+    ${kpi('Make parts',money(inv.makeParts),'manufactured stock on hand')}
+    ${kpi('Work in process',money(inv.wipValue),'in production')}
+   </div>
+   <div class="grid g4" style="margin-top:8px">
+    ${kpi('Finished, not invoiced',money(inv.finishedValue),'Ready to bill')}
+    ${kpi('On-hand stock',money(inv.onHandValue),inv.skuCount+' SKUs')}
     ${kpi('Below reorder',inv.belowReorder,'need replenishment')}
     ${kpi('Make vs buy',inv.manufactured+' / '+inv.purchased,'manufactured / purchased')}
    </div>
+   ${wip&&wip.length?`<div class="card" style="margin-top:16px"><h3>Work in process &amp; finished goods — value by trailer</h3>
+   <p class="muted" style="font-size:12px;margin:-4px 0 10px">Material consumed at each completed stage (actual cost) + standard labor for those stages. Updates as workstations log daily progress.</p>
+   <table><thead><tr><th>Order</th><th>Model</th><th>Customer</th><th class="center">Stage</th><th>Stages done</th><th class="right">Value in WIP</th></tr></thead><tbody>
+   ${wip.map(o=>`<tr><td><b>${esc(o.id)}</b></td><td>${esc(o.model||'')}</td><td class="muted">${esc(o.customer||'')}</td><td class="center">${stageBadge(o.stage)}</td><td class="muted" style="font-size:12px">${(o.doneStages||[]).join(', ')||'—'}</td><td class="right"><b>${money(o.wip)}</b></td></tr>`).join('')}
+   <tr><td colspan="5" class="right"><b>Total in WIP + finished</b></td><td class="right"><b>${money(inv.wipValue+inv.finishedValue)}</b></td></tr>
+   </tbody></table></div>`:''}
    <div class="card" style="margin-top:16px"><h3>Top 15 parts by value on hand</h3>
    <table><thead><tr><th>Part</th><th class="right">On hand</th><th class="right">Unit cost</th><th class="right">Ext. value</th></tr></thead><tbody>
    ${top.map(p=>`<tr><td><b>${esc(p.id)}</b> ${esc(p.name)}</td><td class="right">${p.onHand}</td><td class="right">${money2(p.cost)}</td><td class="right">${money(p.extValue)}</td></tr>`).join('')}
    </tbody></table></div>`;
 }
 
+async function viewDaily(){
+  $('pTitle').textContent='Daily Update';$('pSub').textContent='Log production by user & workstation — drives material consumption and WIP value';$('pActions').innerHTML='';
+  const dateSel=window._dailyDate||new Date().toISOString().slice(0,10);
+  const [wsList,ordResp,report,wip]=await Promise.all([
+    api('/api/workstations').catch(()=>[]),
+    api('/api/orders'),
+    api('/api/work-log/daily?date='+dateSel).catch(()=>({logs:[],byWorkstation:[],totalHours:0,totalMaterial:0,date:dateSel})),
+    api('/api/wip').catch(()=>[])
+  ]);
+  const STG=['Build','Paint/Powder Coat','Finish'];
+  const live=ordResp.orders.filter(o=>!o.billed && !['Quote','Ready'].includes(o.stage)); // trailers available to log against
+  const form=`<div class="card" style="margin-bottom:16px"><h3 style="margin:0 0 10px">＋ Log today's work</h3>
+    <div class="row">
+      <div class="field"><label>Trailer / order</label><select id="wlOrder">${live.length?live.map(o=>`<option value="${esc(o.id)}">${esc(o.id)} — ${esc(o.model||'')} (${esc(o.stage)})</option>`).join(''):'<option value="">No trailers in production</option>'}</select></div>
+      <div class="field"><label>Workstation</label><select id="wlWs">${wsList.map(w=>`<option value="${esc(w)}">${esc(w)}</option>`).join('')||'<option value="">—</option>'}</select></div>
+    </div>
+    <div class="row">
+      <div class="field"><label>Stage</label><select id="wlStage">${STG.map(s=>`<option value="${esc(s)}">${esc(s)}</option>`).join('')}</select></div>
+      <div class="field"><label>Hours worked</label><input id="wlHours" class="inp" type="number" min="0" step="0.25" placeholder="0"></div>
+    </div>
+    <div class="field"><label>Note (optional)</label><input id="wlNote" class="inp" placeholder="what got done"></div>
+    <label style="display:flex;align-items:center;gap:8px;margin:8px 0;font-size:14px;cursor:pointer"><input type="checkbox" id="wlComplete"> <span><b>This completes the stage for this trailer</b> — consumes its materials &amp; moves it forward</span></label>
+    <button class="btn" onclick="saveWorkLog()">Log update</button>
+  </div>`;
+  const dateBar=`<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;flex-wrap:wrap"><b>Daily summary</b> <input type="date" class="inp" style="width:auto" value="${dateSel}" onchange="window._dailyDate=this.value;viewDaily()"> <span class="muted">${(+(report.totalHours||0)).toFixed(1)} hrs · ${money(report.totalMaterial||0)} materials consumed</span></div>`;
+  const wsTable=(report.byWorkstation||[]).length?`<table><thead><tr><th>Workstation</th><th class="right">Hours</th><th class="right">Trailers</th><th class="center">Stages done</th><th class="right">Material consumed</th></tr></thead><tbody>
+    ${report.byWorkstation.map(w=>`<tr><td><b>${esc(w.workstation)}</b></td><td class="right">${(+w.hours).toFixed(1)}</td><td class="right">${w.orders}</td><td class="center">${w.stagesCompleted||0}</td><td class="right">${money(w.material)}</td></tr>`).join('')}
+    </tbody></table>`:'<p class="muted">No updates logged for this day yet.</p>';
+  const lines=(report.logs||[]).length?`<div class="card" style="margin-top:16px"><h3>What got done — ${esc(report.date)}</h3>
+    <table><thead><tr><th>User</th><th>Workstation</th><th>Trailer</th><th>Stage</th><th class="right">Hrs</th><th>Note</th></tr></thead><tbody>
+    ${report.logs.map(l=>`<tr><td>${esc(l.user_name||'—')}</td><td>${esc(l.workstation||'—')}</td><td><b>${esc(l.order_id||'')}</b> <span class="muted">${esc(l.model||'')}</span></td><td>${esc(l.stage||'')}${l.stage_complete?' <span class="badge b-low">✓ complete</span>':''}</td><td class="right">${(+l.hours).toFixed(1)}</td><td class="muted" style="font-size:12px">${esc(l.note||'')}</td></tr>`).join('')}
+    </tbody></table></div>`:'';
+  const wipSec=(wip||[]).length?`<div class="card" style="margin-top:16px"><h3>Open trailers — value in process</h3>
+    <table><thead><tr><th>Order</th><th>Model</th><th class="center">Stage</th><th>Stages done</th><th class="right">WIP value</th></tr></thead><tbody>
+    ${wip.map(o=>`<tr><td><b>${esc(o.id)}</b></td><td>${esc(o.model||'')}</td><td class="center">${stageBadge(o.stage)}</td><td class="muted" style="font-size:12px">${(o.doneStages||[]).join(', ')||'—'}</td><td class="right"><b>${money(o.wip)}</b></td></tr>`).join('')}
+    </tbody></table></div>`:'';
+  $('content').innerHTML=form+`<div class="card">${dateBar}${wsTable}</div>`+lines+wipSec;
+}
+async function saveWorkLog(){
+  const orderId=$('wlOrder').value; if(!orderId)return toast('No trailer selected');
+  const body={orderId,workstation:$('wlWs').value||undefined,stage:$('wlStage').value,hours:Number($('wlHours').value)||0,note:($('wlNote').value||'').trim()||undefined,stageComplete:$('wlComplete').checked};
+  try{
+    const r=await api('/api/work-log',{method:'POST',body:JSON.stringify(body)});
+    if(r.consumed&&r.consumed.consumed) toast(`${r.stage} complete — $${Math.round(r.consumed.materialValue)} materials consumed`+(r.advanced?`, moved to ${r.advanced}`:''));
+    else toast('Update logged');
+    viewDaily();
+  }catch(e){ toast(e.message); }
+}
 async function viewUsers(){
   $('pTitle').textContent='Users & Roles';$('pSub').textContent='Accounts, permission tiers and reporting hierarchy';
   if(isAdmin()) $('pActions').innerHTML=`<button class="btn" onclick="addUserModal()">+ Add User</button>`;
