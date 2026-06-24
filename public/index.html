@@ -642,7 +642,7 @@ async function viewDash(){
 
 async function viewParts(){
   $('pTitle').textContent='Parts Master';$('pSub').textContent='Live parts, costs and on-hand — '+(canEdit()?'click a cost to edit':'read-only');
-  $('pActions').innerHTML=canEdit()?`<button class="btn" onclick="previewQBItems()">⬇ Import from QuickBooks</button>`:'';
+  $('pActions').innerHTML=canEdit()?`<button class="btn" onclick="addMakePart()">➕ Add Make Part</button> <button class="btn sec" onclick="previewQBItems()">⬇ Import from QuickBooks</button>`:'';
   const allParts=await api('/api/parts');
   const parts=allParts.filter(p=>p.active!==false);
   const inactive=allParts.filter(p=>p.active===false).sort((a,b)=>String(a.name||a.id).toLowerCase().localeCompare(String(b.name||b.id).toLowerCase()));
@@ -672,6 +672,31 @@ async function viewParts(){
 }
 async function inactivatePart(id){ try{await api('/api/parts/'+id,{method:'PATCH',body:JSON.stringify({active:false})});toast('Part inactivated');viewParts();}catch(e){toast(e.message);} }
 async function reactivatePart(){ const sel=$('reactivateSel'); const id=sel?sel.value:''; if(!id)return; try{await api('/api/parts/'+id,{method:'PATCH',body:JSON.stringify({active:true})});toast('Part reactivated');viewParts();}catch(e){toast(e.message);} }
+function addMakePart(){
+  modal('Add Make Part',`
+    <p class="muted" style="font-size:12px;margin-bottom:12px">Make parts are produced in-house from raw materials + labor. They live in this app only — <b>never</b> pushed to QuickBooks — and you set their cost here.</p>
+    <div class="field"><label>Part name *</label><input id="mpName" class="inp" placeholder="e.g. Welded Frame Assembly — 7x14"></div>
+    <div class="row">
+      <div class="field"><label>Cost ($) *</label><input id="mpCost" class="inp" type="number" min="0" step="0.01" placeholder="0.00"></div>
+      <div class="field"><label>Unit of measure</label><input id="mpUom" class="inp" placeholder="ea"></div>
+    </div>
+    <div class="row">
+      <div class="field"><label>SKU / code (optional)</label><input id="mpId" class="inp" placeholder="auto: MK-…"></div>
+      <div class="field"><label>Reorder point</label><input id="mpReorder" class="inp" type="number" min="0" value="0"></div>
+    </div>
+    <div class="field"><label>Spec / notes (optional)</label><input id="mpSpec" class="inp" placeholder="materials, build notes"></div>
+    <div class="row" style="gap:8px;margin-top:8px">
+      <button class="btn" onclick="saveNewPart()">Add part</button>
+      <button class="btn sec" onclick="closeModal()">Cancel</button>
+    </div>`);
+}
+async function saveNewPart(){
+  const name=($('mpName').value||'').trim(); if(!name)return toast('Part name is required');
+  const cost=Number($('mpCost').value); if($('mpCost').value===''||isNaN(cost)||cost<0)return toast('Enter a cost (0 or more)');
+  const body={ name, type:'M', cost, uom:($('mpUom').value||'').trim()||undefined, spec:($('mpSpec').value||'').trim()||undefined, id:($('mpId').value||'').trim()||undefined, reorder:Number($('mpReorder').value)||0 };
+  try{ const r=await api('/api/parts',{method:'POST',body:JSON.stringify(body)}); closeModal(); toast('Make part '+r.id+' added'); viewParts(); }
+  catch(e){ toast(e.message); }
+}
 async function previewQBItems(){
   const panel=$('qbItemsPanel');
   panel.style.display='block';
