@@ -642,7 +642,9 @@ async function viewDash(){
 async function viewParts(){
   $('pTitle').textContent='Parts Master';$('pSub').textContent='Live parts, costs and on-hand — '+(canEdit()?'click a cost to edit':'read-only');
   $('pActions').innerHTML=canEdit()?`<button class="btn" onclick="previewQBItems()">⬇ Import from QuickBooks</button>`:'';
-  const parts=await api('/api/parts');
+  const allParts=await api('/api/parts');
+  const parts=allParts.filter(p=>p.active!==false);
+  const inactive=allParts.filter(p=>p.active===false).sort((a,b)=>String(a.name||a.id).toLowerCase().localeCompare(String(b.name||b.id).toLowerCase()));
   $('content').innerHTML=`
    <div id="qbItemsPanel" style="display:none;margin-bottom:14px"></div>
    <div class="card"><h3>Parts (${parts.length})</h3>
@@ -655,10 +657,20 @@ async function viewParts(){
      <td class="right">${canEdit()?`<a class="lnk" onclick="editCost('${p.id}',${p.cost})">${money2(p.cost)}</a>`:money2(p.cost)}</td>
      <td class="right">${money(p.extValue)}</td>
      <td class="center"><span class="badge ${p.status==='ok'?'b-ok':p.status==='low'?'b-low':'b-below'}">${p.status}</span></td>
-     ${canEdit()?`<td class="right"><button class="btn sm sec" onclick="receive('${p.id}')">Receive</button></td>`:''}
+     ${canEdit()?`<td class="right" style="white-space:nowrap"><button class="btn sm sec" onclick="receive('${p.id}')">Receive</button> <button class="btn sm sec" onclick="inactivatePart('${p.id}')">Inactivate</button></td>`:''}
    </tr>`).join('')}
-   </tbody></table></div>`;
+   </tbody></table></div>
+   ${canEdit()&&inactive.length?`<div class="card"><h3>Inactive parts (${inactive.length})</h3>
+     <p class="muted" style="font-size:12px;margin-bottom:10px">Hidden from the parts list above — app only, not changed in QuickBooks. Pick one to bring it back.</p>
+     <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+       <select id="reactivateSel" style="flex:1;min-width:240px;padding:8px;border-radius:8px;border:1px solid var(--line);background:var(--panel2);color:var(--txt)">
+         ${inactive.map(p=>`<option value="${esc(p.id)}">${esc(p.name||p.id)} — ${esc(p.id)}</option>`).join('')}
+       </select>
+       <button class="btn" onclick="reactivatePart()">Reactivate</button>
+     </div></div>`:''}`;
 }
+async function inactivatePart(id){ try{await api('/api/parts/'+id,{method:'PATCH',body:JSON.stringify({active:false})});toast('Part inactivated');viewParts();}catch(e){toast(e.message);} }
+async function reactivatePart(){ const sel=$('reactivateSel'); const id=sel?sel.value:''; if(!id)return; try{await api('/api/parts/'+id,{method:'PATCH',body:JSON.stringify({active:true})});toast('Part reactivated');viewParts();}catch(e){toast(e.message);} }
 async function previewQBItems(){
   const panel=$('qbItemsPanel');
   panel.style.display='block';
