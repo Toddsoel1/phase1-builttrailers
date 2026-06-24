@@ -23,7 +23,7 @@ export async function customersWithTypes() {
   const allowed = await all('SELECT customer_id, type FROM customer_allowed_type', []);
   return custs.map(c => ({
     id: c.id, name: c.name, kind: c.kind, contact: c.contact, phone: c.phone,
-    rep: c.rep_name, repId: c.rep_id,
+    rep: c.rep_name, repId: c.rep_id, active: c.active !== false,
     smsConsent: !!c.sms_consent, smsConsentAt: c.sms_consent_at || null,
     allowed: allowed.filter(a => a.customer_id === c.id).map(a => a.type)
   }));
