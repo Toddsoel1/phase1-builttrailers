@@ -35,7 +35,7 @@ async function onOrder() {
 
 export async function mrp() {
   const [parts, demand, daily, onord] = await Promise.all([
-    all(`SELECT p.*, v.name AS vendor_name, v.lead_days FROM part p LEFT JOIN vendor v ON v.id=p.vendor_id`, []),
+    all(`SELECT p.*, v.name AS vendor_name, v.lead_days FROM part p LEFT JOIN vendor v ON v.id=p.vendor_id WHERE p.active = true`, []),
     grossDemand(), dailyConsumption(), onOrder()
   ]);
   const today = new Date();
