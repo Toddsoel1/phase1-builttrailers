@@ -137,7 +137,10 @@ async function api(path, opts={}){
 }
 const canEdit = () => ME && (ME.role==='admin'||ME.role==='editor');
 const isAdmin = () => ME && ME.role==='admin';
-const canSell = () => ME && (ME.role==='admin' || ['Sales','Rep Specialist','General Manager'].includes(ME.title));
+// All job titles the signed-in user holds (multi-role), with fallback to the primary title.
+const myTitles = () => (ME && (ME.titles&&ME.titles.length?ME.titles:(ME.title?[ME.title]:[]))) || [];
+const hasTitle = (...names) => myTitles().some(t=>names.includes(t));
+const canSell = () => ME && (ME.role==='admin' || hasTitle('Sales','Rep Specialist','General Manager'));
 
 // ---- login ----
 async function login(){
@@ -1140,7 +1143,7 @@ function modal(title,html){const d=document.createElement('div');d.className='mo
 function closeModal(){const m=$('modalBg');if(m)m.remove();}
 
 let ordFilter='All', ordView='board';
-const canReorder=()=>ME&&(ME.role==='admin'||['Sales','Rep Specialist','General Manager','Shop Manager','Office Manager'].includes(ME.title));
+const canReorder=()=>ME&&(ME.role==='admin'||hasTitle('Sales','Rep Specialist','General Manager','Shop Manager','Office Manager'));
 function stageBadge(s){const m={'Quote':'b-low','Confirmed':'b-buy','Scheduled':'b-buy','In Production':'b-mfg','QC':'b-low','Ready / Shipped':'b-ok'};return `<span class="badge ${m[s]||'b-buy'}">${esc(s)}</span>`;}
 async function viewOrders(){
   $('pTitle').textContent='Orders & Fulfillment';
@@ -2132,7 +2135,7 @@ async function viewTimeoff(){
   const [list,emps]=await Promise.all([api('/api/timeoff'),api('/api/employees')]);
   toEmps=emps;
   const canApprove=r=>isAdmin()||r.mgrId===ME.id;
-  const canProcess=()=>isAdmin()||ME.title==='Office Manager';
+  const canProcess=()=>isAdmin()||hasTitle('Office Manager');
   const mine=list.filter(r=>r.status==='Pending Manager'&&canApprove(r));
   const queue=list.filter(r=>r.status==='Approved - To Payroll');
   const badge=s=>s==='Processed'?'<span class="badge b-ok">Processed</span>':s==='Approved - To Payroll'?'<span class="badge b-buy">Approved → Payroll</span>':s==='Denied'?'<span class="badge b-below">Denied</span>':'<span class="badge b-low">Pending Manager</span>';
@@ -2194,7 +2197,7 @@ async function saveOut(uid){ try{await api('/api/users/'+uid+'/outcomes',{method
 let winFilter='All', winMeta={};
 async function viewWins(){
   $('pTitle').textContent='Wins & Celebrations';$('pSub').textContent='Celebrate individual, workstation and department wins';
-  const canCel=ME.title!=='External Viewer';
+  const canCel=!(myTitles().length&&myTitles().every(t=>t==='External Viewer'));
   $('pActions').innerHTML=canCel?`<button class="btn" onclick="postWin()">🎉 Post a win</button>`:'';
   const d=await api('/api/wins');winMeta=d;
   const REACTIONS=['🎉','🙌','💪','🔥','👏'];

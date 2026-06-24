@@ -21,6 +21,9 @@ export async function authMiddleware(req, res, next) {
     if (payload.kind === 'dealer') return res.status(403).json({ error: 'Staff access required' });
     const u = await one('SELECT id,name,username,title,role,manager_id FROM app_user WHERE id=$1', [payload.id]);
     if (!u) return res.status(401).json({ error: 'User not found' });
+    // All job titles the user holds (multi-role), resolved live so changes need no re-login.
+    const titleRows = await all('SELECT role_name FROM user_title WHERE user_id=$1', [u.id]);
+    u.titles = titleRows.length ? titleRows.map(r => r.role_name) : (u.title ? [u.title] : []);
     // Live section permissions = union across all the user's job titles (admins see all).
     // Resolved per request so title changes take effect without re-login.
     if (u.role === 'admin') {
@@ -34,6 +37,13 @@ export async function authMiddleware(req, res, next) {
   } catch {
     return res.status(401).json({ error: 'Invalid or expired session' });
   }
+}
+
+// True if the user holds ANY of the given job titles (across all their assigned titles).
+export function userHasTitle(user, names) {
+  if (!user) return false;
+  const own = (user.titles && user.titles.length) ? user.titles : (user.title ? [user.title] : []);
+  return own.some(t => names.includes(t));
 }
 
 export function requireTier(minTier) {

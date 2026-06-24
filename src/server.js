@@ -299,10 +299,12 @@ app.post('/api/auth/login', loginLimiter, async (req, res) => {
   if (!u || !checkPassword(password || '', u.password_hash))
     return res.status(401).json({ error: 'Invalid username or password' });
   if (u.active === false) return res.status(403).json({ error: 'Account is inactive. Contact your administrator.' });
+  const titleRows = await all('SELECT role_name FROM user_title WHERE user_id=$1', [u.id]);
+  const titles = titleRows.length ? titleRows.map(r => r.role_name) : (u.title ? [u.title] : []);
   const sectionRows = u.role === 'admin' ? null :
     await all(`SELECT DISTINCT rs.section FROM user_title ut JOIN role_section rs ON rs.role_name=ut.role_name WHERE ut.user_id=$1`, [u.id]);
   const sections = sectionRows ? sectionRows.map(r => r.section) : null;
-  const safe = { id: u.id, name: u.name, username: u.username, title: u.title, role: u.role, manager_id: u.manager_id, sections };
+  const safe = { id: u.id, name: u.name, username: u.username, title: u.title, titles, role: u.role, manager_id: u.manager_id, sections };
   res.json({ token: signToken(u), user: safe });
 });
 app.get('/api/auth/me', authMiddleware, (req, res) => res.json({ user: req.user }));
@@ -1039,12 +1041,12 @@ app.delete('/api/selfgoals/:id', authMiddleware, async (req, res) => { await peo
 // ---- recognition / wins ----
 app.get('/api/wins', authMiddleware, async (_req, res) => res.json({ wins: await people.wins(), departments: await people.departments(), workstations: await people.workstationsList() }));
 app.post('/api/wins', authMiddleware, async (req, res) => {
-  if (req.user.title === 'External Viewer') return res.status(403).json({ error: 'External viewers cannot post' });
+  if (req.user.titles.length && req.user.titles.every(t => t === 'External Viewer')) return res.status(403).json({ error: 'External viewers cannot post' });
   if (!req.body?.title) return res.status(400).json({ error: 'title required' });
   res.json({ id: await people.postWin(req.body, req.user) });
 });
 app.post('/api/wins/:id/react', authMiddleware, async (req, res) => {
-  if (req.user.title === 'External Viewer') return res.status(403).json({ error: 'External viewers cannot react' });
+  if (req.user.titles.length && req.user.titles.every(t => t === 'External Viewer')) return res.status(403).json({ error: 'External viewers cannot react' });
   await people.reactWin(req.params.id, req.body?.emoji, req.user.id); res.json({ ok: true });
 });
 
