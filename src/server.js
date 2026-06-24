@@ -512,6 +512,22 @@ app.get('/api/parts', authMiddleware, async (_req, res) => {
     status: p.on_hand < p.reorder ? 'below' : (p.on_hand < p.reorder + p.cushion ? 'low' : 'ok')
   })));
 });
+// Create a Make part in-app — app-only, never pushed to QuickBooks (the QB item sync
+// only ever touches QB-prefixed parts). Buy parts come from the QuickBooks import instead.
+app.post('/api/parts', authMiddleware, requireTier('editor'), async (req, res) => {
+  const { id, name, type, cost, uom, spec, reorder, cushion, lot } = req.body || {};
+  if (!name || !String(name).trim()) return res.status(400).json({ error: 'Part name is required.' });
+  const partType = type === 'P' ? 'P' : 'M';
+  let pid = id && String(id).trim() ? String(id).trim().toUpperCase().replace(/\s+/g, '-') : null;
+  if (!pid) { const n = (await all(`SELECT id FROM part WHERE id LIKE 'MK-%'`, [])).length; pid = 'MK-' + (1001 + n); }
+  if (await one('SELECT id FROM part WHERE id=$1', [pid])) return res.status(400).json({ error: `Part ${pid} already exists.` });
+  await q(`INSERT INTO part(id,name,type,cost,uom,spec,on_hand,reorder,cushion,lot,active)
+           VALUES ($1,$2,$3,$4,$5,$6,0,$7,$8,$9,true)`,
+    [pid, String(name).trim(), partType, Number(cost) || 0, uom || null, spec || null,
+     Number(reorder) || 0, Number(cushion) || 0, Math.max(1, Number(lot) || 1)]);
+  await audit(req, 'part.create', `${pid} ${name} (${partType === 'M' ? 'Make' : 'Buy'}, app-only)`);
+  res.json({ id: pid });
+});
 app.patch('/api/parts/:id', authMiddleware, requireTier('editor'), async (req, res) => {
   const cur = await one('SELECT * FROM part WHERE id=$1', [req.params.id]);
   if (!cur) return res.status(404).json({ error: 'not found' });

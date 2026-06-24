@@ -390,9 +390,10 @@ async function ensureVendorLocal(qbVendorRef) {
 
 export async function previewItemsFromQBO() {
   const items = await paginate('Item');
-  const existingParts = await all('SELECT id, name, cost FROM part', []);
+  const existingParts = await all('SELECT id, name, cost, type FROM part', []);
   const byQbId = new Map(existingParts.filter(p => p.id.startsWith('QB-')).map(p => [p.id, p]));
-  const byName  = new Map(existingParts.map(p => [p.name.toLowerCase(), p]));
+  // Make parts are app-only — never match a QuickBooks item to one, so an import can't touch it.
+  const byName  = new Map(existingParts.filter(p => p.type !== 'M').map(p => [p.name.toLowerCase(), p]));
   return items
     .filter(item => item.Type !== 'Group')
     .map(item => {
