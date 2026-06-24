@@ -746,7 +746,7 @@ async function viewBoms(){
 async function showBom(id){
   _currentBomId=id;
   const [m,parts,crs]=await Promise.all([api('/api/models/'+id),api('/api/parts'),api('/api/bom-change-requests?modelId='+encodeURIComponent(id)+'&status=pending')]);
-  const partOpts=parts.map(p=>`<option value="${esc(p.id)}">${esc(p.id)} — ${esc(p.name)}</option>`).join('');
+  const partOpts=parts.filter(p=>p.active!==false).map(p=>`<option value="${esc(p.id)}">${esc(p.id)} — ${esc(p.name)}</option>`).join('');
   const pendingSec=crs.length?`<div class="card" style="margin-top:14px;border-color:var(--accent)">
    <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px"><h3 style="margin:0">Pending Changes</h3><span class="badge b-low">${crs.length}</span></div>
    <p class="muted" style="font-size:12px;margin-bottom:10px">These changes are queued for accounting review. Approve to apply them to the live BOM.</p>
