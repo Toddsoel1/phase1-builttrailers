@@ -2,6 +2,7 @@
 // Manufactured parts store raw-material cost directly; build labor comes from each
 // model's labor routing × a burdened blended rate (real payroll arrives in Phase 5).
 import { all } from './db.js';
+import { orderWip } from './wip.js';
 
 export const LABOR_RATE = Number(process.env.LABOR_RATE || 37); // fallback $/hr if a workstation has no staff
 export const LABOR_BURDEN = Number(process.env.LABOR_BURDEN || 1.32); // payroll tax + benefits multiplier
@@ -62,13 +63,26 @@ export async function modelsSummary() {
 
 export async function inventoryValuation() {
   const parts = await all('SELECT * FROM part', []);
-  let value = 0, below = 0;
+  let rawPurchased = 0, makeParts = 0, below = 0;
   for (const p of parts) {
-    value += partUnitCost(p) * Number(p.on_hand);
+    const v = partUnitCost(p) * Number(p.on_hand);
+    if (p.type === 'M') makeParts += v; else rawPurchased += v;
     if (Number(p.on_hand) < Number(p.reorder)) below++;
   }
+  // WIP + finished: value capitalized in un-invoiced orders. Materials consumed into these
+  // orders have already left part.on_hand, so adding WIP on top is not double counting —
+  // value simply flowed from raw stock into work-in-process.
+  const open = await all(`SELECT id, stage FROM sales_order WHERE billed = false`, []).catch(() => []);
+  let wipValue = 0, finishedValue = 0;
+  for (const o of open) {
+    const v = await orderWip(o.id);
+    if (v <= 0) continue;
+    if (o.stage === 'Ready') finishedValue += v; else wipValue += v;
+  }
+  const onHandValue = rawPurchased + makeParts;
   return {
-    totalValue: value,
+    totalValue: onHandValue + wipValue + finishedValue,
+    onHandValue, rawPurchased, makeParts, wipValue, finishedValue,
     skuCount: parts.length,
     purchased: parts.filter(p => p.type === 'P').length,
     manufactured: parts.filter(p => p.type === 'M').length,

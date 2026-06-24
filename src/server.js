@@ -16,6 +16,7 @@ import { initDb, dbKind, q, all, one } from './db.js';
 import { authMiddleware, requireTier, signToken, checkPassword, hashPassword } from './auth.js';
 import { modelRollup, modelsSummary, inventoryValuation, partUnitCost } from './cost.js';
 import { STAGES, canSell, canReorderProduction, trailerTypes, customersWithTypes, allowedTypesFor, ordersFull, consumeInventory, setProductionOrder } from './orders.js';
+import { logWork, dailyReport, wipReport, consumptionByWorkstation, workstations, PROD_STAGES } from './wip.js';
 import { mrp, poList, createPO, receivePO } from './mrp.js';
 import { accountingMode, qboConfigured, ledger, totals, sync, scanInvoice, invoiceList } from './accounting.js';
 import { getAuthUrl, exchangeCode, syncCustomersFromQBO, syncItemsFromQBO, syncInvoicesFromQBO, previewItemsFromQBO, QBOAuthError, QBOFeatureError, qboErrorLog, getRefreshTokenInfo, disconnectQBO, getRealmInfo } from './qbo.js';
@@ -847,11 +848,28 @@ app.post('/api/orders/:id/invoice', authMiddleware, requireSales, async (req, re
   if (cur.channel === 'QuickBooks') return res.status(400).json({ error: 'This order was imported from QuickBooks and is already invoiced there.' });
   if (cur.stage !== 'Ready') return res.status(400).json({ error: 'Move the order to Ready before invoicing.' });
   if (cur.invoice_batch_id) return res.status(400).json({ error: 'This order is part of an invoice batch — invoice the batch instead.' });
-  await consumeInventory(req.params.id, req.user.id); // consume BOM + post invoice + mark billed
+  await consumeInventory(req.params.id, req.user.id); // catch-up any unconsumed stages + post invoice/COGS + mark billed
   await audit(req, 'order.invoice', req.params.id);
   await dealernotify.notifyDealer(cur.customer_id, 'order', `Order ${req.params.id} has been invoiced.`, req.params.id);
   res.json({ ok: true });
 });
+// ---- Phase 4: WIP — daily production updates by user & workstation ----
+app.get('/api/workstations', authMiddleware, async (_req, res) => res.json(await workstations()));
+app.post('/api/work-log', authMiddleware, async (req, res) => {
+  const { orderId, workstation, stage, hours, note, stageComplete } = req.body || {};
+  if (!orderId) return res.status(400).json({ error: 'orderId required' });
+  // Employees log their own work; an admin or shop/office/general manager may log for another user.
+  const canLogForOthers = req.user.role === 'admin' || (req.user.titles || []).some(t => ['Shop Manager', 'General Manager', 'Office Manager'].includes(t));
+  const userId = (req.body?.userId && canLogForOthers) ? req.body.userId : req.user.id;
+  try {
+    const r = await logWork({ userId, orderId, workstation, stage, hours, note, stageComplete, logDate: req.body?.logDate });
+    await audit(req, 'work.log', `${orderId} ${workstation || ''} ${Number(hours) || 0}h${r.consumed?.consumed ? ` — ${r.stage} complete, $${Math.round(r.consumed.materialValue)} consumed` : ''}`);
+    res.json({ ok: true, ...r });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+app.get('/api/work-log/daily', authMiddleware, async (req, res) => res.json(await dailyReport(req.query.date)));
+app.get('/api/wip', authMiddleware, async (_req, res) => res.json(await wipReport()));
+app.get('/api/wip/by-workstation', authMiddleware, async (req, res) => res.json(await consumptionByWorkstation(req.query.from, req.query.to)));
 
 // ---- MRP / predictive ordering (Phase 3) ----
 app.get('/api/mrp', authMiddleware, async (_req, res) => {
@@ -1413,6 +1431,11 @@ if (kind === 'postgres' || kind === 'pglite') {
     `CREATE TABLE IF NOT EXISTS warranty_registration (trailer_id TEXT PRIMARY KEY, owner_name TEXT, owner_contact TEXT, registered_at TIMESTAMPTZ NOT NULL DEFAULT now(), term_months INTEGER NOT NULL DEFAULT 12, registered_by TEXT, note TEXT)`,
     `CREATE TABLE IF NOT EXISTS warranty_claim (id TEXT PRIMARY KEY, trailer_id TEXT NOT NULL, opened_at TIMESTAMPTZ NOT NULL DEFAULT now(), status TEXT NOT NULL DEFAULT 'Open', issue TEXT, labor_cost NUMERIC(12,2) NOT NULL DEFAULT 0, shipping_cost NUMERIC(12,2) NOT NULL DEFAULT 0, opened_by TEXT, resolved_at TIMESTAMPTZ, resolution TEXT)`,
     `CREATE TABLE IF NOT EXISTS warranty_claim_part (id SERIAL PRIMARY KEY, claim_id TEXT NOT NULL, part_id TEXT, part_name TEXT, qty INTEGER NOT NULL DEFAULT 1, unit_cost NUMERIC(12,2) NOT NULL DEFAULT 0)`,
+    // Phase 4 — WIP execution: daily production updates by user/workstation drive stage-
+    // completion consumption; consumption is ledgered for per-workstation reporting + WIP value.
+    `CREATE TABLE IF NOT EXISTS work_log (id SERIAL PRIMARY KEY, log_date DATE NOT NULL DEFAULT CURRENT_DATE, user_id TEXT, order_id TEXT, workstation TEXT, stage TEXT, hours NUMERIC(8,2) NOT NULL DEFAULT 0, note TEXT, stage_complete BOOLEAN NOT NULL DEFAULT false, created_at TIMESTAMPTZ NOT NULL DEFAULT now())`,
+    `CREATE TABLE IF NOT EXISTS order_stage_done (order_id TEXT NOT NULL, stage TEXT NOT NULL, completed_at TIMESTAMPTZ NOT NULL DEFAULT now(), completed_by TEXT, workstation TEXT, PRIMARY KEY(order_id, stage))`,
+    `CREATE TABLE IF NOT EXISTS inventory_consumption (id SERIAL PRIMARY KEY, ts TIMESTAMPTZ NOT NULL DEFAULT now(), log_date DATE NOT NULL DEFAULT CURRENT_DATE, order_id TEXT, stage TEXT, workstation TEXT, user_id TEXT, part_id TEXT, qty NUMERIC(12,3) NOT NULL DEFAULT 0, unit_cost NUMERIC(12,2) NOT NULL DEFAULT 0, ext_value NUMERIC(14,2) NOT NULL DEFAULT 0)`,
     // Warranty registration portal: richer registration fields + maintenance log
     `ALTER TABLE warranty_registration ADD COLUMN IF NOT EXISTS email TEXT`,
     `ALTER TABLE warranty_registration ADD COLUMN IF NOT EXISTS phone TEXT`,

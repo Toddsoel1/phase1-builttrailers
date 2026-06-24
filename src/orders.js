@@ -1,7 +1,8 @@
 // Phase 2 — Sales orders, dealer authorization, type-based fulfillment, inventory consume.
 import { all, one, q } from './db.js';
-import { postInvoice } from './accounting.js';
+import { postInvoice, postCOGS } from './accounting.js';
 import { userHasTitle } from './auth.js';
+import { consumeStage, orderWip, PROD_STAGES } from './wip.js';
 
 export const STAGES = ['Quote', 'Confirmed', 'Scheduled', 'Build', 'Paint/Powder Coat', 'Finish', 'Ready'];
 const SALES_TITLES = ['Sales', 'Rep Specialist', 'General Manager'];
@@ -62,29 +63,29 @@ export async function setProductionOrder(ids) {
   return ids.length;
 }
 
-// consume finished-goods inventory for an order's BOM (called once at ship)
+// Relieve inventory + close out an order's books at invoice time.
 export async function consumeInventory(orderId, userId) {
   const o = await one('SELECT * FROM sales_order WHERE id=$1', [orderId]);
   if (!o) return;
-  // Consume the BOM once (idempotent on `consumed`)...
+  // Consume any production stage not yet completed via the daily updates (catch-up), so a
+  // trailer's full BOM is relieved from inventory exactly once — whether stage-by-stage on
+  // the floor or all at once here. consumeStage is idempotent per (order, stage).
   if (!o.consumed) {
-    const lines = await all('SELECT part_id, qty FROM bom_line WHERE model_id=$1', [o.model_id]);
-    for (const l of lines) {
-      await q('UPDATE part SET on_hand = GREATEST(0, on_hand - $1) WHERE id=$2', [Math.round(Number(l.qty) * o.qty), l.part_id]);
-    }
+    for (const st of PROD_STAGES) await consumeStage(orderId, st, { userId });
     await q('UPDATE sales_order SET consumed=true WHERE id=$1', [orderId]);
     await q('INSERT INTO audit_log(user_id,action,detail) VALUES ($1,$2,$3)',
-      [userId || null, 'order.consume', `${orderId} — inventory consumed`]);
+      [userId || null, 'order.consume', `${orderId} — inventory relieved`]);
   }
-  // ...and bill once (idempotent on `billed`), independent of the consume step.
-  // Phase 4: post a customer invoice to accounting on shipment.
-  // Skipped if the order is billed as part of an invoice batch (orders.invoice_batch_id),
-  // so a trailer is never invoiced twice. Non-batched orders are marked billed here.
+  // Bill once (idempotent on `billed`), independent of consume. Skipped if billed as part of
+  // an invoice batch (invoice_batch_id) so a trailer is never invoiced twice.
   if (!o.invoice_batch_id && !o.billed) {
     const info = await one(`SELECT m.price, c.name AS customer FROM sales_order o
                               LEFT JOIN model m ON m.id=o.model_id
                               LEFT JOIN customer c ON c.id=o.customer_id WHERE o.id=$1`, [orderId]);
     if (info) await postInvoice(orderId, info.customer || 'Customer', Number(info.price || 0) * o.qty, userId);
+    // Relieve the accumulated WIP cost into COGS.
+    const cogs = await orderWip(orderId);
+    if (cogs > 0) await postCOGS(orderId, cogs, userId);
     await q('UPDATE sales_order SET billed=true WHERE id=$1', [orderId]);
   }
 }
