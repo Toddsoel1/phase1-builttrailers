@@ -19,7 +19,7 @@ import { STAGES, canSell, canReorderProduction, trailerTypes, customersWithTypes
 import { logWork, dailyReport, wipReport, consumptionByWorkstation, workstations, PROD_STAGES } from './wip.js';
 import { mrp, poList, createPO, receivePO } from './mrp.js';
 import { accountingMode, qboConfigured, ledger, totals, sync, scanInvoice, invoiceList } from './accounting.js';
-import { getAuthUrl, exchangeCode, syncCustomersFromQBO, syncItemsFromQBO, syncInvoicesFromQBO, previewItemsFromQBO, QBOAuthError, QBOFeatureError, qboErrorLog, getRefreshTokenInfo, disconnectQBO, getRealmInfo } from './qbo.js';
+import { getAuthUrl, exchangeCode, syncCustomersFromQBO, syncItemsFromQBO, syncInvoicesFromQBO, previewItemsFromQBO, QBOAuthError, QBOFeatureError, qboErrorLog, getRefreshTokenInfo, disconnectQBO, getRealmInfo, getQBItems, updateItemCost } from './qbo.js';
 import * as people from './people.js';
 import { forecast, workingCapital, scenario } from './forecast.js';
 import * as sms from './sms.js';
@@ -1041,6 +1041,58 @@ app.get('/api/qbo/preview/items', authMiddleware, requireTier('editor'), async (
   try { res.json(await previewItemsFromQBO()); }
   catch (e) { qboErrRes(res, e); }
 });
+// ---- Push trailer (model) cost to QuickBooks, computed from the app BOM ----
+// Preview (read-only): app cost vs current QB cost, with each model→QB-item match.
+app.get('/api/accounting/trailer-costs', authMiddleware, requireSection('accounting'), async (req, res) => {
+  const includeLabor = req.query.includeLabor !== '0';
+  const [models, meta] = await Promise.all([modelsSummary(), all('SELECT id, qb_item_id FROM model', [])]);
+  const storedItem = Object.fromEntries(meta.map(m => [m.id, m.qb_item_id]));
+  let items = null, connected = false, err = null;
+  if (qboConfigured()) { try { items = await getQBItems(); connected = true; } catch (e) { err = e.message; } }
+  const byId = items && new Map(items.map(i => [i.id, i]));
+  const byName = items && new Map(items.map(i => [(i.name || '').toLowerCase().trim(), i]));
+  const rows = models.map(m => {
+    const appCost = Math.round((includeLabor ? m.totalCost : m.material) * 100) / 100;
+    const item = items ? ((storedItem[m.id] && byId.get(storedItem[m.id])) || byName.get((m.name || '').toLowerCase().trim()) || null) : null;
+    return {
+      modelId: m.id, model: m.name, material: m.material, laborCost: m.laborCost, totalCost: m.totalCost, appCost,
+      qbItemId: item?.id || storedItem[m.id] || null, qbItemName: item?.name || null,
+      currentQbCost: item ? item.cost : null, matched: !!item,
+      willChange: item ? Math.abs(item.cost - appCost) > 0.005 : false,
+    };
+  });
+  res.json({ connected, mode: accountingMode(), includeLabor, error: err,
+    items: items ? items.map(i => ({ id: i.id, name: i.name, type: i.type, cost: i.cost })) : [], rows });
+});
+// Push: write each selected model's app cost into its QB item's PurchaseCost (the QB "Cost").
+app.post('/api/accounting/trailer-costs/push', authMiddleware, requireSection('accounting'), async (req, res) => {
+  if (!qboConfigured()) return res.status(400).json({ error: 'QuickBooks not configured' });
+  const includeLabor = req.body?.includeLabor !== false;
+  const sel = Array.isArray(req.body?.items) ? req.body.items : null; // [{modelId, qbItemId}] explicit overrides
+  const models = await modelsSummary();
+  const modelById = new Map(models.map(m => [m.id, m]));
+  const stored = Object.fromEntries((await all('SELECT id, qb_item_id FROM model', [])).map(m => [m.id, m.qb_item_id]));
+  const targets = sel || Object.keys(stored).filter(id => stored[id]).map(id => ({ modelId: id, qbItemId: stored[id] }));
+  if (!targets.length) return res.status(400).json({ error: 'No model→QuickBooks item mappings to push. Open the preview and choose a QB item for each trailer first.' });
+  const results = [];
+  for (const t of targets) {
+    const m = modelById.get(t.modelId);
+    if (!m) { results.push({ modelId: t.modelId, ok: false, error: 'model not found' }); continue; }
+    const itemId = t.qbItemId || stored[t.modelId];
+    if (!itemId) { results.push({ modelId: t.modelId, model: m.name, ok: false, error: 'no QB item selected' }); continue; }
+    const cost = Math.round((includeLabor ? m.totalCost : m.material) * 100) / 100;
+    try {
+      await updateItemCost(itemId, cost);
+      await q('UPDATE model SET qb_item_id=$1 WHERE id=$2', [String(itemId), t.modelId]); // remember the mapping
+      results.push({ modelId: t.modelId, model: m.name, ok: true, qbItemId: String(itemId), cost });
+    } catch (e) {
+      results.push({ modelId: t.modelId, model: m.name, ok: false, qbItemId: String(itemId), error: e.message });
+    }
+  }
+  const okN = results.filter(r => r.ok).length;
+  await audit(req, 'qbo.push_costs', `${okN}/${results.length} trailer costs pushed to QuickBooks${includeLabor ? '' : ' (material only)'}`);
+  res.json({ ok: true, pushed: okN, total: results.length, includeLabor, results });
+});
 app.post('/api/qbo/pull', authMiddleware, requireTier('admin'), async (req, res) => {
   if (!qboConfigured()) return res.status(400).json({ error: 'QuickBooks not configured' });
   const what   = req.body?.what   || ['customers', 'items', 'invoices'];
@@ -1483,6 +1535,8 @@ if (kind === 'postgres' || kind === 'pglite') {
     // (Build / Paint/Powder Coat / Finish) — drives when cost accrues in WIP (phase 4).
     `ALTER TABLE bom_line    ADD COLUMN IF NOT EXISTS stage TEXT NOT NULL DEFAULT 'Build'`,
     `ALTER TABLE model_labor ADD COLUMN IF NOT EXISTS stage TEXT NOT NULL DEFAULT 'Build'`,
+    // Map each trailer model to its QuickBooks item so Accounting can push BOM cost to QB.
+    `ALTER TABLE model ADD COLUMN IF NOT EXISTS qb_item_id TEXT`,
     // Align terminology: the two account kinds are now "Dealership" and "Customer".
     `UPDATE customer SET kind='Customer' WHERE kind='Retail'`,
   ];
