@@ -828,6 +828,8 @@ app.post('/api/orders/:id/invoice', authMiddleware, requireSales, async (req, re
   const cur = await one('SELECT * FROM sales_order WHERE id=$1', [req.params.id]);
   if (!cur) return res.status(404).json({ error: 'not found' });
   if (cur.billed) return res.status(400).json({ error: 'This order is already invoiced.' });
+  // Orders synced from QuickBooks already have an invoice there — never re-post a duplicate.
+  if (cur.channel === 'QuickBooks') return res.status(400).json({ error: 'This order was imported from QuickBooks and is already invoiced there.' });
   if (cur.stage !== 'Ready') return res.status(400).json({ error: 'Move the order to Ready before invoicing.' });
   if (cur.invoice_batch_id) return res.status(400).json({ error: 'This order is part of an invoice batch — invoice the batch instead.' });
   await consumeInventory(req.params.id, req.user.id); // consume BOM + post invoice + mark billed
@@ -1436,6 +1438,9 @@ if (kind === 'postgres' || kind === 'pglite') {
     `UPDATE sales_order SET stage='Build'  WHERE stage='In Production'`,
     `UPDATE sales_order SET stage='Finish' WHERE stage='QC'`,
     `UPDATE sales_order SET stage='Ready'  WHERE stage='Ready / Shipped'`,
+    // Orders imported from QuickBooks are already invoiced there — mark them billed so they
+    // drop off the Build board and can never re-post a duplicate invoice.
+    `UPDATE sales_order SET billed=true WHERE channel='QuickBooks' AND billed=false`,
     // Align terminology: the two account kinds are now "Dealership" and "Customer".
     `UPDATE customer SET kind='Customer' WHERE kind='Retail'`,
   ];
