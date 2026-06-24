@@ -61,7 +61,7 @@ export async function workingCapital(horizonDays = 30) {
     inventoryValuation(), modelsSummary(), mrp(), payrollSummary(), ordersFull()
   ]);
   const costOf = id => (models.find(m => m.id === id) || { totalCost: 0 }).totalCost;
-  const open = orders.filter(o => o.stage !== 'Ready / Shipped');
+  const open = orders.filter(o => !o.billed);
   const openPO = (await all(`SELECT COALESCE(SUM(qty*unit_cost),0) v FROM purchase_order WHERE status='Open'`, []))[0].v;
   const predictedPO = mrpRows.filter(r => r.sev !== 'ok' && r.type === 'P').reduce((s, r) => s + r.suggestQty * r.cost, 0);
   const deposits = open.reduce((s, o) => s + o.revenue * o.deposit, 0);
@@ -78,7 +78,7 @@ export async function workingCapital(horizonDays = 30) {
 export async function scenario({ demandMult = 1, materialMult = 1, addWelders = 0, horizonDays = 30 } = {}) {
   const [models, orders, pay] = await Promise.all([modelsSummary(), ordersFull(), payrollSummary()]);
   const costOf = id => models.find(m => m.id === id) || { totalCost: 0, material: 0 };
-  const open = orders.filter(o => o.stage !== 'Ready / Shipped');
+  const open = orders.filter(o => !o.billed);
   const baseRev = open.reduce((s, o) => s + o.revenue, 0);
   const rev = baseRev * demandMult;
   // COGS scales with demand; material portion scales with materialMult

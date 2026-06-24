@@ -18,14 +18,14 @@ SECTION-BY-SECTION REFERENCE
 ── 1. DASHBOARD ──
 Shows live production KPIs: open orders by stage, inventory value, recent wins, cash flow summary, and pending approval counts. Everything is read-only. Click any KPI card to navigate to the relevant section. No edits happen here — it is a daily health snapshot.
 
-── 2. ORDERS & FULFILLMENT ──
-The core production pipeline. Every sale moves through four stages:
-  Quote → Confirmed → In Production → Ready/Shipped
+── 2. BUILD (production pipeline) ──
+The core production pipeline (the "Build" section). Every sale moves through these stages:
+  Quote → Confirmed → Scheduled → Build → Paint/Powder Coat → Finish → Ready
 Key facts:
 - Only authorized trailer types can be ordered by a given dealer (set in Customers & Dealers)
-- Advancing a stage to "Ready/Shipped" automatically posts an invoice to QuickBooks and (if SMS is enabled) texts the customer
+- "Ready" means built and waiting to invoice. From a Ready order, Sales clicks "Invoice & close" — that posts the customer invoice to QuickBooks, relieves inventory, and removes the order from the board (invoiced orders drop off the queue)
 - The order detail panel shows a BOM-based parts availability check — green = on hand, red = short
-- Editors and Admins can create and advance orders; Viewers can only see them
+- Editors and Admins can create and advance orders; Viewers can only see them; Sales can invoice a Ready order
 To advance an order: click its row → use the stage buttons in the detail panel.
 
 ── 3. NEW ORDER ──
@@ -91,7 +91,7 @@ A read-only valuation report: Total value of all parts on hand (on_hand × unit_
 
 ── 10. ACCOUNTING ──
 QuickBooks Online integration hub. What happens automatically:
-  - Order advances to Ready/Shipped → invoice posts to QB (customer billed)
+  - A Ready order is invoiced (Build → "Invoice & close") → customer invoice posts to QB and inventory is relieved
   - PO is received → vendor bill posts to QB (accounts payable)
 Manual actions:
   - "Push pending" → retries any failed syncs
@@ -157,11 +157,11 @@ Multi-title: a user can hold multiple job titles simultaneously. Their effective
 KEY WORKFLOWS (STEP-BY-STEP)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-WORKFLOW: New order from quote to shipped
+WORKFLOW: New order from quote to invoiced
 1. New Order → select dealer → select model → set qty + date → Create
-2. Orders & Fulfillment → find the order → Confirm (moves to Confirmed)
-3. When production starts → In Production
-4. When complete → Ready/Shipped → invoice auto-posts to QB, customer gets SMS
+2. Build → find the order → drag to Confirmed, then Scheduled
+3. Through production → Build → Paint/Powder Coat → Finish
+4. When complete → Ready (waiting to invoice). Sales clicks "Invoice & close" → invoice posts to QB, inventory is relieved, and the order leaves the board
 
 WORKFLOW: Add a new dealer
 1. Customers & Dealers → "+ Add customer" → fill fields → type = Dealer → Save

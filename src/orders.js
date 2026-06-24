@@ -3,7 +3,7 @@ import { all, one, q } from './db.js';
 import { postInvoice } from './accounting.js';
 import { userHasTitle } from './auth.js';
 
-export const STAGES = ['Quote', 'Confirmed', 'Scheduled', 'In Production', 'QC', 'Ready / Shipped'];
+export const STAGES = ['Quote', 'Confirmed', 'Scheduled', 'Build', 'Paint/Powder Coat', 'Finish', 'Ready'];
 const SALES_TITLES = ['Sales', 'Rep Specialist', 'General Manager'];
 // Titles allowed to reorder the production queue (in addition to any admin)
 const PRODUCTION_TITLES = ['Sales', 'Rep Specialist', 'General Manager', 'Shop Manager', 'Office Manager'];
@@ -47,7 +47,7 @@ export async function ordersFull() {
   return rows.map(o => ({
     id: o.id, customerId: o.customer_id, customer: o.customer_name, modelId: o.model_id,
     model: o.model_name, type: o.type || 'Custom', qty: o.qty, stage: o.stage, due: o.due,
-    deposit: Number(o.deposit), channel: o.channel, rep: o.rep_name, consumed: o.consumed,
+    deposit: Number(o.deposit), channel: o.channel, rep: o.rep_name, consumed: o.consumed, billed: !!o.billed,
     prodSeq: o.production_seq == null ? null : Number(o.production_seq),
     price: Number(o.price || 0), revenue: Number(o.price || 0) * o.qty
   }));
@@ -65,14 +65,18 @@ export async function setProductionOrder(ids) {
 // consume finished-goods inventory for an order's BOM (called once at ship)
 export async function consumeInventory(orderId, userId) {
   const o = await one('SELECT * FROM sales_order WHERE id=$1', [orderId]);
-  if (!o || o.consumed) return;
-  const lines = await all('SELECT part_id, qty FROM bom_line WHERE model_id=$1', [o.model_id]);
-  for (const l of lines) {
-    await q('UPDATE part SET on_hand = GREATEST(0, on_hand - $1) WHERE id=$2', [Math.round(Number(l.qty) * o.qty), l.part_id]);
+  if (!o) return;
+  // Consume the BOM once (idempotent on `consumed`)...
+  if (!o.consumed) {
+    const lines = await all('SELECT part_id, qty FROM bom_line WHERE model_id=$1', [o.model_id]);
+    for (const l of lines) {
+      await q('UPDATE part SET on_hand = GREATEST(0, on_hand - $1) WHERE id=$2', [Math.round(Number(l.qty) * o.qty), l.part_id]);
+    }
+    await q('UPDATE sales_order SET consumed=true WHERE id=$1', [orderId]);
+    await q('INSERT INTO audit_log(user_id,action,detail) VALUES ($1,$2,$3)',
+      [userId || null, 'order.consume', `${orderId} — inventory consumed`]);
   }
-  await q('UPDATE sales_order SET consumed=true WHERE id=$1', [orderId]);
-  await q('INSERT INTO audit_log(user_id,action,detail) VALUES ($1,$2,$3)',
-    [userId || null, 'order.ship', `${orderId} shipped — inventory consumed`]);
+  // ...and bill once (idempotent on `billed`), independent of the consume step.
   // Phase 4: post a customer invoice to accounting on shipment.
   // Skipped if the order is billed as part of an invoice batch (orders.invoice_batch_id),
   // so a trailer is never invoiced twice. Non-batched orders are marked billed here.
