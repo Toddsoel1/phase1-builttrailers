@@ -743,6 +743,20 @@ app.patch('/api/customers/:id/types', authMiddleware, requireSales, async (req, 
   await audit(req, 'customer.types', `${req.params.id} ${on ? '+' : '-'}${type}`);
   res.json({ ok: true });
 });
+// Update a customer/dealer: soft-active (app use), kind (Dealership/Customer), or details.
+app.patch('/api/customers/:id', authMiddleware, requireSales, async (req, res) => {
+  const { active, kind, name, contact, phone } = req.body || {};
+  const cur = await one('SELECT * FROM customer WHERE id=$1', [req.params.id]);
+  if (!cur) return res.status(404).json({ error: 'not found' });
+  const normalizedPhone = phone !== undefined ? (phone ? sms.normalizePhone(phone) : null) : cur.phone;
+  await q('UPDATE customer SET active=$1, kind=$2, name=$3, contact=$4, phone=$5 WHERE id=$6',
+    [active !== undefined ? !!active : (cur.active !== false),
+     kind ?? cur.kind, name ?? cur.name,
+     contact !== undefined ? (contact || null) : cur.contact,
+     normalizedPhone, req.params.id]);
+  await audit(req, 'customer.update', `${req.params.id}${active !== undefined ? (active ? ' [active]' : ' [inactive]') : ''}${kind ? ' kind=' + kind : ''}`);
+  res.json({ ok: true });
+});
 
 // ---- orders / fulfillment (Phase 2) ----
 app.get('/api/orders', authMiddleware, async (_req, res) => res.json({ stages: STAGES, orders: await ordersFull() }));
@@ -1381,6 +1395,10 @@ if (kind === 'postgres' || kind === 'pglite') {
     `ALTER TABLE warranty_registration ADD COLUMN IF NOT EXISTS accessories TEXT`,
     // Sale date read off the uploaded buyer's order by OCR; used to auto-confirm the registration date.
     `ALTER TABLE warranty_registration ADD COLUMN IF NOT EXISTS ocr_sale_date DATE`,
+    // Soft-inactivate customers/dealers (app use only) to keep the working list clean.
+    `ALTER TABLE customer ADD COLUMN IF NOT EXISTS active BOOLEAN NOT NULL DEFAULT true`,
+    // Align terminology: the two account kinds are now "Dealership" and "Customer".
+    `UPDATE customer SET kind='Customer' WHERE kind='Retail'`,
   ];
   // Migrate existing app_user.title into user_title junction (idempotent)
   await q(`INSERT INTO user_title(user_id,role_name)

@@ -1217,7 +1217,8 @@ async function orderDetail(id){
 async function viewNewOrder(){
   $('pTitle').textContent='New Order';$('pSub').textContent='Sales-controlled — each dealer is limited to its authorized trailer types';$('pActions').innerHTML='';
   if(!canSell()){$('content').innerHTML=`<div class="card"><div class="banner" style="background:rgba(255,209,102,.1);border-color:rgba(255,209,102,.4)">🔒 New orders are controlled by Sales. You are signed in as ${ME.title||ME.role}. Switch to a Sales role to place orders.</div></div>`;return;}
-  const [custs,models]=await Promise.all([api('/api/customers'),api('/api/models')]);
+  const [allCusts,models]=await Promise.all([api('/api/customers'),api('/api/models')]);
+  const custs=allCusts.filter(c=>c.active!==false);
   window._custs=custs;window._models=models;
   $('content').innerHTML=`<div class="split">
    <div class="card"><h3>Place an order</h3>
@@ -1261,23 +1262,32 @@ async function submitOrder(){
 async function viewCustomers(){
   $('pTitle').textContent='Customers & Dealers';$('pSub').textContent='Sales assigns which trailer types each dealer may order';$('pActions').innerHTML=canSell()?`<button class="btn" onclick="addDealer()">➕ Add customer</button>`:'';
   const [custs,types]=await Promise.all([api('/api/customers'),api('/api/trailer-types')]);
-  $('content').innerHTML=`<div class="card"><h3>Dealerships & authorized trailer types</h3>
-   <table><thead><tr><th>Customer</th><th>Type</th><th>Phone</th><th>SMS</th><th>Rep</th><th>Authorized trailer types</th></tr></thead><tbody>
-   ${custs.map(c=>`<tr><td><b>${esc(c.name)}</b><br><span class="muted" style="font-size:11px">${esc(c.contact||'')}</span></td>
-     <td><span class="badge ${c.kind==='Retail'?'b-low':'b-buy'}">${esc(c.kind)}</span></td>
+  window._custTypes=types;
+  const active=custs.filter(c=>c.active!==false), inactive=custs.filter(c=>c.active===false);
+  const row=c=>{const off=c.active===false;return `<tr style="${off?'opacity:0.5':''}">
+     <td><b>${esc(c.name)}</b>${off?' <span class="pill" style="background:#888;font-size:10px">Inactive</span>':''}<br><span class="muted" style="font-size:11px">${esc(c.contact||'')}</span></td>
+     <td>${canSell()?`<select onchange="setCustomerKind('${c.id}',this.value)" style="padding:3px 6px;border-radius:6px;border:1px solid var(--line);background:var(--panel2);color:var(--txt);font-size:12px"><option value="Dealership" ${c.kind==='Dealership'?'selected':''}>Dealership</option><option value="Customer" ${c.kind!=='Dealership'?'selected':''}>Customer</option></select>`:`<span class="badge ${c.kind==='Dealership'?'b-buy':'b-low'}">${esc(c.kind)}</span>`}</td>
      <td class="muted" style="font-size:12px">${esc(c.phone||'—')}</td>
      <td style="font-size:12px">${c.smsConsent?'<span style="color:#4caf50">✓ Consented</span>':'<span class="muted">—</span>'}</td>
      <td class="muted" style="font-size:12px">${esc(c.rep||'—')}</td>
-     <td>${types.map(t=>{const on=c.allowed.includes(t);return `<span class="chip" onclick="${canSell()?`toggleType('${c.id}',${JSON.stringify(t)},${!on})`:''}" style="cursor:${canSell()?'pointer':'default'};border-color:${on?'var(--accent)':'var(--line)'};color:${on?'#ffb347':'var(--muted)'}">${on?'✓ ':''}${esc(t)}</span>`;}).join('')}</td></tr>`).join('')}
+     <td>${types.map((t,i)=>{const on=c.allowed.includes(t);return `<span class="chip" onclick="${canSell()?`toggleType('${c.id}',${i},${!on})`:''}" style="cursor:${canSell()?'pointer':'default'};border-color:${on?'var(--accent)':'var(--line)'};color:${on?'#ffb347':'var(--muted)'}">${on?'✓ ':''}${esc(t)}</span>`;}).join('')}</td>
+     ${canSell()?`<td>${off?`<button class="btn sm" onclick="setCustomerActive('${c.id}',true)">Reactivate</button>`:`<button class="btn sm sec" onclick="setCustomerActive('${c.id}',false)">Inactivate</button>`}</td>`:''}
+   </tr>`;};
+  $('content').innerHTML=`<div class="card"><h3>Customers &amp; dealers — authorized trailer types</h3>
+   <table><thead><tr><th>Account</th><th>Type</th><th>Phone</th><th>SMS</th><th>Rep</th><th>Authorized trailer types</th>${canSell()?'<th></th>':''}</tr></thead><tbody>
+   ${active.map(row).join('')}
+   ${inactive.length?`<tr><td colspan="${canSell()?7:6}" style="padding:16px 8px 4px"><span class="muted" style="font-size:11px;text-transform:uppercase;letter-spacing:.5px">Inactive (${inactive.length}) — hidden from New Order</span></td></tr>${inactive.map(row).join('')}`:''}
    </tbody></table>
-   <p class="muted" style="font-size:12px;margin-top:8px">These authorizations drive the New Order form — reps can only sell what each dealer is approved for.</p></div>`;
+   <p class="muted" style="font-size:12px;margin-top:8px">Click the trailer-type chips to toggle what each account may order (these drive the New Order form). Use <b>Type</b> to mark an account as a Dealership or Customer, and <b>Inactivate</b> accounts you no longer work with — they stay in records but disappear from New Order.</p></div>`;
 }
-async function toggleType(cid,t,on){ try{await api('/api/customers/'+cid+'/types',{method:'PATCH',body:JSON.stringify({type:t,on})});viewCustomers();}catch(e){toast(e.message);} }
+async function toggleType(cid,idx,on){ const t=(window._custTypes||[])[idx]; if(t==null)return; try{await api('/api/customers/'+cid+'/types',{method:'PATCH',body:JSON.stringify({type:t,on})});viewCustomers();}catch(e){toast(e.message);} }
+async function setCustomerActive(id,active){ try{await api('/api/customers/'+id,{method:'PATCH',body:JSON.stringify({active})});toast(active?'Reactivated':'Inactivated');viewCustomers();}catch(e){toast(e.message);} }
+async function setCustomerKind(id,kind){ try{await api('/api/customers/'+id,{method:'PATCH',body:JSON.stringify({kind})});toast('Set to '+kind);}catch(e){toast(e.message);viewCustomers();} }
 async function addDealer(){
   modal('Add Customer / Dealer',`
     <div class="field"><label>Name *</label><input id="adName" placeholder="ABC Trailer Sales"></div>
     <div class="row">
-      <div class="field"><label>Type</label><select id="adKind"><option>Dealership</option><option>Retail</option></select></div>
+      <div class="field"><label>Type</label><select id="adKind"><option>Dealership</option><option>Customer</option></select></div>
       <div class="field"><label>Contact person</label><input id="adContact" placeholder="Jane Smith"></div>
     </div>
     <div class="field"><label>Mobile phone</label><input id="adPhone" type="tel" placeholder="+18015551234" oninput="checkAdAutoConsent()"></div>
