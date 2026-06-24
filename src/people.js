@@ -2,6 +2,7 @@
 // self-goals, recognition. Reuses the app_user hierarchy (manager_id) for routing.
 import { all, one, q } from './db.js';
 import { LABOR_BURDEN } from './cost.js';
+import { userHasTitle } from './auth.js';
 
 const DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 const REACTIONS = ['🎉', '🙌', '💪', '🔥', '👏'];
@@ -51,7 +52,7 @@ export async function canApproveTO(user, toId) {
   const r = await one(`SELECT e.mgr_id FROM time_off t JOIN employee e ON e.id=t.emp_id WHERE t.id=$1`, [toId]);
   return r && r.mgr_id === user.id;
 }
-export function canProcessTO(user) { return user.role === 'admin' || user.title === 'Office Manager'; }
+export function canProcessTO(user) { return user.role === 'admin' || userHasTitle(user, ['Office Manager']); }
 
 export async function submitTimeOff({ empId, type, start, end, hours, reason }, user) {
   const n = (await all('SELECT id FROM time_off', [])).length;

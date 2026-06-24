@@ -299,10 +299,12 @@ app.post('/api/auth/login', loginLimiter, async (req, res) => {
   if (!u || !checkPassword(password || '', u.password_hash))
     return res.status(401).json({ error: 'Invalid username or password' });
   if (u.active === false) return res.status(403).json({ error: 'Account is inactive. Contact your administrator.' });
+  const titleRows = await all('SELECT role_name FROM user_title WHERE user_id=$1', [u.id]);
+  const titles = titleRows.length ? titleRows.map(r => r.role_name) : (u.title ? [u.title] : []);
   const sectionRows = u.role === 'admin' ? null :
     await all(`SELECT DISTINCT rs.section FROM user_title ut JOIN role_section rs ON rs.role_name=ut.role_name WHERE ut.user_id=$1`, [u.id]);
   const sections = sectionRows ? sectionRows.map(r => r.section) : null;
-  const safe = { id: u.id, name: u.name, username: u.username, title: u.title, role: u.role, manager_id: u.manager_id, sections };
+  const safe = { id: u.id, name: u.name, username: u.username, title: u.title, titles, role: u.role, manager_id: u.manager_id, sections };
   res.json({ token: signToken(u), user: safe });
 });
 app.get('/api/auth/me', authMiddleware, (req, res) => res.json({ user: req.user }));
@@ -506,18 +508,20 @@ app.get('/api/parts', authMiddleware, async (_req, res) => {
   res.json(rows.map(p => ({
     id: p.id, name: p.name, type: p.type, vendor: p.vendor_name, leadDays: p.lead_days,
     uom: p.uom, spec: p.spec, cost: Number(p.cost), onHand: p.on_hand, reorder: p.reorder,
-    cushion: p.cushion, lot: p.lot, extValue: Number(p.cost) * p.on_hand,
+    cushion: p.cushion, lot: p.lot, active: p.active !== false, extValue: Number(p.cost) * p.on_hand,
     status: p.on_hand < p.reorder ? 'below' : (p.on_hand < p.reorder + p.cushion ? 'low' : 'ok')
   })));
 });
 app.patch('/api/parts/:id', authMiddleware, requireTier('editor'), async (req, res) => {
   const cur = await one('SELECT * FROM part WHERE id=$1', [req.params.id]);
   if (!cur) return res.status(404).json({ error: 'not found' });
-  const { cost, reorder, cushion, lot } = req.body || {};
-  await q('UPDATE part SET cost=$1, reorder=$2, cushion=$3, lot=$4 WHERE id=$5',
-    [cost ?? cur.cost, reorder ?? cur.reorder, cushion ?? cur.cushion, lot ?? cur.lot, req.params.id]);
+  const { cost, reorder, cushion, lot, active } = req.body || {};
+  await q('UPDATE part SET cost=$1, reorder=$2, cushion=$3, lot=$4, active=$5 WHERE id=$6',
+    [cost ?? cur.cost, reorder ?? cur.reorder, cushion ?? cur.cushion, lot ?? cur.lot,
+     active !== undefined ? !!active : (cur.active !== false), req.params.id]);
   if (cost != null && Number(cost) !== Number(cur.cost))
     await audit(req, 'part.cost', `${req.params.id}: ${cur.cost} -> ${cost}`);
+  if (active !== undefined) await audit(req, 'part.active', `${req.params.id} ${active ? 'active' : 'inactive'}`);
   res.json({ ok: true });
 });
 app.post('/api/parts/:id/receive', authMiddleware, requireTier('editor'), async (req, res) => {
@@ -1039,12 +1043,12 @@ app.delete('/api/selfgoals/:id', authMiddleware, async (req, res) => { await peo
 // ---- recognition / wins ----
 app.get('/api/wins', authMiddleware, async (_req, res) => res.json({ wins: await people.wins(), departments: await people.departments(), workstations: await people.workstationsList() }));
 app.post('/api/wins', authMiddleware, async (req, res) => {
-  if (req.user.title === 'External Viewer') return res.status(403).json({ error: 'External viewers cannot post' });
+  if (req.user.titles.length && req.user.titles.every(t => t === 'External Viewer')) return res.status(403).json({ error: 'External viewers cannot post' });
   if (!req.body?.title) return res.status(400).json({ error: 'title required' });
   res.json({ id: await people.postWin(req.body, req.user) });
 });
 app.post('/api/wins/:id/react', authMiddleware, async (req, res) => {
-  if (req.user.title === 'External Viewer') return res.status(403).json({ error: 'External viewers cannot react' });
+  if (req.user.titles.length && req.user.titles.every(t => t === 'External Viewer')) return res.status(403).json({ error: 'External viewers cannot react' });
   await people.reactWin(req.params.id, req.body?.emoji, req.user.id); res.json({ ok: true });
 });
 
@@ -1397,6 +1401,8 @@ if (kind === 'postgres' || kind === 'pglite') {
     `ALTER TABLE warranty_registration ADD COLUMN IF NOT EXISTS ocr_sale_date DATE`,
     // Soft-inactivate customers/dealers (app use only) to keep the working list clean.
     `ALTER TABLE customer ADD COLUMN IF NOT EXISTS active BOOLEAN NOT NULL DEFAULT true`,
+    // Soft-inactivate parts (app use only — does not touch QuickBooks).
+    `ALTER TABLE part ADD COLUMN IF NOT EXISTS active BOOLEAN NOT NULL DEFAULT true`,
     // Align terminology: the two account kinds are now "Dealership" and "Customer".
     `UPDATE customer SET kind='Customer' WHERE kind='Retail'`,
   ];

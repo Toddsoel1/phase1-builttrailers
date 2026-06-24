@@ -1,6 +1,7 @@
 // Phase 2 — Sales orders, dealer authorization, type-based fulfillment, inventory consume.
 import { all, one, q } from './db.js';
 import { postInvoice } from './accounting.js';
+import { userHasTitle } from './auth.js';
 
 export const STAGES = ['Quote', 'Confirmed', 'Scheduled', 'In Production', 'QC', 'Ready / Shipped'];
 const SALES_TITLES = ['Sales', 'Rep Specialist', 'General Manager'];
@@ -8,10 +9,10 @@ const SALES_TITLES = ['Sales', 'Rep Specialist', 'General Manager'];
 const PRODUCTION_TITLES = ['Sales', 'Rep Specialist', 'General Manager', 'Shop Manager', 'Office Manager'];
 
 export function canSell(user) {
-  return user && (user.role === 'admin' || SALES_TITLES.includes(user.title));
+  return !!user && (user.role === 'admin' || userHasTitle(user, SALES_TITLES));
 }
 export function canReorderProduction(user) {
-  return user && (user.role === 'admin' || PRODUCTION_TITLES.includes(user.title));
+  return !!user && (user.role === 'admin' || userHasTitle(user, PRODUCTION_TITLES));
 }
 
 export async function trailerTypes() {

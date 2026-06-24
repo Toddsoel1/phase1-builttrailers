@@ -137,7 +137,10 @@ async function api(path, opts={}){
 }
 const canEdit = () => ME && (ME.role==='admin'||ME.role==='editor');
 const isAdmin = () => ME && ME.role==='admin';
-const canSell = () => ME && (ME.role==='admin' || ['Sales','Rep Specialist','General Manager'].includes(ME.title));
+// All job titles the signed-in user holds (multi-role), with fallback to the primary title.
+const myTitles = () => (ME && (ME.titles&&ME.titles.length?ME.titles:(ME.title?[ME.title]:[]))) || [];
+const hasTitle = (...names) => myTitles().some(t=>names.includes(t));
+const canSell = () => ME && (ME.role==='admin' || hasTitle('Sales','Rep Specialist','General Manager'));
 
 // ---- login ----
 async function login(){
@@ -639,7 +642,9 @@ async function viewDash(){
 async function viewParts(){
   $('pTitle').textContent='Parts Master';$('pSub').textContent='Live parts, costs and on-hand — '+(canEdit()?'click a cost to edit':'read-only');
   $('pActions').innerHTML=canEdit()?`<button class="btn" onclick="previewQBItems()">⬇ Import from QuickBooks</button>`:'';
-  const parts=await api('/api/parts');
+  const allParts=await api('/api/parts');
+  const parts=allParts.filter(p=>p.active!==false);
+  const inactive=allParts.filter(p=>p.active===false).sort((a,b)=>String(a.name||a.id).toLowerCase().localeCompare(String(b.name||b.id).toLowerCase()));
   $('content').innerHTML=`
    <div id="qbItemsPanel" style="display:none;margin-bottom:14px"></div>
    <div class="card"><h3>Parts (${parts.length})</h3>
@@ -652,10 +657,20 @@ async function viewParts(){
      <td class="right">${canEdit()?`<a class="lnk" onclick="editCost('${p.id}',${p.cost})">${money2(p.cost)}</a>`:money2(p.cost)}</td>
      <td class="right">${money(p.extValue)}</td>
      <td class="center"><span class="badge ${p.status==='ok'?'b-ok':p.status==='low'?'b-low':'b-below'}">${p.status}</span></td>
-     ${canEdit()?`<td class="right"><button class="btn sm sec" onclick="receive('${p.id}')">Receive</button></td>`:''}
+     ${canEdit()?`<td class="right" style="white-space:nowrap"><button class="btn sm sec" onclick="receive('${p.id}')">Receive</button> <button class="btn sm sec" onclick="inactivatePart('${p.id}')">Inactivate</button></td>`:''}
    </tr>`).join('')}
-   </tbody></table></div>`;
+   </tbody></table></div>
+   ${canEdit()&&inactive.length?`<div class="card"><h3>Inactive parts (${inactive.length})</h3>
+     <p class="muted" style="font-size:12px;margin-bottom:10px">Hidden from the parts list above — app only, not changed in QuickBooks. Pick one to bring it back.</p>
+     <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+       <select id="reactivateSel" style="flex:1;min-width:240px;padding:8px;border-radius:8px;border:1px solid var(--line);background:var(--panel2);color:var(--txt)">
+         ${inactive.map(p=>`<option value="${esc(p.id)}">${esc(p.name||p.id)} — ${esc(p.id)}</option>`).join('')}
+       </select>
+       <button class="btn" onclick="reactivatePart()">Reactivate</button>
+     </div></div>`:''}`;
 }
+async function inactivatePart(id){ try{await api('/api/parts/'+id,{method:'PATCH',body:JSON.stringify({active:false})});toast('Part inactivated');viewParts();}catch(e){toast(e.message);} }
+async function reactivatePart(){ const sel=$('reactivateSel'); const id=sel?sel.value:''; if(!id)return; try{await api('/api/parts/'+id,{method:'PATCH',body:JSON.stringify({active:true})});toast('Part reactivated');viewParts();}catch(e){toast(e.message);} }
 async function previewQBItems(){
   const panel=$('qbItemsPanel');
   panel.style.display='block';
@@ -1140,7 +1155,7 @@ function modal(title,html){const d=document.createElement('div');d.className='mo
 function closeModal(){const m=$('modalBg');if(m)m.remove();}
 
 let ordFilter='All', ordView='board';
-const canReorder=()=>ME&&(ME.role==='admin'||['Sales','Rep Specialist','General Manager','Shop Manager','Office Manager'].includes(ME.title));
+const canReorder=()=>ME&&(ME.role==='admin'||hasTitle('Sales','Rep Specialist','General Manager','Shop Manager','Office Manager'));
 function stageBadge(s){const m={'Quote':'b-low','Confirmed':'b-buy','Scheduled':'b-buy','In Production':'b-mfg','QC':'b-low','Ready / Shipped':'b-ok'};return `<span class="badge ${m[s]||'b-buy'}">${esc(s)}</span>`;}
 async function viewOrders(){
   $('pTitle').textContent='Orders & Fulfillment';
@@ -2132,7 +2147,7 @@ async function viewTimeoff(){
   const [list,emps]=await Promise.all([api('/api/timeoff'),api('/api/employees')]);
   toEmps=emps;
   const canApprove=r=>isAdmin()||r.mgrId===ME.id;
-  const canProcess=()=>isAdmin()||ME.title==='Office Manager';
+  const canProcess=()=>isAdmin()||hasTitle('Office Manager');
   const mine=list.filter(r=>r.status==='Pending Manager'&&canApprove(r));
   const queue=list.filter(r=>r.status==='Approved - To Payroll');
   const badge=s=>s==='Processed'?'<span class="badge b-ok">Processed</span>':s==='Approved - To Payroll'?'<span class="badge b-buy">Approved → Payroll</span>':s==='Denied'?'<span class="badge b-below">Denied</span>':'<span class="badge b-low">Pending Manager</span>';
@@ -2194,7 +2209,7 @@ async function saveOut(uid){ try{await api('/api/users/'+uid+'/outcomes',{method
 let winFilter='All', winMeta={};
 async function viewWins(){
   $('pTitle').textContent='Wins & Celebrations';$('pSub').textContent='Celebrate individual, workstation and department wins';
-  const canCel=ME.title!=='External Viewer';
+  const canCel=!(myTitles().length&&myTitles().every(t=>t==='External Viewer'));
   $('pActions').innerHTML=canCel?`<button class="btn" onclick="postWin()">🎉 Post a win</button>`:'';
   const d=await api('/api/wins');winMeta=d;
   const REACTIONS=['🎉','🙌','💪','🔥','👏'];
