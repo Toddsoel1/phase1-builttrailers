@@ -441,6 +441,30 @@ export async function syncItemsFromQBO(qbIds) {
   return { created, updated, skipped };
 }
 
+// ---- Push: Built Trailers → QB. Update each trailer item's cost from the app BOM. ----
+
+// All QB items with the fields needed to match models and read/write cost.
+export async function getQBItems() {
+  const items = await paginate('Item');
+  return items.filter(i => i.Type !== 'Group').map(i => ({
+    id: i.Id, name: i.Name || i.FullyQualifiedName || '', type: i.Type,
+    cost: Number(i.PurchaseCost ?? 0), price: Number(i.UnitPrice ?? 0),
+    syncToken: i.SyncToken, active: i.Active !== false,
+  }));
+}
+
+// Sparse-update one item's PurchaseCost — the "Cost" field in QuickBooks. Re-reads the
+// SyncToken immediately before writing so a stale token never blocks the update.
+export async function updateItemCost(itemId, cost) {
+  const found = (await query(`select Id, SyncToken from Item where Id = '${String(itemId).replace(/'/g, "\\'")}'`)).Item;
+  if (!found || !found[0]) throw new Error(`QuickBooks item ${itemId} not found`);
+  const res = await call('POST', `item?minorversion=${MINOR}`, {
+    Id: String(itemId), SyncToken: found[0].SyncToken, sparse: true,
+    PurchaseCost: Math.round(Number(cost) * 100) / 100,
+  });
+  return res.Item;
+}
+
 export async function syncInvoicesFromQBO() {
   const invoices = await paginate('Invoice');
   const models = await all('SELECT id, name FROM model', []);

@@ -1619,7 +1619,7 @@ async function saveNewVendor(){
 // ============ PHASE 4: ACCOUNTING (QuickBooks) + OCR INVOICES ============
 async function viewAccounting(){
   $('pTitle').textContent='Accounting';$('pSub').textContent='QuickBooks sync — invoices on ship, bills on PO receipt; OCR invoice intake updates costs';
-  $('pActions').innerHTML=canEdit()?`<button class="btn" onclick="pullFromQB()">⬇ Pull from QuickBooks</button>&nbsp;<button class="btn sec" onclick="syncQB()">⟳ Push pending</button>`:'';
+  $('pActions').innerHTML=(canEdit()?`<button class="btn" onclick="pullFromQB()">⬇ Pull from QuickBooks</button>&nbsp;<button class="btn sec" onclick="syncQB()">⟳ Push pending</button>`:'')+(canSee('accounting')?`&nbsp;<button class="btn sec" onclick="pushTrailerCosts()">⬆ Push trailer costs</button>`:'');
   const [acct,invoices,custs,bomCRs,batches]=await Promise.all([api('/api/accounting'),api('/api/invoices'),api('/api/customers').catch(()=>[]),api('/api/bom-change-requests?status=pending'),api('/api/invoice-batches').catch(()=>[])]);
   const t=acct.totals;
   const modeBadge=acct.mode==='quickbooks'?(acct.configured?'<span class="badge b-ok">QuickBooks connected</span>':'<span class="badge b-low">QuickBooks selected — credentials pending</span>'):'<span class="badge b-buy">Simulated mode</span>';
@@ -1813,6 +1813,54 @@ async function removeBatchOrder(bid,oid){
   catch(e){ toast(e.message); }
 }
 async function syncQB(){ try{const r=await api('/api/accounting/sync',{method:'POST'});toast(r.mode==='quickbooks'?('Pushed '+r.pushed+' to QuickBooks'):'Simulated mode — '+r.pushed+' pushed (set QBO creds to go live)');viewAccounting();}catch(e){toast(e.message);} }
+
+// ── Push trailer (model) costs to QuickBooks, computed from the app BOMs ──────
+let _tcRows=[], _tcItems=[], _tcIncludeLabor=true;
+async function pushTrailerCosts(){
+  let data; try{ data=await api('/api/accounting/trailer-costs?includeLabor='+(_tcIncludeLabor?'1':'0')); }catch(e){ return toast(e.message); }
+  _tcRows=data.rows||[]; _tcItems=data.items||[];
+  if(!data.connected){
+    return modal('Push trailer costs to QuickBooks',`<p class="muted">QuickBooks isn't connected${data.error?': '+esc(data.error):''}. Connect it first (⬇ Pull from QuickBooks), then push.</p>
+      <div class="card" style="margin-top:10px"><h4 style="margin:0 0 8px">App costs (from BOMs)</h4>
+      <table><thead><tr><th>Trailer</th><th class="right">Material</th><th class="right">Labor</th><th class="right">Total</th></tr></thead><tbody>
+      ${_tcRows.map(r=>`<tr><td>${esc(r.model)}</td><td class="right">${money(r.material)}</td><td class="right">${money(r.laborCost)}</td><td class="right"><b>${money(r.totalCost)}</b></td></tr>`).join('')}
+      </tbody></table></div>
+      <div class="row" style="margin-top:10px"><button class="btn sec" onclick="closeModal()">Close</button></div>`);
+  }
+  renderTrailerCostModal();
+}
+function syncTcSel(){ _tcRows.forEach((r,idx)=>{ const s=$('tcSel'+idx); if(s) r.qbItemId=s.value||null; }); }
+function renderTrailerCostModal(){
+  const opts=(sel)=>`<option value="">— no QB item —</option>`+_tcItems.map(i=>`<option value="${esc(i.id)}" ${i.id===sel?'selected':''}>${esc(i.name)} (cost ${money(i.cost)})</option>`).join('');
+  const body=`
+    <label style="display:flex;align-items:center;gap:8px;margin-bottom:10px;font-size:14px;cursor:pointer"><input type="checkbox" id="tcLabor" ${_tcIncludeLabor?'checked':''} onchange="syncTcSel();_tcIncludeLabor=this.checked;renderTrailerCostModal()"> Include labor in cost <span class="muted">(unchecked = material only)</span></label>
+    <table><thead><tr><th>Trailer</th><th class="right">App cost</th><th>QuickBooks item</th><th class="right">QB cost now</th><th class="center"></th></tr></thead><tbody>
+    ${_tcRows.map((r,idx)=>{const appCost=_tcIncludeLabor?r.totalCost:r.material; const willChange=r.qbItemId&&r.currentQbCost!=null&&Math.abs(r.currentQbCost-appCost)>0.005; const badge=!r.qbItemId?'<span class="badge b-buy">map →</span>':(r.currentQbCost==null?'<span class="badge b-low">set</span>':(willChange?'<span class="badge b-low">update</span>':'<span class="badge b-ok">match</span>'));
+      return `<tr>
+      <td><b>${esc(r.model)}</b></td>
+      <td class="right">${money(appCost)}</td>
+      <td><select id="tcSel${idx}" style="font-size:12px;max-width:260px">${opts(r.qbItemId)}</select></td>
+      <td class="right muted">${r.currentQbCost==null?'—':money(r.currentQbCost)}</td>
+      <td class="center">${badge}</td>
+    </tr>`;}).join('')}
+    </tbody></table>
+    <p class="muted" style="font-size:11px;margin-top:8px">Writes each trailer's app cost to its QuickBooks item <b>Cost</b> (PurchaseCost). Sales price is never changed. The chosen mapping is saved for next time.</p>
+    <div class="row" style="gap:8px;margin-top:10px"><button class="btn" onclick="doPushTrailerCosts()">⬆ Push to QuickBooks</button><button class="btn sec" onclick="closeModal()">Cancel</button></div>`;
+  modal('Push trailer costs to QuickBooks',body);
+}
+async function doPushTrailerCosts(){
+  syncTcSel();
+  const items=_tcRows.filter(r=>r.qbItemId).map(r=>({modelId:r.modelId,qbItemId:r.qbItemId}));
+  if(!items.length) return toast('Pick a QuickBooks item for at least one trailer');
+  if(!confirm(`Push ${items.length} trailer cost${items.length>1?'s':''} to QuickBooks? This updates each item's Cost in your live QuickBooks.`)) return;
+  try{
+    const r=await api('/api/accounting/trailer-costs/push',{method:'POST',body:JSON.stringify({includeLabor:_tcIncludeLabor,items})});
+    closeModal();
+    const fails=r.results.filter(x=>!x.ok);
+    toast(`Pushed ${r.pushed}/${r.total} trailer cost${r.total>1?'s':''} to QuickBooks`+(fails.length?` — ${fails.length} failed`:''));
+    modal('Push results',`<table><thead><tr><th>Trailer</th><th>Result</th></tr></thead><tbody>${r.results.map(x=>`<tr><td>${esc(x.model||x.modelId)}</td><td>${x.ok?`<span class="badge b-ok">✓ Cost set to ${money(x.cost)}</span>`:`<span class="badge b-low">✗ ${esc(x.error||'failed')}</span>`}</td></tr>`).join('')}</tbody></table><div class="row" style="margin-top:10px"><button class="btn sec" onclick="closeModal()">Close</button></div>`);
+  }catch(e){ toast(e.message); }
+}
 
 // ── Trailers & VINs ──────────────────────────────────────────────────────────
 let trailerTab='vins';
