@@ -156,7 +156,7 @@ function logout(){TOKEN=null;ME=null;$('app').classList.add('hidden');$('login')
 $('liPass').addEventListener('keydown',e=>{if(e.key==='Enter')login();});
 
 // ---- nav/render ----
-const NAV=[['dashboard','📊 Dashboard'],['orders','🔨 Build'],['daily','📋 Daily Update'],['neworder','➕ New Order'],['customers','🏬 Customers & Dealers'],['parts','📦 Parts Master'],['predict','🤖 Predictive Ordering'],['pos','🧾 Purchase Orders'],['boms','🧩 BOMs & Cost'],['inventory','📈 Inventory Value'],['accounting','💵 Accounting'],['trailers','🚛 Trailers & Warranty'],['team','👷 Team & Payroll'],['timeoff','📅 Schedule & Time Off'],['outcomes','🎯 Goals & Outcomes'],['wins','🎉 Wins'],['forecast','🔮 Forecasting & Planning'],['notify','💬 Notifications'],['support','🆘 Support'],['users','👤 Users & Roles']];
+const NAV=[['dashboard','📊 Dashboard'],['orders','🔨 Production Flow'],['daily','📋 Daily Update'],['neworder','➕ New Order'],['customers','🏬 Customers & Dealers'],['parts','📦 Parts Master'],['predict','🤖 Predictive Ordering'],['pos','🧾 Purchase Orders'],['boms','🧩 BOMs & Cost'],['inventory','📈 Inventory Value'],['accounting','💵 Accounting'],['trailers','🚛 Trailers & Warranty'],['team','👷 Team & Payroll'],['timeoff','📅 Schedule & Time Off'],['outcomes','🎯 Goals & Outcomes'],['wins','🎉 Wins'],['forecast','🔮 Forecasting & Planning'],['notify','💬 Notifications'],['support','🆘 Support'],['users','👤 Users & Roles']];
 function canSee(section){
   if(isAdmin()) return true;
   if(!ME.sections) return true; // null = all sections (admin)
@@ -212,7 +212,7 @@ const HELP={
       <li>Numbers refresh each time you navigate back to this page</li>
       <li>Red numbers = something needs attention (short inventory, pending approvals)</li>
     </ul>`},
-  orders:{title:'🔨 Build',body:`
+  orders:{title:'🔨 Production Flow',body:`
     <p>Tracks every sale from first quote through the build to invoicing.</p>
     <h4 style="color:var(--accent);margin:14px 0 6px">Stages</h4>
     <ol>
@@ -1277,8 +1277,8 @@ let ordFilter='All', ordView='board';
 const canReorder=()=>ME&&(ME.role==='admin'||hasTitle('Sales','Rep Specialist','General Manager','Shop Manager','Office Manager'));
 function stageBadge(s){const m={'Quote':'b-low','Confirmed':'b-buy','Scheduled':'b-buy','Build':'b-mfg','Paint/Powder Coat':'b-low','Finish':'b-buy','Ready':'b-ok'};return `<span class="badge ${m[s]||'b-buy'}">${esc(s)}</span>`;}
 async function viewOrders(){
-  $('pTitle').textContent='Build';
-  $('pSub').textContent=ordView==='queue'?('Production priority — '+(canReorder()?'use ↑ ↓ to resequence':'read-only')):('Build pipeline — '+(canEdit()?'drag a card to change its stage':'read-only'));
+  $('pTitle').textContent='Production Flow';
+  $('pSub').textContent=ordView==='queue'?('Production priority — '+(canReorder()?'use ↑ ↓ to resequence':'read-only')):('Production Flow pipeline — '+(canEdit()?'drag a card to change its stage':'read-only'));
   $('pActions').innerHTML=canSell()?`<button class="btn" onclick="go('neworder')">➕ New Order</button>`:'';
   const {stages,orders}=await api('/api/orders');
   const live=orders.filter(o=>!o.billed); // invoiced orders drop off the board
