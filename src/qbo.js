@@ -470,8 +470,8 @@ export async function syncInvoicesFromQBO() {
         [custId, modelId, due, id]);
       updated++;
     } else {
-      await q(`INSERT INTO sales_order(id,customer_id,model_id,qty,stage,due,deposit,channel,consumed)
-               VALUES ($1,$2,$3,$4,'Ready / Shipped',$5,0,'QuickBooks',true)`,
+      await q(`INSERT INTO sales_order(id,customer_id,model_id,qty,stage,due,deposit,channel,consumed,billed)
+               VALUES ($1,$2,$3,$4,'Ready',$5,0,'QuickBooks',true,true)`,
         [id, custId, modelId, qty, due]);
       created++;
     }

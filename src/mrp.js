@@ -14,7 +14,7 @@ async function grossDemand() {
     SELECT b.part_id, SUM(b.qty * o.qty) AS demand
       FROM sales_order o
       JOIN bom_line b ON b.model_id = o.model_id
-     WHERE o.stage <> 'Ready / Shipped'
+     WHERE o.stage <> 'Ready' AND o.billed = false
      GROUP BY b.part_id`, []);
   const d = {}; rows.forEach(r => d[r.part_id] = Number(r.demand)); return d;
 }

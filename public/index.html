@@ -153,7 +153,7 @@ function logout(){TOKEN=null;ME=null;$('app').classList.add('hidden');$('login')
 $('liPass').addEventListener('keydown',e=>{if(e.key==='Enter')login();});
 
 // ---- nav/render ----
-const NAV=[['dashboard','📊 Dashboard'],['orders','📋 Orders & Fulfillment'],['neworder','➕ New Order'],['customers','🏬 Customers & Dealers'],['parts','📦 Parts Master'],['predict','🤖 Predictive Ordering'],['pos','🧾 Purchase Orders'],['boms','🧩 BOMs & Cost'],['inventory','📈 Inventory Value'],['accounting','💵 Accounting'],['trailers','🚛 Trailers & Warranty'],['team','👷 Team & Payroll'],['timeoff','📅 Schedule & Time Off'],['outcomes','🎯 Goals & Outcomes'],['wins','🎉 Wins'],['forecast','🔮 Forecasting & Planning'],['notify','💬 Notifications'],['support','🆘 Support'],['users','👤 Users & Roles']];
+const NAV=[['dashboard','📊 Dashboard'],['orders','🔨 Build'],['neworder','➕ New Order'],['customers','🏬 Customers & Dealers'],['parts','📦 Parts Master'],['predict','🤖 Predictive Ordering'],['pos','🧾 Purchase Orders'],['boms','🧩 BOMs & Cost'],['inventory','📈 Inventory Value'],['accounting','💵 Accounting'],['trailers','🚛 Trailers & Warranty'],['team','👷 Team & Payroll'],['timeoff','📅 Schedule & Time Off'],['outcomes','🎯 Goals & Outcomes'],['wins','🎉 Wins'],['forecast','🔮 Forecasting & Planning'],['notify','💬 Notifications'],['support','🆘 Support'],['users','👤 Users & Roles']];
 function canSee(section){
   if(isAdmin()) return true;
   if(!ME.sections) return true; // null = all sections (admin)
@@ -189,7 +189,7 @@ const HELP={
     <p>Your daily command center. Everything here is <strong>read-only</strong> — it's a live snapshot of the business right now.</p>
     <h4 style="color:var(--accent);margin:14px 0 6px">What you're looking at</h4>
     <ul>
-      <li><strong>Open Orders</strong> — count of orders at each stage (Quote → Shipped)</li>
+      <li><strong>Open Orders</strong> — count of orders at each stage (Quote → Ready)</li>
       <li><strong>Inventory Value</strong> — total on-hand parts × unit cost</li>
       <li><strong>Cash Flow</strong> — invoiced (AR) vs bills owed (AP)</li>
       <li><strong>Pending Approvals</strong> — POs and BOM changes waiting for sign-off</li>
@@ -201,27 +201,28 @@ const HELP={
       <li>Numbers refresh each time you navigate back to this page</li>
       <li>Red numbers = something needs attention (short inventory, pending approvals)</li>
     </ul>`},
-  orders:{title:'📋 Orders & Fulfillment',body:`
-    <p>Tracks every sale from first quote through final shipment.</p>
-    <h4 style="color:var(--accent);margin:14px 0 6px">Order stages</h4>
+  orders:{title:'🔨 Build',body:`
+    <p>Tracks every sale from first quote through the build to invoicing.</p>
+    <h4 style="color:var(--accent);margin:14px 0 6px">Stages</h4>
     <ol>
-      <li><strong>Quote</strong> — order entered, not yet confirmed by customer</li>
-      <li><strong>Confirmed</strong> — customer committed, goes on the production schedule</li>
-      <li><strong>In Production</strong> — trailer is being built</li>
-      <li><strong>Ready / Shipped</strong> — complete; invoice auto-posts to QuickBooks; customer gets SMS if opted in</li>
+      <li><strong>Quote</strong> — entered, not yet confirmed</li>
+      <li><strong>Confirmed</strong> — customer committed, goes on the schedule</li>
+      <li><strong>Scheduled</strong> — slotted into the production queue</li>
+      <li><strong>Build</strong> — frame &amp; assembly underway</li>
+      <li><strong>Paint/Powder Coat</strong> — paint, or outsourced powder coat</li>
+      <li><strong>Finish</strong> — final assembly &amp; QC</li>
+      <li><strong>Ready</strong> — complete, <em>waiting to invoice</em></li>
     </ol>
-    <h4 style="color:var(--accent);margin:14px 0 6px">How to advance an order</h4>
-    <ol>
-      <li>Click the order row to expand it</li>
-      <li>Click the next stage button in the detail panel</li>
-      <li>The stage badge updates instantly</li>
-    </ol>
-    <h4 style="color:var(--accent);margin:14px 0 6px">Parts availability check</h4>
-    <p>The expanded order panel shows a BOM breakdown — green = enough on hand, red = shortage. Address shortages via Predictive Ordering before advancing to In Production.</p>
+    <p>From a <strong>Ready</strong> order, click <strong>🧾 Invoice &amp; close</strong> — that posts the invoice, relieves inventory, and drops it off the board.</p>
+    <h4 style="color:var(--accent);margin:14px 0 6px">Moving an order</h4>
+    <p>Drag a card between columns to change its stage. The <strong>Production Queue</strong> tab orders what's built first (Sales/managers can resequence).</p>
+    <h4 style="color:var(--accent);margin:14px 0 6px">Parts availability</h4>
+    <p>Open a card to see its BOM — green = enough on hand, red = shortage. Clear shortages via Predictive Ordering before moving into Build.</p>
     <h4 style="color:var(--accent);margin:14px 0 6px">Who can do what</h4>
     <ul>
-      <li><strong>Viewer</strong> — read-only, see all orders and details</li>
-      <li><strong>Editor / Admin</strong> — create orders, advance stages, add notes</li>
+      <li><strong>Viewer</strong> — read-only</li>
+      <li><strong>Editor / Admin</strong> — create orders, advance stages</li>
+      <li><strong>Sales</strong> — invoice a Ready order</li>
     </ul>`},
   neworder:{title:'➕ New Order',body:`
     <p>Create a new sales order in three steps.</p>
@@ -1156,20 +1157,21 @@ function closeModal(){const m=$('modalBg');if(m)m.remove();}
 
 let ordFilter='All', ordView='board';
 const canReorder=()=>ME&&(ME.role==='admin'||hasTitle('Sales','Rep Specialist','General Manager','Shop Manager','Office Manager'));
-function stageBadge(s){const m={'Quote':'b-low','Confirmed':'b-buy','Scheduled':'b-buy','In Production':'b-mfg','QC':'b-low','Ready / Shipped':'b-ok'};return `<span class="badge ${m[s]||'b-buy'}">${esc(s)}</span>`;}
+function stageBadge(s){const m={'Quote':'b-low','Confirmed':'b-buy','Scheduled':'b-buy','Build':'b-mfg','Paint/Powder Coat':'b-low','Finish':'b-buy','Ready':'b-ok'};return `<span class="badge ${m[s]||'b-buy'}">${esc(s)}</span>`;}
 async function viewOrders(){
-  $('pTitle').textContent='Orders & Fulfillment';
-  $('pSub').textContent=ordView==='queue'?('Production priority — '+(canReorder()?'use ↑ ↓ to resequence':'read-only')):('Pipeline by trailer type — '+(canEdit()?'drag a card to change its stage':'read-only'));
+  $('pTitle').textContent='Build';
+  $('pSub').textContent=ordView==='queue'?('Production priority — '+(canReorder()?'use ↑ ↓ to resequence':'read-only')):('Build pipeline — '+(canEdit()?'drag a card to change its stage':'read-only'));
   $('pActions').innerHTML=canSell()?`<button class="btn" onclick="go('neworder')">➕ New Order</button>`:'';
   const {stages,orders}=await api('/api/orders');
+  const live=orders.filter(o=>!o.billed); // invoiced orders drop off the board
   const viewToggle=`<div class="tabs" style="margin-bottom:12px"><button class="${ordView==='board'?'active':''}" onclick="ordView='board';viewOrders()">🗂️ Board</button><button class="${ordView==='queue'?'active':''}" onclick="ordView='queue';viewOrders()">🏭 Production Queue</button></div>`;
   if(ordView==='queue'){ $('content').innerHTML=viewToggle+renderQueue(orders); return; }
-  const types=['All',...Array.from(new Set(orders.map(o=>o.type)))];
-  const filtered=ordFilter==='All'?orders:orders.filter(o=>o.type===ordFilter);
-  const tabs=`<div class="tabs">${types.map(t=>`<button class="${ordFilter===t?'active':''}" onclick="ordFilter='${t}';viewOrders()">${t}<span style="opacity:.7;margin-left:5px">${t==='All'?orders.length:orders.filter(o=>o.type===t).length}</span></button>`).join('')}</div>`;
+  const types=['All',...Array.from(new Set(live.map(o=>o.type)))];
+  const filtered=ordFilter==='All'?live:live.filter(o=>o.type===ordFilter);
+  const tabs=`<div class="tabs">${types.map(t=>`<button class="${ordFilter===t?'active':''}" onclick="ordFilter='${t}';viewOrders()">${t}<span style="opacity:.7;margin-left:5px">${t==='All'?live.length:live.filter(o=>o.type===t).length}</span></button>`).join('')}</div>`;
   const board=`<div class="kanban">${stages.map(st=>`
     <div class="col" ondragover="event.preventDefault();this.classList.add('over')" ondragleave="this.classList.remove('over')" ondrop="dropOrder(event,'${st}')">
-      <h4>${st.split(' ')[0]}<span>${filtered.filter(o=>o.stage===st).length}</span></h4>
+      <h4>${esc(st)}<span>${filtered.filter(o=>o.stage===st).length}</span></h4>
       ${filtered.filter(o=>o.stage===st).map(o=>`<div class="ocard" draggable="${canEdit()}" ondragstart="window._drag='${o.id}'" onclick="orderDetail('${o.id}')">
         <div class="t"><span>${o.id}</span><span>${money(o.revenue)}</span></div>
         <div>${o.qty}× ${o.model}</div>
@@ -1178,15 +1180,15 @@ async function viewOrders(){
   // per-type summary
   const summary=`<div class="card" style="margin-top:16px"><h3>Fulfillment by trailer type</h3>
    <table><thead><tr><th>Type</th><th class="right">Open orders</th><th class="right">Units</th><th class="right">Backlog value</th></tr></thead><tbody>
-   ${Array.from(new Set(orders.map(o=>o.type))).map(t=>{const os=orders.filter(o=>o.type===t&&o.stage!=='Ready / Shipped');return `<tr><td><b>${t}</b></td><td class="right">${os.length}</td><td class="right">${os.reduce((a,o)=>a+o.qty,0)}</td><td class="right">${money(os.reduce((a,o)=>a+o.revenue,0))}</td></tr>`;}).join('')}
+   ${Array.from(new Set(live.map(o=>o.type))).map(t=>{const os=live.filter(o=>o.type===t);return `<tr><td><b>${t}</b></td><td class="right">${os.length}</td><td class="right">${os.reduce((a,o)=>a+o.qty,0)}</td><td class="right">${money(os.reduce((a,o)=>a+o.revenue,0))}</td></tr>`;}).join('')}
    </tbody></table></div>`;
   $('content').innerHTML=viewToggle+tabs+board+summary;
 }
 function renderQueue(orders){
-  const q=orders.filter(o=>o.stage!=='Ready / Shipped').sort((a,b)=>(a.prodSeq??1e9)-(b.prodSeq??1e9));
+  const q=orders.filter(o=>o.stage!=='Ready' && !o.billed).sort((a,b)=>(a.prodSeq??1e9)-(b.prodSeq??1e9));
   window._queue=q.map(o=>o.id);
   const editable=canReorder();
-  if(!q.length) return `<div class="card"><p class="muted">No active orders in the production queue. Orders appear here until they ship.</p></div>`;
+  if(!q.length) return `<div class="card"><p class="muted">No active orders in the production queue. Orders appear here until they reach Ready.</p></div>`;
   const rows=q.map((o,i)=>`<tr>
       <td class="center" style="font-weight:700;color:var(--accent);font-size:15px">${i+1}</td>
       <td><b>${esc(o.id)}</b><br><span class="muted" style="font-size:11px">${esc(o.customer||'')}</span></td>
@@ -1214,7 +1216,7 @@ async function dropOrder(e,stage){
   if(!canEdit()||!window._drag)return;
   const id=window._drag;window._drag=null;
   try{ await api('/api/orders/'+id+'/stage',{method:'PATCH',body:JSON.stringify({stage})});
-    toast(stage==='Ready / Shipped'?id+' shipped — inventory consumed':id+' → '+stage); viewOrders();
+    toast(stage==='Ready'?id+' → Ready (waiting to invoice)':id+' → '+stage); viewOrders();
   }catch(err){toast(err.message);}
 }
 async function orderDetail(id){
@@ -1226,7 +1228,13 @@ async function orderDetail(id){
     <h3 style="font-size:12px;color:var(--muted);text-transform:uppercase;margin-bottom:6px">Parts required</h3>
     <table><thead><tr><th>Part</th><th class="right">Need</th><th class="right">On hand</th><th class="center">Status</th></tr></thead><tbody>
     ${o.bom.map(b=>`<tr><td>${b.name}</td><td class="right">${b.need}</td><td class="right">${b.onHand}</td><td class="center">${b.short?'<span class="badge b-below">short</span>':'<span class="badge b-ok">ok</span>'}</td></tr>`).join('')}
-    </tbody></table>`);
+    </tbody></table>
+    ${canSell()&&o.stage==='Ready'?`<div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--line)"><button class="btn" onclick="invoiceOrder('${o.id}')">🧾 Invoice &amp; close</button> <span class="muted" style="font-size:12px">Posts the invoice, relieves inventory, and removes it from the board.</span></div>`:''}`);
+}
+async function invoiceOrder(id){
+  if(!confirm('Invoice this order?\n\nThis consumes its parts from inventory, posts the customer invoice, and removes it from the Build board.'))return;
+  try{ await api('/api/orders/'+id+'/invoice',{method:'POST'}); closeModal(); toast(id+' invoiced — off the board'); viewOrders(); }
+  catch(e){ toast(e.message); }
 }
 
 async function viewNewOrder(){

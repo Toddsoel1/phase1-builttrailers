@@ -61,7 +61,7 @@ export async function actionItemsFor(user) {
   if (has('orders')) {
     const n = await count(
       `SELECT COUNT(*)::int AS n FROM sales_order
-        WHERE stage NOT IN ('Quote','Ready / Shipped')
+        WHERE stage NOT IN ('Quote','Ready') AND billed = false
           AND due IS NOT NULL AND due <= (CURRENT_DATE + INTERVAL '7 days')`);
     if (n) items.push({ key: 'orders_due', icon: '📋',
       label: `${plural(n, 'order')} due within 7 days`, count: n, link: 'orders' });

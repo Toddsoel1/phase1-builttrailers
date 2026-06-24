@@ -800,10 +800,23 @@ app.patch('/api/orders/:id/stage', authMiddleware, requireTier('editor'), async 
   const cur = await one('SELECT * FROM sales_order WHERE id=$1', [req.params.id]);
   if (!cur) return res.status(404).json({ error: 'not found' });
   await q('UPDATE sales_order SET stage=$1 WHERE id=$2', [stage, req.params.id]);
-  if (stage === 'Ready / Shipped' && !cur.consumed) await consumeInventory(req.params.id, req.user.id);
   await audit(req, 'order.stage', `${req.params.id} -> ${stage}`);
   await sms.notifyOrderStage(req.params.id, stage, req.user.id); // Phase 6: text the customer
   await dealernotify.notifyDealer(cur.customer_id, 'order', `Order ${req.params.id} is now "${stage}".`, req.params.id);
+  res.json({ ok: true });
+});
+// Invoice a finished (Ready) order: consume its BOM from inventory, post the customer
+// invoice, mark it billed, and drop it off the Build board. Decoupled from the stage so
+// "Ready" just means waiting to invoice.
+app.post('/api/orders/:id/invoice', authMiddleware, requireSales, async (req, res) => {
+  const cur = await one('SELECT * FROM sales_order WHERE id=$1', [req.params.id]);
+  if (!cur) return res.status(404).json({ error: 'not found' });
+  if (cur.billed) return res.status(400).json({ error: 'This order is already invoiced.' });
+  if (cur.stage !== 'Ready') return res.status(400).json({ error: 'Move the order to Ready before invoicing.' });
+  if (cur.invoice_batch_id) return res.status(400).json({ error: 'This order is part of an invoice batch — invoice the batch instead.' });
+  await consumeInventory(req.params.id, req.user.id); // consume BOM + post invoice + mark billed
+  await audit(req, 'order.invoice', req.params.id);
+  await dealernotify.notifyDealer(cur.customer_id, 'order', `Order ${req.params.id} has been invoiced.`, req.params.id);
   res.json({ ok: true });
 });
 
@@ -1403,6 +1416,10 @@ if (kind === 'postgres' || kind === 'pglite') {
     `ALTER TABLE customer ADD COLUMN IF NOT EXISTS active BOOLEAN NOT NULL DEFAULT true`,
     // Soft-inactivate parts (app use only — does not touch QuickBooks).
     `ALTER TABLE part ADD COLUMN IF NOT EXISTS active BOOLEAN NOT NULL DEFAULT true`,
+    // Build lifecycle: remap legacy production stages to Build / Paint/Powder Coat / Finish / Ready.
+    `UPDATE sales_order SET stage='Build'  WHERE stage='In Production'`,
+    `UPDATE sales_order SET stage='Finish' WHERE stage='QC'`,
+    `UPDATE sales_order SET stage='Ready'  WHERE stage='Ready / Shipped'`,
     // Align terminology: the two account kinds are now "Dealership" and "Customer".
     `UPDATE customer SET kind='Customer' WHERE kind='Retail'`,
   ];
