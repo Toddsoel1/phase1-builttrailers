@@ -7,7 +7,7 @@
 //   pos 12-17 sequential serial
 // WMI and plant are stored in app_config so Accounting can set the real
 // NHTSA-assigned values before any live VINs are issued.
-import { all, one, q } from './db.js';
+import { one, q } from './db.js';
 
 const DEFAULTS = { wmi: 'BLT', plant: 'A' };
 

@@ -14,6 +14,7 @@
     "briefing": "node scripts/send-briefing.js",
     "verify": "node db/verify.js",
     "backup": "node scripts/backup-db.js",
+    "lint": "eslint . && node scripts/lint-frontend.mjs",
     "test": "node --test test/"
   },
   "dependencies": {
@@ -33,6 +34,9 @@
     "web-push": "^3.6.7"
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "eslint": "^10.5.0",
+    "globals": "^17.7.0",
     "sharp": "^0.35.2"
   }
 }

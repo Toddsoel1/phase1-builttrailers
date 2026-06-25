@@ -41,7 +41,7 @@ export async function saveAttachments(entityType, entityId, items, by) {
     if (!it || typeof it.dataUrl !== 'string' || !it.dataUrl.startsWith('data:')) continue;
     const ct = (/^data:([^;]+)/.exec(it.dataUrl) || [])[1] || '';
     const kind = it.kind || (ct.startsWith('video') ? 'video' : ct.startsWith('image') ? 'photo' : 'document');
-    let filePath = null;
+    let filePath;
     try { filePath = await saveUpload(`${entityType}-${entityId}`, it.dataUrl); } catch { continue; }
     if (!filePath) continue;
     await q(`INSERT INTO attachment(entity_type,entity_id,kind,file_path,original_name,content_type,uploaded_by) VALUES($1,$2,$3,$4,$5,$6,$7)`,
