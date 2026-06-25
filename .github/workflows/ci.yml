@@ -1,0 +1,20 @@
+name: CI
+
+# Runs the smoke + syntax suite on every push and pull request. The tests use in-process
+# PGlite, so no database service is needed. Make this check "required" in branch protection
+# to block merging (and therefore deploying) when it's red.
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+      - run: npm ci
+      - run: npm test
