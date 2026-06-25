@@ -53,6 +53,26 @@ function makeUsername(name, seen) {
   return un;
 }
 
+// Ensure the permission roles exist — idempotent, never deletes. Safe to run on every boot.
+async function ensureRoles() {
+  for (const [name, tier] of ROLES)
+    await q('INSERT INTO role(name,tier) VALUES ($1,$2) ON CONFLICT (name) DO NOTHING', [name, tier]);
+}
+
+// On a genuinely empty database, create a single owner admin so the app is usable — without
+// loading any demo data. Credentials come from env; falls back to a default that MUST be changed.
+async function ensureOwnerAdmin() {
+  const have = Number((await q('SELECT count(*)::int AS c FROM app_user')).rows[0].c);
+  if (have > 0) return;
+  const username = process.env.OWNER_USERNAME || 'tsoelberg';
+  const name = process.env.OWNER_NAME || 'Owner';
+  const pw = process.env.OWNER_PASSWORD || 'built2026';
+  await q('INSERT INTO app_user(id,name,username,password_hash,title,role) VALUES ($1,$2,$3,$4,$5,$6)',
+    ['owner', name, username, hashPassword(pw), 'General Manager', 'admin']);
+  if (process.env.OWNER_PASSWORD) console.log(`Created owner admin "${username}".`);
+  else console.warn(`⚠ Created owner admin "${username}" with the DEFAULT password "built2026" — change it now (or set OWNER_PASSWORD).`);
+}
+
 async function run() {
   const kind = await initDb();
   console.log('DB:', kind);
@@ -60,12 +80,30 @@ async function run() {
   for (const stmt of schema.split(/;\s*\n/).map(s => s.trim()).filter(Boolean)) {
     await q(stmt + ';');
   }
-  // Idempotency guard: if data already exists, do not wipe/reseed (safe to run on every deploy).
-  const existing = await q('SELECT count(*)::int AS c FROM app_user').catch(() => ({ rows: [{ c: 0 }] }));
-  if (Number(existing.rows[0].c) > 0) {
-    console.log(`Already seeded (${existing.rows[0].c} users) — skipping reseed.`);
+  // Fail-SAFE guard: only ever (re)seed a verifiably EMPTY database, and never wipe on error.
+  // If app_user can't be read, ABORT — a transient DB hiccup must never trigger a wipe.
+  let userCount;
+  try {
+    userCount = Number((await q('SELECT count(*)::int AS c FROM app_user')).rows[0].c);
+  } catch (e) {
+    console.error('Could not read app_user — refusing to seed to avoid data loss:', e.message);
+    process.exit(1);
+  }
+  if (userCount > 0) {
+    console.log(`Already seeded (${userCount} users) — leaving all data untouched.`);
+    await ensureRoles();          // keep permission roles current; never touches user/business data
     process.exit(0);
   }
+  // Empty database. In production (no SEED_DEMO) DO NOT load demo data and DO NOT delete
+  // anything — just ensure roles + an owner admin so the app is usable. The destructive demo
+  // seed below runs ONLY when SEED_DEMO=1 (local/dev), so a deploy can never auto-wipe prod.
+  if (process.env.SEED_DEMO !== '1') {
+    await ensureRoles();
+    await ensureOwnerAdmin();
+    console.log('Empty DB — created roles + owner admin only. Set SEED_DEMO=1 to load full demo data.');
+    process.exit(0);
+  }
+  console.log('SEED_DEMO=1 — loading the full demo dataset (clears existing rows first).');
   // clear (children first)
   for (const t of ['approval_request', 'approval_rule', 'notification', 'win_reaction', 'win', 'self_goal', 'user_outcome', 'time_off', 'employee',
                    'accounting_event', 'vendor_invoice', 'purchase_order', 'sales_order',

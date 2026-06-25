@@ -12,7 +12,8 @@
     "build": "node db/seed.js",
     "dev": "node src/server.js",
     "briefing": "node scripts/send-briefing.js",
-    "verify": "node db/verify.js"
+    "verify": "node db/verify.js",
+    "backup": "node scripts/backup-db.js"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.105.0",

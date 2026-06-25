@@ -6,8 +6,9 @@ services:
     runtime: node
     plan: starter            # free/low-cost tier; upgrade as needed
     buildCommand: npm install
-    # Seed runs at startup, when DATABASE_URL is connected (Render does not expose it at build
-    # time). The seed is idempotent — it only loads data on first run, then no-ops.
+    # init-db ensures the schema + permission roles on every boot. It is FAIL-SAFE: it never
+    # deletes data, aborts if it can't read the users table, and loads demo data only when
+    # SEED_DEMO=1 — so a deploy can never wipe production.
     startCommand: npm run init-db && npm start
     healthCheckPath: /api/health
     envVars:
@@ -19,6 +20,32 @@ services:
         generateValue: true   # Render generates a strong secret
       - key: LABOR_RATE
         value: "37"
+      - key: NODE_VERSION
+        value: "20"
+
+  # Nightly off-box backup: exports every table to a gzipped JSON in Cloudflare R2.
+  # This is a safety net IN ADDITION TO Render's managed Postgres backups (enable those in
+  # the database dashboard). Set the four R2_* values on this service for it to upload;
+  # remove this block if you'd rather rely on Render backups alone.
+  - type: cron
+    name: built-trailers-backup
+    runtime: node
+    schedule: "0 8 * * *"          # daily, 08:00 UTC
+    buildCommand: npm install
+    startCommand: npm run backup
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: built-trailers-db
+          property: connectionString
+      - key: R2_ACCOUNT_ID
+        sync: false
+      - key: R2_ACCESS_KEY_ID
+        sync: false
+      - key: R2_SECRET_ACCESS_KEY
+        sync: false
+      - key: R2_BUCKET
+        sync: false
       - key: NODE_VERSION
         value: "20"
 
