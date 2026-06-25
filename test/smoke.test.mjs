@@ -111,6 +111,18 @@ test('inventory valuation exposes the raw / make / WIP / finished buckets', asyn
     assert.equal(typeof v[k], 'number', `bucket ${k} present`);
 });
 
+test('batched modelsSummary matches per-model modelRollup (N+1 refactor correctness)', async () => {
+  const list = await json(await api('/api/models'));
+  assert.ok(list.length, 'models present');
+  for (const m of list.slice(0, 6)) {
+    const one = await json(await api('/api/models/' + encodeURIComponent(m.id)));
+    assert.equal(Math.round(m.material * 100), Math.round(one.material * 100), `material ${m.id}`);
+    assert.equal(Math.round(m.laborCost * 100), Math.round(one.laborCost * 100), `labor ${m.id}`);
+    assert.equal(Math.round(m.totalCost * 100), Math.round(one.totalCost * 100), `total ${m.id}`);
+    assert.equal(m.bom.length, one.bom.length, `bom line count ${m.id}`);
+  }
+});
+
 test('create an app-only Make part', async () => {
   const r = await api('/api/parts', { method: 'POST', body: JSON.stringify({ name: 'Smoke Test Bracket', cost: 12.5, uom: 'ea' }) });
   assert.equal(r.status, 200);

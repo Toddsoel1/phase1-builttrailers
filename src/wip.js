@@ -66,6 +66,23 @@ export async function orderWip(orderId) {
   return Number(m?.v || 0) + await laborDoneValue(orderId);
 }
 
+// WIP value for EVERY order in two aggregate queries (vs. two per order) — { orderId: value }.
+// Identical math to orderWip(); used by the valuation + WIP-report callers.
+export async function orderWipMap() {
+  const [mat, lab] = await Promise.all([
+    all('SELECT order_id, COALESCE(SUM(ext_value),0) AS v FROM inventory_consumption GROUP BY order_id', []).catch(() => []),
+    all(`SELECT d.order_id AS order_id, COALESCE(SUM(ml.hours * COALESCE(ml.rate,35) * o.qty),0) AS v
+           FROM order_stage_done d
+           JOIN sales_order o  ON o.id = d.order_id
+           JOIN model_labor ml ON ml.model_id = o.model_id AND ml.stage = d.stage
+          GROUP BY d.order_id`, []).catch(() => []),
+  ]);
+  const map = {};
+  for (const r of mat) map[r.order_id] = Number(r.v);
+  for (const r of lab) map[r.order_id] = (map[r.order_id] || 0) + Number(r.v);
+  return map;
+}
+
 // Log a daily production update. If stageComplete, consume that stage's BOM and advance the
 // order to the next production stage so the board reflects progress.
 export async function logWork({ userId, orderId, workstation, stage, hours, note, stageComplete, logDate }) {
@@ -139,14 +156,17 @@ export async function wipReport() {
        LEFT JOIN customer c ON c.id=o.customer_id
       WHERE o.billed = false AND o.stage NOT IN ('Quote','Confirmed','Scheduled')
       ORDER BY o.production_seq NULLS LAST, o.id`, []).catch(() => []);
-  const out = [];
-  for (const o of orders) {
-    const wip = await orderWip(o.id);
-    const doneStages = (await all('SELECT stage FROM order_stage_done WHERE order_id=$1', [o.id]).catch(() => []))
-      .map(r => r.stage);
-    out.push({ id: o.id, model: o.model, customer: o.customer, stage: o.stage, qty: o.qty, wip, doneStages });
-  }
-  return out;
+  // WIP value + done stages for all orders up front, instead of two queries per order.
+  const [wipMap, doneRows] = await Promise.all([
+    orderWipMap(),
+    all('SELECT order_id, stage FROM order_stage_done', []).catch(() => []),
+  ]);
+  const doneBy = {};
+  for (const r of doneRows) (doneBy[r.order_id] ||= []).push(r.stage);
+  return orders.map(o => ({
+    id: o.id, model: o.model, customer: o.customer, stage: o.stage, qty: o.qty,
+    wip: wipMap[o.id] || 0, doneStages: doneBy[o.id] || [],
+  }));
 }
 
 // "How much inventory each workstation consumed" — material $ rolled up by workstation.

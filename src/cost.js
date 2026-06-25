@@ -2,7 +2,7 @@
 // Manufactured parts store raw-material cost directly; build labor comes from each
 // model's labor routing × a burdened blended rate (real payroll arrives in Phase 5).
 import { all } from './db.js';
-import { orderWip } from './wip.js';
+import { orderWipMap } from './wip.js';
 
 export const LABOR_RATE = Number(process.env.LABOR_RATE || 37); // fallback $/hr if a workstation has no staff
 export const LABOR_BURDEN = Number(process.env.LABOR_BURDEN || 1.32); // payroll tax + benefits multiplier
@@ -16,15 +16,9 @@ export async function wsRates() {
 }
 export function partUnitCost(part) { return Number(part.cost) || 0; }
 
-export async function modelRollup(modelId, rates) {
-  const m = (await all('SELECT * FROM model WHERE id=$1', [modelId]))[0];
-  if (!m) return null;
-  if (!rates) rates = await wsRates();
-  const lines = await all(
-    `SELECT b.part_id, b.qty, b.stage, p.name, p.type, p.cost
-       FROM bom_line b JOIN part p ON p.id=b.part_id
-      WHERE b.model_id=$1 ORDER BY p.type DESC, p.id`, [modelId]);
-  const labor = await all('SELECT ws, hours, rate, stage FROM model_labor WHERE model_id=$1', [modelId]);
+// Pure rollup from already-fetched rows (no DB access) — the shared math behind both the
+// single-model modelRollup and the bulk modelsSummary, so the two can never diverge.
+function computeRollup(m, lines, labor, rates) {
   // Per-stage rollup of material + labor — the foundation for WIP valuation (phase 4).
   const STAGE_LIST = ['Build', 'Paint/Powder Coat', 'Finish'];
   const stageOf = s => STAGE_LIST.includes(s) ? s : 'Build';
@@ -53,12 +47,32 @@ export async function modelRollup(modelId, rates) {
   };
 }
 
+export async function modelRollup(modelId, rates) {
+  const m = (await all('SELECT * FROM model WHERE id=$1', [modelId]))[0];
+  if (!m) return null;
+  if (!rates) rates = await wsRates();
+  const lines = await all(
+    `SELECT b.part_id, b.qty, b.stage, p.name, p.type, p.cost
+       FROM bom_line b JOIN part p ON p.id=b.part_id
+      WHERE b.model_id=$1 ORDER BY p.type DESC, p.id`, [modelId]);
+  const labor = await all('SELECT ws, hours, rate, stage FROM model_labor WHERE model_id=$1', [modelId]);
+  return computeRollup(m, lines, labor, rates);
+}
+
+// Bulk version — fetches every model, BOM line and labor step in 4 queries total (was ~3
+// per model), then rolls up in memory. Same output as mapping modelRollup over the models.
 export async function modelsSummary() {
-  const models = await all('SELECT id FROM model ORDER BY category, id', []);
-  const rates = await wsRates();
-  const out = [];
-  for (const r of models) out.push(await modelRollup(r.id, rates));
-  return out;
+  const [models, allLines, allLabor, rates] = await Promise.all([
+    all('SELECT * FROM model ORDER BY category, id', []),
+    all(`SELECT b.model_id, b.part_id, b.qty, b.stage, p.name, p.type, p.cost
+           FROM bom_line b JOIN part p ON p.id=b.part_id ORDER BY p.type DESC, p.id`, []),
+    all('SELECT model_id, ws, hours, rate, stage FROM model_labor', []),
+    wsRates(),
+  ]);
+  const linesBy = {}, laborBy = {};
+  for (const l of allLines) (linesBy[l.model_id] ||= []).push(l);
+  for (const l of allLabor) (laborBy[l.model_id] ||= []).push(l);
+  return models.map(m => computeRollup(m, linesBy[m.id] || [], laborBy[m.id] || [], rates));
 }
 
 export async function inventoryValuation() {
@@ -72,10 +86,13 @@ export async function inventoryValuation() {
   // WIP + finished: value capitalized in un-invoiced orders. Materials consumed into these
   // orders have already left part.on_hand, so adding WIP on top is not double counting —
   // value simply flowed from raw stock into work-in-process.
-  const open = await all(`SELECT id, stage FROM sales_order WHERE billed = false`, []).catch(() => []);
+  const [open, wipMap] = await Promise.all([
+    all(`SELECT id, stage FROM sales_order WHERE billed = false`, []).catch(() => []),
+    orderWipMap(),
+  ]);
   let wipValue = 0, finishedValue = 0;
   for (const o of open) {
-    const v = await orderWip(o.id);
+    const v = wipMap[o.id] || 0;
     if (v <= 0) continue;
     if (o.stage === 'Ready') finishedValue += v; else wipValue += v;
   }
