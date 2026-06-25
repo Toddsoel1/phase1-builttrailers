@@ -48,8 +48,20 @@ after(() => {
   try { rmSync(dbDir, { recursive: true, force: true }); } catch {}
 });
 
-test('health endpoint responds', async () => {
-  assert.equal((await api('/api/health')).status, 200);
+test('health endpoint reports DB status + uptime', async () => {
+  const r = await api('/api/health');
+  assert.equal(r.status, 200);
+  const d = await r.json();
+  assert.equal(d.ok, true);
+  assert.ok(d.db, 'reports db kind');
+  assert.equal(typeof d.uptime, 'number');
+  assert.ok(r.headers.get('x-request-id'), 'request id header set');
+});
+
+test('client-error endpoint accepts a front-end crash report', async () => {
+  const r = await api('/api/client-error', { method: 'POST', body: JSON.stringify({ kind: 'error', message: 'smoke client error', url: 'http://x/test' }) });
+  assert.equal(r.status, 200);
+  assert.equal((await r.json()).ok, true);
 });
 
 test('login succeeds and rejects a bad password', async () => {

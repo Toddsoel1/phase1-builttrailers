@@ -30,6 +30,13 @@ services:
         value: "37"
       - key: NODE_VERSION
         value: "20"
+      # Optional observability — set either/both to be alerted the moment something breaks:
+      #   ALERT_WEBHOOK_URL — instant Slack/Discord ping on any server error (no extra deps)
+      #   SENTRY_DSN        — full error dashboard (also run: npm install @sentry/node)
+      # - key: ALERT_WEBHOOK_URL
+      #   sync: false
+      # - key: SENTRY_DSN
+      #   sync: false
 
   # Nightly off-box backup: exports every table to a gzipped JSON in Cloudflare R2.
   # This is a safety net IN ADDITION TO Render's managed Postgres backups (enable those in

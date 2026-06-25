@@ -13,6 +13,7 @@ import cors from 'cors';
 import rateLimit from 'express-rate-limit';
 import { createHmac, timingSafeEqual } from 'crypto';
 import { initDb, dbKind, q, all, one } from './db.js';
+import { log, captureError, initObservability, requestId, uptimeSeconds } from './observability.js';
 import { authMiddleware, requireTier, signToken, checkPassword, hashPassword } from './auth.js';
 import { modelRollup, modelsSummary, inventoryValuation } from './cost.js';
 import { STAGES, canSell, canReorderProduction, trailerTypes, customersWithTypes, allowedTypesFor, ordersFull, consumeInventory, setProductionOrder } from './orders.js';
@@ -46,8 +47,9 @@ if (!process.env.JWT_SECRET) {
 // request lifecycle (e.g. the briefing scheduler, a background timer) should be
 // logged rather than crash the process. Route-handler errors are handled cleanly
 // by express-async-errors + the error middleware below; these are the backstop.
-process.on('unhandledRejection', (err) => console.error('unhandledRejection:', err));
-process.on('uncaughtException', (err) => console.error('uncaughtException:', err));
+// Structured logging + unhandledRejection/uncaughtException capture (forwards to Sentry and/or
+// an alert webhook when SENTRY_DSN / ALERT_WEBHOOK_URL are set).
+initObservability();
 
 function requireSales(req, res, next) {
   if (!canSell(req.user)) return res.status(403).json({ error: 'Order management is controlled by Sales' });
@@ -85,6 +87,7 @@ const app = express();
 // the original https (via x-forwarded-proto). Without this, OAuth redirect_uris are
 // built as http:// and Intuit rejects them as unregistered.
 app.set('trust proxy', 1);
+app.use(requestId()); // tag every request with an id; log 5xx + slow responses
 
 // Security headers (CSP disabled — app uses inline scripts/styles)
 app.use(helmet({ contentSecurityPolicy: false, crossOriginEmbedderPolicy: false }));
@@ -289,8 +292,29 @@ app.get('/t&cs',    (_req, res) => res.sendFile(path.join(__dir, '..', 'public',
 
 // ---- health ----
 app.get('/api/health', async (_req, res) => {
-  try { await q('SELECT 1'); res.json({ ok: true, db: dbKind() }); }
-  catch (e) { res.status(500).json({ ok: false, error: String(e) }); }
+  try {
+    await q('SELECT 1');
+    res.json({ ok: true, status: 'ok', db: dbKind(), uptime: uptimeSeconds() });
+  } catch (e) {
+    // 503 (not 200) so an uptime monitor / Render health check treats a DB outage as down.
+    log.error('health check failed: database unreachable', { err: String(e) });
+    res.status(503).json({ ok: false, status: 'degraded', error: 'database unreachable' });
+  }
+});
+// Front-end crash capture — the browser posts uncaught errors here so they're visible
+// server-side too. Unauthenticated (errors happen logged-out) and rate-limited.
+const clientErrLimiter = rateLimit({ windowMs: 60_000, max: 40, standardHeaders: true, legacyHeaders: false });
+app.post('/api/client-error', clientErrLimiter, (req, res) => {
+  const b = req.body || {};
+  log.warn('client_error', {
+    kind: String(b.kind || 'error').slice(0, 40),
+    message: String(b.message || '').slice(0, 500),
+    url: String(b.url || '').slice(0, 300),
+    stack: String(b.stack || '').slice(0, 2000),
+    ua: String(req.headers['user-agent'] || '').slice(0, 200),
+    id: req.id,
+  });
+  res.json({ ok: true });
 });
 
 // ---- auth ----
@@ -1433,9 +1457,10 @@ app.get('*', (req, res) => res.sendFile(path.join(__dir, '..', 'public', portalP
 // Logs the full error server-side and returns a generic 500 so stack traces and
 // internal details never leak to the client.
 app.use((err, req, res, next) => {
-  console.error('Unhandled route error:', err);
+  // Funnel through captureError: structured log + Sentry/webhook (when configured).
+  captureError(err, { route: `${req.method} ${req.path}`, id: req.id, user: req.user?.id });
   if (res.headersSent) return next(err); // response already started — let Express finish/abort it
-  res.status(500).json({ error: 'Internal error' });
+  res.status(500).json({ error: 'Internal error', requestId: req.id });
 });
 
 const PORT = process.env.PORT || 3000;

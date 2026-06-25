@@ -116,6 +116,15 @@ a.lnk{color:var(--blue);cursor:pointer}
 const API = window.location.origin;
 let TOKEN = null, ME = null, page = 'dashboard';
 const $ = id => document.getElementById(id);
+// Report uncaught front-end errors to the server so a browser crash is visible in the logs too.
+(function(){ let n=0; const MAX=10;
+  function report(kind,message,stack){ if(n++>=MAX) return;
+    try{ const body=JSON.stringify({kind,message:String(message||'').slice(0,500),stack:String(stack||'').slice(0,2000),url:location.href});
+      if(navigator.sendBeacon) navigator.sendBeacon('/api/client-error', new Blob([body],{type:'application/json'}));
+      else fetch('/api/client-error',{method:'POST',headers:{'Content-Type':'application/json'},body,keepalive:true}); }catch(e){} }
+  window.addEventListener('error', e=>report('error', e.message, e.error&&e.error.stack));
+  window.addEventListener('unhandledrejection', e=>report('unhandledrejection', (e.reason&&e.reason.message)||e.reason, e.reason&&e.reason.stack));
+})();
 const money = n => '$' + Math.round(n).toLocaleString();
 const money2 = n => '$' + (Math.round(n*100)/100).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});
 // Escape user-supplied strings before inserting into innerHTML
