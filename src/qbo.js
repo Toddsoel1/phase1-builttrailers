@@ -4,6 +4,7 @@
 import 'dotenv/config';
 import crypto from 'crypto';
 import { q, one, all } from './db.js';
+import { captureError } from './observability.js';
 
 // Thrown for any Intuit auth/authorization failure so callers can prompt reconnect
 export class QBOAuthError extends Error {
@@ -105,6 +106,7 @@ export async function exchangeCode(code, redirectUri, state, realmId) {
 
 // ---- Token management ----
 let tokenCache = { access: null, exp: 0 };
+let refreshInFlight = null; // single-flight guard so concurrent calls share one token refresh
 
 async function activeRefreshToken() {
   return (await getRefreshTokenInfo()).token;
@@ -135,19 +137,30 @@ export async function activeRealmId() {
 
 async function accessToken() {
   if (tokenCache.access && Date.now() < tokenCache.exp) return tokenCache.access;
-  const refreshToken = await activeRefreshToken();
-  if (!refreshToken) throw new QBOAuthError('No QBO refresh token — reconnect QuickBooks via Settings → Accounting');
-  const basic = Buffer.from(`${process.env.QBO_CLIENT_ID}:${process.env.QBO_CLIENT_SECRET}`).toString('base64');
-  const res = await fetch(await tokenEndpoint(), {
-    method: 'POST',
-    headers: { Authorization: `Basic ${basic}`, 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' },
-    body: new URLSearchParams({ grant_type: 'refresh_token', refresh_token: refreshToken }),
-  });
-  if (!res.ok) throw new QBOAuthError(`QuickBooks authorization expired — please reconnect (token refresh ${res.status})`);
-  const j = await res.json();
-  tokenCache = { access: j.access_token, exp: Date.now() + (j.expires_in - 60) * 1000 };
-  await setConfig('qbo_refresh_token', j.refresh_token);  // persist the rotated token
-  return tokenCache.access;
+  // Single-flight: Intuit rotates AND invalidates the refresh token on every use, so two
+  // simultaneous refreshes would revoke each other and 400 the connection. Concurrent callers
+  // share the one in-flight refresh instead of each kicking off their own.
+  if (refreshInFlight) return refreshInFlight;
+  refreshInFlight = (async () => {
+    const refreshToken = await activeRefreshToken();
+    if (!refreshToken) throw new QBOAuthError('No QBO refresh token — reconnect QuickBooks via Settings → Accounting');
+    const basic = Buffer.from(`${process.env.QBO_CLIENT_ID}:${process.env.QBO_CLIENT_SECRET}`).toString('base64');
+    const res = await fetch(await tokenEndpoint(), {
+      method: 'POST',
+      headers: { Authorization: `Basic ${basic}`, 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' },
+      body: new URLSearchParams({ grant_type: 'refresh_token', refresh_token: refreshToken }),
+    });
+    if (!res.ok) {
+      const err = new QBOAuthError(`QuickBooks authorization expired — please reconnect (token refresh ${res.status})`);
+      captureError(err, { area: 'qbo', op: 'token_refresh', status: res.status }); // alert: connection is down
+      throw err;
+    }
+    const j = await res.json();
+    tokenCache = { access: j.access_token, exp: Date.now() + (j.expires_in - 60) * 1000 };
+    await setConfig('qbo_refresh_token', j.refresh_token);  // persist the rotated token
+    return tokenCache.access;
+  })().finally(() => { refreshInFlight = null; });
+  return refreshInFlight;
 }
 
 // Disconnect QuickBooks: best-effort revoke at Intuit, drop the rotating refresh token
