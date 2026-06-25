@@ -1,5 +1,13 @@
 # Render Blueprint — one-click deploy of Built Trailers Phase 1 (web service + managed Postgres).
 # In Render: New > Blueprint > connect this repo. Render reads this file and provisions everything.
+
+# STAGING (opt-in): uncomment to give every pull request its own throwaway preview environment
+# — a full app + database copy Render builds automatically — so changes are exercised there
+# before they reach production. Each open PR spins up resources, which adds cost; remove or
+# leave commented to rely on CI + manual promotion instead.
+# previews:
+#   generation: automatic
+
 services:
   - type: web
     name: built-trailers-phase1
