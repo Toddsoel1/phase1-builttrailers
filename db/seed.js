@@ -4,11 +4,11 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { initDb, q } from '../src/db.js';
+import { ensureSchema } from './migrate.js';
 import { hashPassword } from '../src/auth.js';
 
 const __dir = path.dirname(fileURLToPath(import.meta.url));
 const catalog = JSON.parse(fs.readFileSync(path.join(__dir, 'catalog.json'), 'utf8'));
-const schema = fs.readFileSync(path.join(__dir, 'schema.sql'), 'utf8');
 
 const VENDORS = [
   ['v_axle', 'Dexter Axle Co.', 12, 'Net 30'],
@@ -76,10 +76,8 @@ async function ensureOwnerAdmin() {
 async function run() {
   const kind = await initDb();
   console.log('DB:', kind);
-  // schema (idempotent)
-  for (const stmt of schema.split(/;\s*\n/).map(s => s.trim()).filter(Boolean)) {
-    await q(stmt + ';');
-  }
+  // base schema + incremental migrations (shared with server boot — one source of truth)
+  await ensureSchema();
   // Fail-SAFE guard: only ever (re)seed a verifiably EMPTY database, and never wipe on error.
   // If app_user can't be read, ABORT — a transient DB hiccup must never trigger a wipe.
   let userCount;
