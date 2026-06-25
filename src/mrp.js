@@ -6,8 +6,6 @@ import { all, one, q } from './db.js';
 import { postBill } from './accounting.js';
 import { requestApprovals } from './approvals.js';
 
-const SAFETY_DAYS = 3;
-
 async function grossDemand() {
   // sum of BOM qty * order qty across open (non-shipped) orders
   const rows = await all(`
@@ -47,7 +45,6 @@ export async function mrp() {
     const proj = Number(p.on_hand) + oo - dem;
     const daysCover = cons > 0 ? Number(p.on_hand) / cons : 999;
     const reorderLevel = Number(p.reorder) + Number(p.cushion);
-    const leadCushion = lead + SAFETY_DAYS;
     let action = 'OK', sev = 'ok', suggestQty = 0, orderBy = '';
     const isMake = p.type === 'M';
     // Shortage is measured on PROJECTED on-hand (current + already on order − demand),

@@ -14,9 +14,9 @@ import rateLimit from 'express-rate-limit';
 import { createHmac, timingSafeEqual } from 'crypto';
 import { initDb, dbKind, q, all, one } from './db.js';
 import { authMiddleware, requireTier, signToken, checkPassword, hashPassword } from './auth.js';
-import { modelRollup, modelsSummary, inventoryValuation, partUnitCost } from './cost.js';
+import { modelRollup, modelsSummary, inventoryValuation } from './cost.js';
 import { STAGES, canSell, canReorderProduction, trailerTypes, customersWithTypes, allowedTypesFor, ordersFull, consumeInventory, setProductionOrder } from './orders.js';
-import { logWork, dailyReport, wipReport, consumptionByWorkstation, workstations, PROD_STAGES } from './wip.js';
+import { logWork, dailyReport, wipReport, consumptionByWorkstation, workstations } from './wip.js';
 import { mrp, poList, createPO, receivePO } from './mrp.js';
 import { accountingMode, qboConfigured, ledger, totals, sync, scanInvoice, invoiceList } from './accounting.js';
 import { getAuthUrl, exchangeCode, syncCustomersFromQBO, syncItemsFromQBO, syncInvoicesFromQBO, previewItemsFromQBO, QBOAuthError, QBOFeatureError, qboErrorLog, getRefreshTokenInfo, disconnectQBO, getRealmInfo, getQBItems, updateItemCost } from './qbo.js';
@@ -25,7 +25,7 @@ import { forecast, workingCapital, scenario } from './forecast.js';
 import * as sms from './sms.js';
 import * as approvals from './approvals.js';
 import * as support from './support.js';
-import { actionItemsFor, resolveUserForInbox } from './inbox.js';
+import { actionItemsFor } from './inbox.js';
 import { sendMorningBriefings, previewBriefingFor } from './briefing.js';
 import * as invoicing from './invoicing.js';
 import * as trailers from './trailers.js';
@@ -1553,7 +1553,6 @@ if (kind === 'postgres' || kind === 'pglite') {
     const secs = r.tier==='admin' ? ALL_SECTIONS : r.tier==='editor' ? EDITOR_SECTIONS : VIEWER_SECTIONS;
     for (const s of secs) await q(`INSERT INTO role_section(role_name,section) VALUES($1,$2) ON CONFLICT DO NOTHING`, [r.name, s]);
   }
-  const unusedMigrations = [];
   for (const m of colMigrations) {
     await q(m).catch(e => console.warn('col migration:', e.message));
   }

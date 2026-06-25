@@ -3,7 +3,7 @@
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { initDb, q, dbKind } from '../src/db.js';
+import { initDb, q } from '../src/db.js';
 import { hashPassword } from '../src/auth.js';
 
 const __dir = path.dirname(fileURLToPath(import.meta.url));

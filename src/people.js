@@ -117,7 +117,7 @@ export async function wins() {
     const r = rx.filter(x => x.win_id === w.id);
     const reactions = {};
     REACTIONS.forEach(e => { const a = r.filter(x => x.emoji === e).map(x => x.user_id); if (a.length) reactions[e] = a; });
-    let targetLabel = w.target;
+    let targetLabel;
     if (w.scope === 'individual') targetLabel = uname(w.target);
     else if (w.scope === 'workstation') targetLabel = w.target + ' workstation';
     else targetLabel = w.target + ' department';

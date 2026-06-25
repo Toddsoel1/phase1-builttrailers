@@ -182,7 +182,13 @@ async function render(){
     if(pa&&!pa.querySelector('.help-btn')){
       pa.insertAdjacentHTML('beforeend',`<button class="btn sm sec help-btn" onclick="showHelp('${page}')" title="How to use this section" style="margin-left:6px">? Help</button>`);
     }
-  }catch(e){ $('content').innerHTML=`<div class="card">Error: ${e.message}</div>`; }
+  }catch(e){
+    console.error('view load failed:', page, e);
+    $('content').innerHTML=`<div class="card" style="border-color:var(--danger,#c0392b)">
+      <h3 style="margin:0 0 6px">Couldn't load this page</h3>
+      <p class="muted" style="margin:0 0 12px">${esc(e.message||'Something went wrong.')}</p>
+      <button class="btn" onclick="render()">↻ Retry</button></div>`;
+  }
 }
 function kpi(t,v,s){return `<div class="card kpi"><h3>${t}</h3><div class="v">${v}</div><div class="s">${s}</div></div>`;}
 
@@ -807,7 +813,7 @@ async function showBom(id){
    ${m.bom.map(b=>`<tr>
      <td>${esc(b.name)}${b.type==='M'?' <span class="badge b-mfg">MAKE</span>':''}</td>
      <td><select onchange="setBomStage('${id}','${b.partId||b.id}',this.value)" ${isAdmin()?'':'disabled'} style="font-size:12px;padding:2px 4px">${stageOpts(b.stage)}</select></td>
-     <td class="right"><input type="number" value="${b.qty}" min="0.01" step="0.01" style="width:70px;text-align:right" onchange="saveBomQty('${id}','${b.partId||b.id}',${JSON.stringify(b.name)},${b.qty},this.value,this)" ${isAdmin()?'':'disabled'}></td>
+     <td class="right"><input type="number" value="${b.qty}" min="0.01" step="0.01" style="width:70px;text-align:right" onchange="saveBomQty('${id}','${b.partId||b.id}',${ja(b.name)},${b.qty},this.value,this)" ${isAdmin()?'':'disabled'}></td>
      <td class="right">${money2(b.unitCost)}</td>
      <td class="right">${money2(b.ext)}</td>
      ${isAdmin()?`<td><button class="btn" style="padding:2px 8px;font-size:11px;background:var(--danger,#c0392b)" title="Propose removal" onclick="delBomLine('${id}','${b.partId||b.id}',${ja(b.name)})">✕</button></td>`:''}
@@ -1132,7 +1138,7 @@ async function manageTitles(userId,userName){
     <p class="muted" style="font-size:13px;margin-bottom:12px">Check the titles this person holds. Their access is the union of all assigned titles.</p>
     <div style="display:flex;flex-direction:column;gap:6px;max-height:320px;overflow-y:auto">
     ${roles.map(r=>`<label style="display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:6px;border:1px solid var(--border);cursor:pointer">
-      <input type="checkbox" ${assigned.has(r.name)?'checked':''} onchange="toggleUserTitle('${userId}',${JSON.stringify(r.name)},this.checked)">
+      <input type="checkbox" ${assigned.has(r.name)?'checked':''} onchange="toggleUserTitle('${userId}',${ja(r.name)},this.checked)">
       <span><b>${esc(r.name)}</b> <span class="pill ${r.tier}" style="font-size:10px">${r.tier}</span></span>
     </label>`).join('')}
     </div>
