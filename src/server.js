@@ -233,6 +233,7 @@ app.post('/api/public/maintenance', portalLimiter, async (req, res) => {
 });
 
 // ---- Owner account portal (owner.builttrailers.app) ----
+app.get('/owner', (_req, res) => res.sendFile(path.join(__dir, '..', 'public', 'owner.html')));
 app.post('/api/owner/register', portalLimiter, async (req, res) => {
   try { res.json(await owner.register(req.body || {})); } catch (e) { res.status(400).json({ error: e.message }); }
 });
@@ -1475,7 +1476,7 @@ app.delete('/api/support/tickets/:id', authMiddleware, requireTier('admin'), asy
 app.use(express.static(path.join(__dir, '..', 'public'), { index: false }));
 function portalPageFor(req) {
   const sub = String(req.hostname || '').split('.')[0].toLowerCase();
-  if (sub === 'owner') return 'register.html';                 // owner.builttrailers.app
+  if (sub === 'owner') return 'owner.html';                    // owner.builttrailers.app (account portal)
   if (sub === 'dealership' || sub === 'dealer') return 'dealership.html'; // dealership.builttrailers.app
   return 'index.html';                                          // app.builttrailers.app (staff)
 }

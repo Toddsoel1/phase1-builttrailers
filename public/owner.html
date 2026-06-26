@@ -1,0 +1,348 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Built Trailers — Owner Portal</title>
+<link rel="icon" type="image/png" sizes="192x192" href="/icons/icon-192.png">
+<link rel="manifest" href="/manifest-owner.json">
+<meta name="theme-color" content="#0f1419">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="BT Owner">
+<link rel="apple-touch-icon" href="/icons/icon-180.png">
+<style>
+:root{--accent:#ff7a18;--ink:#1a2230;--muted:#6b7785;--line:#e2e7ec;--bg:#f4f6f8;--ok:#1a7f4b;--warn:#b26a00;--err:#c0392b}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;background:var(--bg);color:var(--ink);line-height:1.5}
+.top{background:#0f1419;color:#fff;padding:16px 20px}
+.top .wrap{max-width:760px;margin:0 auto;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px}
+.top h1{font-size:18px;letter-spacing:.5px}.top h1 b{color:var(--accent)}
+.top .sub{font-size:12.5px;color:#9aa7b4}
+.top .right{display:flex;align-items:center;gap:8px}
+.wrap{max-width:760px;margin:0 auto;padding:18px 20px}
+.tabs{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:14px}
+.tabs button{flex:1;min-width:120px;background:#fff;border:1px solid var(--line);border-radius:9px;padding:10px;font-size:13.5px;font-weight:600;color:var(--muted);cursor:pointer}
+.tabs button.active{background:var(--ink);color:#fff;border-color:var(--ink)}
+.card{background:#fff;border:1px solid var(--line);border-radius:13px;padding:18px;margin-bottom:14px}
+.card h2{font-size:17px;margin-bottom:4px}
+.lead{color:var(--muted);font-size:13.5px;margin-bottom:12px}
+label{display:block;font-size:13px;font-weight:600;margin:12px 0 5px}
+label.req::after{content:" *";color:var(--accent)}
+input,select,textarea{width:100%;border:1px solid var(--line);border-radius:9px;padding:12px;font-size:16px;font-family:inherit;background:#fff;color:var(--ink)}
+input:focus,select:focus,textarea:focus{outline:none;border-color:var(--accent)}
+textarea{min-height:84px;resize:vertical}
+.vinrow{display:flex;gap:8px}.vinrow input{flex:1;font-family:ui-monospace,monospace;letter-spacing:1px;text-transform:uppercase}
+.row{display:flex;gap:12px;flex-wrap:wrap}.row>*{flex:1;min-width:150px}
+.btn{background:var(--accent);color:#1a1206;border:none;padding:12px 18px;border-radius:9px;font-weight:700;font-size:15px;cursor:pointer;width:100%;margin-top:16px}
+.btn:disabled{opacity:.5;cursor:not-allowed}.btn:active{transform:translateY(1px)}
+.btn.sec{background:#eef1f4;color:var(--ink);width:auto;margin:0;padding:10px 15px;font-size:14px}
+.btn.ghost{background:none;color:var(--accent);width:auto;margin:0;padding:4px 2px;font-size:13.5px;font-weight:600;text-decoration:underline}
+.msg{padding:11px 14px;border-radius:9px;font-size:14px;margin-top:14px;display:none}
+.msg.ok{background:#e8f6ee;border:1px solid #b6e2c6;color:var(--ok);display:block}
+.msg.warn{background:#fff4e2;border:1px solid #ffd99a;color:var(--warn);display:block}
+.msg.err{background:#fdecea;border:1px solid #f5c3bc;color:var(--err);display:block}
+.lookup{font-size:13px;margin-top:8px;color:var(--muted);min-height:18px}.lookup b{color:var(--ink)}
+.hidden{display:none}
+.pill{display:inline-block;font-size:11px;font-weight:700;padding:2px 9px;border-radius:20px;text-transform:uppercase;letter-spacing:.3px}
+.pill.verified{background:#e8f6ee;color:var(--ok)}.pill.pending{background:#fff4e2;color:var(--warn)}
+.tr{border:1px solid var(--line);border-radius:11px;padding:13px;margin-bottom:10px}
+.tr .vin{font-family:ui-monospace,monospace;font-weight:700;letter-spacing:.5px}
+.tr .meta{font-size:12.5px;color:var(--muted);margin-top:3px}
+table{width:100%;border-collapse:collapse;font-size:13.5px}
+th,td{text-align:left;padding:9px 8px;border-bottom:1px solid var(--line);vertical-align:top}
+th{font-size:11px;text-transform:uppercase;letter-spacing:.4px;color:var(--muted)}
+.muted{color:var(--muted)}.small{font-size:12.5px}
+footer{max-width:760px;margin:8px auto 30px;padding:0 20px;font-size:12px;color:var(--muted);text-align:center}
+footer a{color:var(--accent)}
+@media(max-width:560px){.wrap{padding:14px}.card{padding:16px}.row{flex-direction:column;gap:0}table{display:block;overflow-x:auto;white-space:nowrap}}
+</style>
+</head>
+<body>
+<div class="top"><div class="wrap">
+  <div><h1>BUILT <b>TRAILERS</b></h1><div class="sub">Owner Portal</div></div>
+  <div class="right">
+    <button class="btn sec installBtn" style="display:none" onclick="promptInstall()">📲 Install app</button>
+    <button id="logoutBtn" class="btn sec hidden" onclick="logout()">Log out</button>
+  </div>
+</div></div>
+
+<div class="wrap">
+
+  <!-- ============ AUTH (logged out) ============ -->
+  <div id="auth">
+    <div class="tabs">
+      <button id="tabLogin" class="active" onclick="showAuth('login')">Log In</button>
+      <button id="tabRegister" onclick="showAuth('register')">Register a Trailer</button>
+    </div>
+
+    <div id="paneLogin" class="card">
+      <h2>Owner log in</h2>
+      <p class="lead">Sign in to file warranty claims, log maintenance, and access your documents.</p>
+      <label class="req">Email</label><input id="liEmail" type="email" autocomplete="username">
+      <label class="req">Password</label><input id="liPass" type="password" autocomplete="current-password">
+      <button class="btn" onclick="doLogin()">Log In</button>
+      <div style="margin-top:12px"><button class="btn ghost" onclick="showAuth('forgot')">Forgot your password?</button></div>
+      <div id="liMsg" class="msg"></div>
+    </div>
+
+    <div id="paneRegister" class="card hidden">
+      <h2>Register your trailer &amp; create your account</h2>
+      <p class="lead">Register within <b>15 days</b> of purchase to keep your warranty valid. Your email becomes your login.</p>
+      <label class="req">Trailer VIN (17 characters)</label>
+      <div class="vinrow">
+        <input id="rVin" maxlength="17" placeholder="e.g. BLTUT7X14TA000001" oninput="this.value=this.value.toUpperCase()">
+        <button class="btn sec" onclick="lookupVin()">Look up</button>
+      </div>
+      <div id="rLookup" class="lookup"></div>
+      <label class="req">Owner full name</label><input id="rOwner" placeholder="First and last name">
+      <div class="row">
+        <div><label class="req">Date of purchase</label><input id="rSale" type="date"></div>
+        <div><label>Phone</label><input id="rPhone" type="tel" placeholder="(optional)"></div>
+      </div>
+      <label>Warranty / mailing address</label><input id="rAddr" placeholder="(optional)">
+      <label class="req">Email (your login)</label><input id="rEmail" type="email" autocomplete="username">
+      <div class="row">
+        <div><label class="req">Password</label><input id="rPass" type="password" autocomplete="new-password" placeholder="At least 8 characters"></div>
+        <div><label class="req">Confirm password</label><input id="rPass2" type="password" autocomplete="new-password"></div>
+      </div>
+      <button class="btn" onclick="doRegister()">Register &amp; create account</button>
+      <div id="rMsg" class="msg"></div>
+    </div>
+
+    <div id="paneForgot" class="card hidden">
+      <h2>Reset your password</h2>
+      <p class="lead">Enter your account email and we'll send you a reset link.</p>
+      <label class="req">Email</label><input id="fEmail" type="email" autocomplete="username">
+      <button class="btn" onclick="doForgot()">Send reset link</button>
+      <div style="margin-top:12px"><button class="btn ghost" onclick="showAuth('login')">← Back to log in</button></div>
+      <div id="fMsg" class="msg"></div>
+    </div>
+
+    <div id="paneReset" class="card hidden">
+      <h2>Choose a new password</h2>
+      <p class="lead">Enter a new password for your account.</p>
+      <label class="req">New password</label><input id="rsPass" type="password" autocomplete="new-password" placeholder="At least 8 characters">
+      <label class="req">Confirm new password</label><input id="rsPass2" type="password" autocomplete="new-password">
+      <button class="btn" onclick="doReset()">Set new password</button>
+      <div id="rsMsg" class="msg"></div>
+    </div>
+  </div>
+
+  <!-- ============ DASHBOARD (logged in) ============ -->
+  <div id="dash" class="hidden">
+    <p id="hello" class="lead" style="margin:0 0 12px"></p>
+    <div class="tabs">
+      <button id="navTrailers" class="active" onclick="showTab('trailers')">My Trailers</button>
+      <button id="navClaim" onclick="showTab('claim')">File a Claim</button>
+      <button id="navMaint" onclick="showTab('maint')">Log Maintenance</button>
+      <button id="navDocs" onclick="showTab('docs')">Documents</button>
+    </div>
+
+    <div id="tabTrailers">
+      <div class="card"><h2>My trailers</h2><div id="trailersBody"><p class="lead">Loading…</p></div></div>
+    </div>
+
+    <div id="tabClaim" class="hidden">
+      <div class="card">
+        <h2>File a warranty claim</h2>
+        <p class="lead">Notify us within 10 days of discovering the issue. Include clear photos.</p>
+        <label class="req">Trailer</label><select id="clVin"></select>
+        <label class="req">Describe the issue</label><textarea id="clIssue" placeholder="What's wrong, when it started, and any details."></textarea>
+        <label>Photos (optional)</label><input id="clPhotos" type="file" accept="image/*" multiple>
+        <button class="btn" onclick="doClaim()">Submit claim</button>
+        <div id="clMsg" class="msg"></div>
+      </div>
+      <div class="card"><h2>My claims</h2><div id="claimsBody"><p class="lead">Loading…</p></div></div>
+    </div>
+
+    <div id="tabMaint" class="hidden">
+      <div class="card">
+        <h2>Log maintenance</h2>
+        <p class="lead">Keeping records is required to maintain warranty coverage. Pick the task from the schedule.</p>
+        <label class="req">Trailer</label><select id="mtVin"></select>
+        <label class="req">Maintenance item</label><select id="mtItem"></select>
+        <div class="row">
+          <div><label class="req">Date performed</label><input id="mtDate" type="date"></div>
+          <div><label>Mileage / hours</label><input id="mtMiles" placeholder="(optional)"></div>
+        </div>
+        <label>Parts used</label><input id="mtParts" placeholder="(optional)">
+        <label>Notes</label><textarea id="mtNote" placeholder="(optional)"></textarea>
+        <button class="btn" onclick="doMaint()">Log it</button>
+        <div id="mtMsg" class="msg"></div>
+      </div>
+      <div class="card"><h2>Maintenance history</h2><div id="maintBody"><p class="lead">Loading…</p></div></div>
+    </div>
+
+    <div id="tabDocs" class="hidden">
+      <div class="card"><h2>Documents</h2><p class="lead">Your warranty policy, maintenance schedule, owner's manuals, and spec sheets.</p><div id="docsBody"><p class="lead">Loading…</p></div></div>
+    </div>
+  </div>
+</div>
+
+<footer>Built Trailers · <a href="/terms">Warranty terms</a> · Questions? (435) 767-7174</footer>
+
+<script>
+const $=id=>document.getElementById(id);
+function esc(s){const d=document.createElement('div');d.textContent=String(s??'');return d.innerHTML;}
+let TOKEN=localStorage.getItem('ownerToken')||'';
+let OWNER=null, TRAILERS=[];
+
+async function api(path,opts={}){
+  const r=await fetch(path,{...opts,headers:{'Content-Type':'application/json','Accept':'application/json',...(TOKEN?{Authorization:'Bearer '+TOKEN}:{}),...(opts.headers||{})}});
+  const d=await r.json().catch(()=>({}));
+  if(!r.ok) throw new Error(d.error||('Error '+r.status));
+  return d;
+}
+function showMsg(id,kind,text){const e=$(id);e.className='msg '+kind;e.textContent=text;}
+function fileToDataUrl(f){return new Promise((res,rej)=>{const r=new FileReader();r.onload=()=>res(r.result);r.onerror=rej;r.readAsDataURL(f);});}
+
+// ---- auth screen switching ----
+function showAuth(t){
+  ['login','register','forgot','reset'].forEach(p=>$('pane'+p[0].toUpperCase()+p.slice(1)).classList.toggle('hidden',p!==t));
+  $('tabLogin').classList.toggle('active',t==='login');
+  $('tabRegister').classList.toggle('active',t==='register');
+}
+async function doLogin(){
+  try{ const d=await api('/api/owner/login',{method:'POST',body:JSON.stringify({email:$('liEmail').value.trim(),password:$('liPass').value})});
+    setSession(d); }catch(e){ showMsg('liMsg','err',e.message); }
+}
+async function doRegister(){
+  if($('rPass').value!==$('rPass2').value) return showMsg('rMsg','err','Passwords do not match.');
+  const body={vin:$('rVin').value.trim(),ownerName:$('rOwner').value.trim(),name:$('rOwner').value.trim(),
+    saleDate:$('rSale').value,phone:$('rPhone').value.trim()||undefined,warrantyAddress:$('rAddr').value.trim()||undefined,
+    email:$('rEmail').value.trim(),password:$('rPass').value};
+  try{ const d=await api('/api/owner/register',{method:'POST',body:JSON.stringify(body)}); setSession(d); }
+  catch(e){ showMsg('rMsg','err',e.message); }
+}
+async function doForgot(){
+  try{ await api('/api/owner/forgot',{method:'POST',body:JSON.stringify({email:$('fEmail').value.trim()})});
+    showMsg('fMsg','ok','If an account exists for that email, a reset link is on its way. Check your inbox.'); }
+  catch{ showMsg('fMsg','ok','If an account exists for that email, a reset link is on its way.'); }
+}
+async function doReset(){
+  if($('rsPass').value!==$('rsPass2').value) return showMsg('rsMsg','err','Passwords do not match.');
+  const token=new URLSearchParams(location.search).get('token');
+  try{ await api('/api/owner/reset',{method:'POST',body:JSON.stringify({token,password:$('rsPass').value})});
+    showMsg('rsMsg','ok','Password updated — you can now log in.'); setTimeout(()=>{location.href='/';},1500); }
+  catch(e){ showMsg('rsMsg','err',e.message); }
+}
+function setSession(d){ TOKEN=d.token; localStorage.setItem('ownerToken',TOKEN); OWNER=d.owner; enterDash(); }
+function logout(){ TOKEN=''; localStorage.removeItem('ownerToken'); OWNER=null; $('dash').classList.add('hidden'); $('auth').classList.remove('hidden'); $('logoutBtn').classList.add('hidden'); showAuth('login'); }
+
+async function lookupVin(){
+  const vin=$('rVin').value.trim(); if(!vin) return;
+  $('rLookup').textContent='Looking up…';
+  try{ const d=await api('/api/public/trailer/'+encodeURIComponent(vin));
+    $('rLookup').innerHTML=d.model?`Found: <b>${esc(d.model)}</b>${d.alreadyRegistered?' — already registered':''}`:'VIN not found — check the 17-character VIN.'; }
+  catch(e){ $('rLookup').textContent=e.message; }
+}
+
+// ---- dashboard ----
+async function enterDash(){
+  $('auth').classList.add('hidden'); $('dash').classList.remove('hidden'); $('logoutBtn').classList.remove('hidden');
+  try{ OWNER=await api('/api/owner/me'); }catch{ return logout(); }
+  $('hello').innerHTML='Signed in as <b>'+esc(OWNER.email)+'</b>';
+  renderMaintItems();
+  showTab('trailers');
+}
+function showTab(t){
+  ['trailers','claim','maint','docs'].forEach(p=>{ $('tab'+p[0].toUpperCase()+p.slice(1)).classList.toggle('hidden',p!==t);
+    $('nav'+p[0].toUpperCase()+p.slice(1)).classList.toggle('active',p===t); });
+  if(t==='trailers') loadTrailers();
+  if(t==='claim'){ loadTrailers(); loadClaims(); }
+  if(t==='maint'){ loadTrailers(); loadMaintenance(); }
+  if(t==='docs') loadDocs();
+}
+function vinOptions(sel){ return TRAILERS.length?TRAILERS.map(t=>`<option value="${esc(t.vin)}">${esc(t.vin)} — ${esc(t.model||'')}</option>`).join(''):'<option value="">No registered trailers</option>'; }
+async function loadTrailers(){
+  try{ TRAILERS=await api('/api/owner/trailers');
+    $('trailersBody').innerHTML=TRAILERS.length?TRAILERS.map(t=>`<div class="tr"><div class="vin">${esc(t.vin)}</div>
+      <div class="meta">${esc(t.model||'Trailer')}${t.category?' · '+esc(t.category):''} · purchased ${esc(t.saleDate||'—')} · ${t.termMonths||12}-mo warranty</div>
+      <div style="margin-top:6px"><span class="pill ${t.status==='verified'?'verified':'pending'}">${esc(t.status||'pending')}</span></div></div>`).join('')
+      :'<p class="lead">No trailers registered to this account yet. Use <b>Register a Trailer</b> after logging out, or contact us.</p>';
+    if($('clVin')) $('clVin').innerHTML=vinOptions(); if($('mtVin')) $('mtVin').innerHTML=vinOptions();
+  }catch(e){ $('trailersBody').innerHTML='<p class="msg err">'+esc(e.message)+'</p>'; }
+}
+async function loadClaims(){
+  try{ const cs=await api('/api/owner/claims');
+    $('claimsBody').innerHTML=cs.length?`<table><thead><tr><th>Claim</th><th>Trailer</th><th>Status</th><th>Issue</th></tr></thead><tbody>
+      ${cs.map(c=>`<tr><td><b>${esc(c.id)}</b><div class="small muted">${c.openedAt?new Date(c.openedAt).toLocaleDateString():''}</div></td><td class="small">${esc(c.vin)}</td><td><span class="pill ${c.status==='Open'?'pending':'verified'}">${esc(c.status||'Open')}</span></td><td class="small">${esc(c.issue||'')}</td></tr>`).join('')}
+      </tbody></table>`:'<p class="lead">No claims filed.</p>';
+  }catch(e){ $('claimsBody').innerHTML='<p class="msg err">'+esc(e.message)+'</p>'; }
+}
+async function doClaim(){
+  const vin=$('clVin').value, issue=$('clIssue').value.trim();
+  if(!vin) return showMsg('clMsg','err','Select a trailer.');
+  if(!issue) return showMsg('clMsg','err','Please describe the issue.');
+  let attachments=[];
+  try{ for(const f of [...$('clPhotos').files].slice(0,6)) attachments.push({dataUrl:await fileToDataUrl(f),kind:'photo',name:f.name}); }catch{}
+  try{ const d=await api('/api/owner/claims',{method:'POST',body:JSON.stringify({vin,issue,attachments})});
+    showMsg('clMsg','ok','Claim '+d.id+' submitted. We\'ll be in touch.'); $('clIssue').value=''; $('clPhotos').value=''; loadClaims(); }
+  catch(e){ showMsg('clMsg','err',e.message); }
+}
+
+const MAINTENANCE_ITEMS={
+  "Pre-Trip & General":["Pre-trip safety check","Tire pressure & condition","Lug nuts checked / tightened"],
+  "Wheels, Lugs & Tires":["Lug nut re-torque (10/25/50 mi or annual)","Tire pressure set to placard","Tire inspection (tread / cracks / wear)","Tire replacement (age 5–6 yrs)","Spare tire check"],
+  "Wheel Bearings & Hubs":["Inspect bearing play & grease","Repack / replace bearings & seals","Bearing protectors serviced (submersion)","Hub temperature check"],
+  "Brakes & Breakaway":["Test brake function","Inspect magnets / shoes / drums","Breakaway switch & battery test","Full brake service"],
+  "Lights, Wiring & Connectors":["Lights & turn signals check","Connector / harness inspection"],
+  "Coupler, Chains, Jack & Hardware":["Coupler & ball lube / latch check","Safety chains inspection","Jack lubrication & function","Fasteners re-torqued"],
+  "Suspension":["Leaf spring inspection","U-bolt re-torque","Shackle / equalizer / bushing check"],
+  "Frame, Welds & Corrosion":["Frame & weld inspection","Fresh-water rinse (corrosion)","Touch-up chips / rust"],
+  "Boat / Pontoon / Watercraft":["Bunk carpet inspection","Bunk board inspection","Roller inspection & lube","Winch strap & bow stop check","Post-launch fresh-water rinse"],
+  "Utility / UTV / Landscape":["Decking inspection (wood / composite / metal)","Deck fastener check","Ramp / gate hinge & latch service","Tie-downs / D-rings / stake pockets","Fender check"],
+  "Storage & Off-Season":["Off-season storage prep","Breakaway / brake battery charge","Bearing service before storage"],
+  "Other":["Other (describe in notes)"]
+};
+function renderMaintItems(){
+  $('mtItem').innerHTML=Object.entries(MAINTENANCE_ITEMS).map(([g,items])=>`<optgroup label="${esc(g)}">${items.map(i=>`<option value="${esc(i)}">${esc(i)}</option>`).join('')}</optgroup>`).join('');
+}
+async function loadMaintenance(){
+  try{ const ms=await api('/api/owner/maintenance');
+    $('maintBody').innerHTML=ms.length?`<table><thead><tr><th>Date</th><th>Trailer</th><th>Item</th><th>Mi/Hr</th><th>Parts</th></tr></thead><tbody>
+      ${ms.map(m=>`<tr><td class="small">${esc(m.performedOn||'')}</td><td class="small">${esc(m.vin)}</td><td class="small">${esc(m.item)}${m.note?`<div class="muted">${esc(m.note)}</div>`:''}</td><td class="small">${esc(m.mileage||'')}</td><td class="small">${esc(m.parts||'')}</td></tr>`).join('')}
+      </tbody></table>`:'<p class="lead">No maintenance logged yet.</p>';
+  }catch(e){ $('maintBody').innerHTML='<p class="msg err">'+esc(e.message)+'</p>'; }
+}
+async function doMaint(){
+  const vin=$('mtVin').value, item=$('mtItem').value;
+  if(!vin) return showMsg('mtMsg','err','Select a trailer.');
+  if(!item) return showMsg('mtMsg','err','Select a maintenance item.');
+  try{ await api('/api/owner/maintenance',{method:'POST',body:JSON.stringify({vin,item,performedOn:$('mtDate').value||undefined,mileage:$('mtMiles').value.trim()||undefined,parts:$('mtParts').value.trim()||undefined,note:$('mtNote').value.trim()||undefined})});
+    showMsg('mtMsg','ok','Logged. Keep up the good work — it protects your warranty.'); $('mtNote').value=''; $('mtParts').value=''; $('mtMiles').value=''; loadMaintenance(); }
+  catch(e){ showMsg('mtMsg','err',e.message); }
+}
+async function loadDocs(){
+  try{ const docs=await api('/api/public/documents');
+    $('docsBody').innerHTML=docs.length?`<table><thead><tr><th>Document</th><th>For</th><th></th></tr></thead><tbody>
+      ${docs.map(d=>`<tr><td><b>${esc(d.title)}</b></td><td class="small muted">${esc(d.category||d.model||'All')}</td><td><a class="btn ghost" href="/api/public/document/${esc(d.id)}" target="_blank" rel="noopener">Open</a></td></tr>`).join('')}
+      </tbody></table>`:'<p class="lead">No documents posted yet. Warranty terms are always at <a href="/terms">/terms</a>.</p>';
+  }catch(e){ $('docsBody').innerHTML='<p class="msg err">'+esc(e.message)+'</p>'; }
+}
+
+// ---- Install to phone (PWA) ----
+let deferredInstallPrompt=null;
+function isStandalone(){return window.matchMedia('(display-mode: standalone)').matches||window.navigator.standalone===true;}
+function isIOS(){return /iphone|ipad|ipod/i.test(navigator.userAgent)&&!window.MSStream;}
+function canInstall(){return !isStandalone()&&(!!deferredInstallPrompt||isIOS());}
+function refreshInstallButtons(){document.querySelectorAll('.installBtn').forEach(b=>{b.style.display=canInstall()?'':'none';});}
+window.addEventListener('beforeinstallprompt',e=>{e.preventDefault();deferredInstallPrompt=e;refreshInstallButtons();});
+window.addEventListener('appinstalled',()=>{deferredInstallPrompt=null;refreshInstallButtons();});
+async function promptInstall(){
+  if(deferredInstallPrompt){deferredInstallPrompt.prompt();try{await deferredInstallPrompt.userChoice;}catch(e){}deferredInstallPrompt=null;refreshInstallButtons();return;}
+  if(isIOS()){alert('Install on iPhone/iPad:\n\n1. Tap the Share button in Safari (the box with an up-arrow)\n2. Scroll down and tap “Add to Home Screen”\n3. Tap “Add”');return;}
+  alert('To install: open this site in Chrome on your phone, then tap the menu (⋮) → “Install app” / “Add to Home screen”.');
+}
+
+// ---- boot ----
+(function init(){
+  refreshInstallButtons();
+  if('serviceWorker' in navigator){ navigator.serviceWorker.register('/sw.js').catch(()=>{}); }
+  const token=new URLSearchParams(location.search).get('token');
+  if(token){ $('auth').classList.remove('hidden'); showAuth('reset'); return; }
+  if(TOKEN){ enterDash(); } else { showAuth('login'); }
+})();
+</script>
+</body>
+</html>
