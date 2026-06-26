@@ -98,8 +98,6 @@ const colMigrations = [
   `CREATE TABLE IF NOT EXISTS cycle_count (id SERIAL PRIMARY KEY, status TEXT NOT NULL DEFAULT 'pending', note TEXT, created_by TEXT, created_at TIMESTAMPTZ NOT NULL DEFAULT now(), reviewed_by TEXT, reviewed_at TIMESTAMPTZ, review_note TEXT, qb_status TEXT, qb_external_id TEXT)`,
   `CREATE TABLE IF NOT EXISTS cycle_count_line (id SERIAL PRIMARY KEY, count_id INTEGER NOT NULL, part_id TEXT NOT NULL, system_qty NUMERIC(14,3) NOT NULL DEFAULT 0, counted_qty NUMERIC(14,3) NOT NULL DEFAULT 0, unit_cost NUMERIC(12,2) NOT NULL DEFAULT 0)`,
   `CREATE INDEX IF NOT EXISTS idx_cc_line ON cycle_count_line(count_id)`,
-  // New title for the person who runs cycle counts (assignable to a user; editor tier).
-  `INSERT INTO role(name,tier) VALUES('Operations Specialist','editor') ON CONFLICT(name) DO NOTHING`,
 ];
 
 export async function ensureSchema() {

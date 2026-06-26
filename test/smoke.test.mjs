@@ -299,13 +299,17 @@ test('cycle count: reject leaves inventory unchanged', async () => {
 test('permissions: cycle counts (ops/managers) and stock orders (Sales/office) are gated', async () => {
   const tok = async u => (await (await api('/api/auth/login', { method: 'POST', body: JSON.stringify({ username: u, password: 'built2026' }) })).json()).token;
   const H = t => ({ 'Content-Type': 'application/json', Authorization: 'Bearer ' + t });
-  const sales = await tok('aruiz');   // Sales
-  const rep = await tok('mtran');     // Rep Specialist
-  const office = await tok('dolsen'); // Office Manager
+  const sales = await tok('aruiz');     // Sales
+  const rep = await tok('mtran');       // Rep Specialist
+  const office = await tok('dolsen');   // Office Manager
+  const shop = await tok('tgalloway');  // Shop Specialist
   const models = await json(await api('/api/models'));
-  // cycle count: Sales (not ops/office) is blocked from creating + approving
+  // cycle count: Sales (not shop/office) is blocked from creating + approving
   assert.equal((await fetch(BASE + '/api/cycle-counts', { method: 'POST', headers: H(sales), body: '{"lines":[]}' })).status, 403, 'sales cannot create a cycle count');
   assert.equal((await fetch(BASE + '/api/cycle-counts/1/approve', { method: 'POST', headers: H(sales) })).status, 403, 'sales cannot approve');
+  // the Shop Specialist can create a count
+  const parts = await json(await api('/api/parts'));
+  assert.equal((await fetch(BASE + '/api/cycle-counts', { method: 'POST', headers: H(shop), body: JSON.stringify({ lines: [{ partId: parts[0].id, countedQty: 1 }] }) })).status, 200, 'shop specialist can create a count');
   // stock orders: Rep Specialist no longer allowed; Office Manager is
   assert.equal((await fetch(BASE + '/api/orders/stock', { method: 'POST', headers: H(rep), body: JSON.stringify({ modelId: models[0].id, qty: 1 }) })).status, 403, 'rep specialist cannot create stock orders');
   assert.equal((await fetch(BASE + '/api/orders/stock', { method: 'POST', headers: H(office), body: JSON.stringify({ modelId: models[0].id, qty: 1 }) })).status, 200, 'office manager can create stock orders');

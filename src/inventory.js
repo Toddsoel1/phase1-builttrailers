@@ -1,6 +1,6 @@
-// Cycle counts. The operations specialist records physical counts; the on-hand quantities AND
-// the QuickBooks posting both apply only when the Office or General Manager approves — so the
-// app and the books never diverge, and every inventory change is signed off.
+// Cycle counts. The Shop Specialist records physical counts; the on-hand quantities AND the
+// QuickBooks posting both apply only when the Office or General Manager approves — so the app
+// and the books never diverge, and every inventory change is signed off.
 import { all, one, q } from './db.js';
 import { postInventoryAdjustment } from './accounting.js';
 

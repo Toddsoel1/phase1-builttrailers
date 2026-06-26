@@ -1390,10 +1390,10 @@ function requireVinAuthority(req, res, next) {
   next();
 }
 const hasTitle = (req, names) => req.user.role === 'admin' || (req.user.titles || []).some(t => names.includes(t));
-// Cycle counts: the operations specialist (and the office managers) can record them.
+// Cycle counts: the Shop Specialist (and the office managers) can record them.
 function requireOpsCount(req, res, next) {
-  if (hasTitle(req, ['Operations Specialist', 'Office Manager', 'General Manager'])) return next();
-  return res.status(403).json({ error: 'Cycle counts are for the Operations Specialist or the office managers.' });
+  if (hasTitle(req, ['Shop Specialist', 'Office Manager', 'General Manager'])) return next();
+  return res.status(403).json({ error: 'Cycle counts are for the Shop Specialist or the office managers.' });
 }
 // Approving an inventory adjustment (and its QuickBooks posting) — managers only.
 function requireCountApprover(req, res, next) {
