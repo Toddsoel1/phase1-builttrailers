@@ -5,6 +5,11 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Built Trailers — Warranty Registration</title>
 <link rel="icon" type="image/png" sizes="192x192" href="/icons/icon-192.png">
+<link rel="manifest" href="/manifest-owner.json">
+<meta name="theme-color" content="#0f1419">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="BT Owner">
+<link rel="apple-touch-icon" href="/icons/icon-180.png">
 <style>
 :root{--accent:#ff7a18;--ink:#1a2230;--muted:#6b7785;--line:#e2e7ec;--bg:#f4f6f8;--ok:#1a7f4b;--warn:#b26a00;--err:#c0392b}
 *{box-sizing:border-box;margin:0;padding:0}
@@ -51,7 +56,7 @@ footer a{color:var(--accent)}
 </style>
 </head>
 <body>
-<div class="top"><div class="wrap"><div><h1>BUILT <b>TRAILERS</b></h1><div class="sub">Warranty Registration</div></div></div></div>
+<div class="top"><div class="wrap"><div><h1>BUILT <b>TRAILERS</b></h1><div class="sub">Warranty Registration</div></div><button class="btn sec installBtn" style="display:none" onclick="promptInstall()">📲 Install app</button></div></div>
 
 <div class="wrap">
   <div class="tabs">
@@ -232,6 +237,23 @@ async function submitMaintenance(){
     $('mItem').value='';$('mNote').value='';
   }catch(e){setMsg('mMsg','err',e.message);}
 }
+</script>
+<script>
+// ---- Install to phone (PWA) ----
+let deferredInstallPrompt=null;
+function isStandalone(){return window.matchMedia('(display-mode: standalone)').matches||window.navigator.standalone===true;}
+function isIOS(){return /iphone|ipad|ipod/i.test(navigator.userAgent)&&!window.MSStream;}
+function canInstall(){return !isStandalone()&&(!!deferredInstallPrompt||isIOS());}
+function refreshInstallButtons(){document.querySelectorAll('.installBtn').forEach(b=>{b.style.display=canInstall()?'':'none';});}
+window.addEventListener('beforeinstallprompt',e=>{e.preventDefault();deferredInstallPrompt=e;refreshInstallButtons();});
+window.addEventListener('appinstalled',()=>{deferredInstallPrompt=null;refreshInstallButtons();});
+async function promptInstall(){
+  if(deferredInstallPrompt){deferredInstallPrompt.prompt();try{await deferredInstallPrompt.userChoice;}catch(e){}deferredInstallPrompt=null;refreshInstallButtons();return;}
+  if(isIOS()){alert('Install on iPhone/iPad:\n\n1. Tap the Share button in Safari (the box with an up-arrow)\n2. Scroll down and tap “Add to Home Screen”\n3. Tap “Add”');return;}
+  alert('To install: open this site in Chrome on your phone, then tap the menu (⋮) → “Install app” / “Add to Home screen”.');
+}
+refreshInstallButtons();
+if('serviceWorker' in navigator){ navigator.serviceWorker.register('/sw.js').catch(()=>{}); }
 </script>
 </body>
 </html>
