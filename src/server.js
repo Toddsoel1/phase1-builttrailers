@@ -35,6 +35,7 @@ import * as warranty from './warranty.js';
 import * as portal from './portal.js';
 import * as dealer from './dealer.js';
 import * as owner from './owner.js';
+import * as inventory from './inventory.js';
 import * as dealernotify from './dealernotify.js';
 import * as storage from './storage.js';
 import * as push from './push.js';
@@ -100,18 +101,18 @@ app.use(cors({
   credentials: true,
 }));
 
-// Rate limiting — 10 login attempts per 15 min per IP
+// Rate limiting — login attempts per 15 min per IP (tune with LOGIN_RATE_MAX)
 const loginLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 10,
+  max: Number(process.env.LOGIN_RATE_MAX || 10),
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: 'Too many login attempts. Try again in 15 minutes.' },
 });
-// Throttle the unauthenticated public warranty portal
+// Throttle the unauthenticated public warranty portal (tune with PORTAL_RATE_MAX)
 const portalLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 30,
+  max: Number(process.env.PORTAL_RATE_MAX || 30),
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: 'Too many requests. Please try again in a few minutes.' },
@@ -611,6 +612,28 @@ app.post('/api/parts/:id/adjust', authMiddleware, requireTier('editor'), async (
   await audit(req, 'part.adjust', `${req.params.id}: ${cur.on_hand} -> ${to} (${req.body?.reason || ''})`);
   res.json({ ok: true });
 });
+// ---- Cycle counts: operations specialist records; OM/GM approves before on-hand + QB post ----
+app.post('/api/cycle-counts', authMiddleware, requireOpsCount, async (req, res) => {
+  try { res.json(await inventory.createCycleCount(req.body?.lines, req.body?.note, req.user)); }
+  catch (e) { res.status(400).json({ error: e.message }); }
+});
+app.get('/api/cycle-counts', authMiddleware, requireOpsCount, async (req, res) => res.json(await inventory.listCycleCounts(req.query.status)));
+app.get('/api/cycle-counts/:id', authMiddleware, requireOpsCount, async (req, res) => {
+  const d = await inventory.cycleCountDetail(Number(req.params.id));
+  if (!d) return res.status(404).json({ error: 'not found' });
+  res.json(d);
+});
+app.post('/api/cycle-counts/:id/approve', authMiddleware, requireCountApprover, async (req, res) => {
+  try {
+    const r = await inventory.approveCycleCount(Number(req.params.id), req.user);
+    await audit(req, 'cyclecount.approve', `CC-${req.params.id} net $${Math.round(r.netValue)} (QB ${r.qb})`);
+    res.json(r);
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+app.post('/api/cycle-counts/:id/reject', authMiddleware, requireCountApprover, async (req, res) => {
+  try { const r = await inventory.rejectCycleCount(Number(req.params.id), req.user, req.body?.note); await audit(req, 'cyclecount.reject', `CC-${req.params.id}`); res.json(r); }
+  catch (e) { res.status(400).json({ error: e.message }); }
+});
 
 // ---- models / BOMs ----
 app.get('/api/models', authMiddleware, async (_req, res) => res.json(await modelsSummary()));
@@ -874,7 +897,7 @@ app.post('/api/orders', authMiddleware, requireSales, async (req, res) => {
 });
 // Build-to-stock: a production order with no customer yet. Flows through the stages and gets a
 // VIN like any build; its MSO is held until the trailer is sold (a customer assigned below).
-app.post('/api/orders/stock', authMiddleware, requireSales, async (req, res) => {
+app.post('/api/orders/stock', authMiddleware, requireStockCreator, async (req, res) => {
   const { modelId, qty, due } = req.body || {};
   const mdl = await one('SELECT * FROM model WHERE id=$1', [modelId]);
   if (!mdl) return res.status(400).json({ error: 'model required' });
@@ -1365,6 +1388,22 @@ function requireVinAuthority(req, res, next) {
   const ok = req.user.role === 'admin' || (req.user.titles || []).some(t => ['Office Manager', 'General Manager'].includes(t));
   if (!ok) return res.status(403).json({ error: 'Only the Office Manager, General Manager, or an Admin can do this.' });
   next();
+}
+const hasTitle = (req, names) => req.user.role === 'admin' || (req.user.titles || []).some(t => names.includes(t));
+// Cycle counts: the operations specialist (and the office managers) can record them.
+function requireOpsCount(req, res, next) {
+  if (hasTitle(req, ['Operations Specialist', 'Office Manager', 'General Manager'])) return next();
+  return res.status(403).json({ error: 'Cycle counts are for the Operations Specialist or the office managers.' });
+}
+// Approving an inventory adjustment (and its QuickBooks posting) — managers only.
+function requireCountApprover(req, res, next) {
+  if (hasTitle(req, ['Office Manager', 'General Manager'])) return next();
+  return res.status(403).json({ error: 'Only the Office Manager, General Manager, or an Admin can approve inventory adjustments.' });
+}
+// Creating stock orders — Sales, Office Manager, General Manager, or Admin.
+function requireStockCreator(req, res, next) {
+  if (hasTitle(req, ['Sales', 'Office Manager', 'General Manager'])) return next();
+  return res.status(403).json({ error: 'Only Sales, the Office Manager, the General Manager, or an Admin can create stock orders.' });
 }
 // VIN/MSO print center (office): VIN labels queue when paint begins, MSOs when paint completes.
 app.get('/api/print-queue', authMiddleware, requireVinAuthority, async (req, res) => res.json(await trailers.printQueue(req.query.kind)));

@@ -5,7 +5,7 @@
 // set ACCOUNTING_MODE=quickbooks and provide QBO credentials — the marked hook below is
 // where the real QuickBooks Online API calls plug in.
 import { q, all, one } from './db.js';
-import { qboConfigured as qboReady, createInvoice as qboInvoice, createBill as qboBill, QBOFeatureError } from './qbo.js';
+import { qboConfigured as qboReady, createInvoice as qboInvoice, createBill as qboBill, createJournalEntry as qboJournal, QBOFeatureError } from './qbo.js';
 
 export function accountingMode() {
   return process.env.ACCOUNTING_MODE === 'quickbooks' ? 'quickbooks' : 'simulated';
@@ -15,14 +15,14 @@ export function qboConfigured() { return qboReady(); }
 async function record(kind, ref, party, amount, userId, lines) {
   const mode = accountingMode();
   let status = 'posted', external = null;
-  // Only invoices and bills push to QuickBooks. COGS is recorded to the local ledger for now
-  // (a QB journal / inventory posting can layer on later without changing callers).
-  if (mode === 'quickbooks' && (kind === 'invoice' || kind === 'bill')) {
+  // Invoices, bills, and cycle-count inventory adjustments push to QuickBooks. COGS records to
+  // the local ledger only (a QB push can layer on later without changing callers).
+  if (mode === 'quickbooks' && (kind === 'invoice' || kind === 'bill' || kind === 'inventory-adjust')) {
     try {
       if (!qboReady()) throw new Error('QBO not configured');
-      external = (kind === 'invoice')
-        ? await qboInvoice({ customer: party, amount, ref, lines })
-        : await qboBill({ vendor: party, amount, ref });
+      external = (kind === 'invoice') ? await qboInvoice({ customer: party, amount, ref, lines })
+               : (kind === 'bill')    ? await qboBill({ vendor: party, amount, ref })
+               : await qboJournal({ ref, amount, memo: `Cycle count adjustment ${ref}` });
       status = 'synced';
     } catch (e) {
       if (e instanceof QBOFeatureError || e?.qboFeature) {
@@ -39,12 +39,16 @@ async function record(kind, ref, party, amount, userId, lines) {
            VALUES ($1,$2,$3,$4,$5,$6,$7)`, [kind, ref, party, amount, mode, status, external]);
   await q('INSERT INTO audit_log(user_id,action,detail) VALUES ($1,$2,$3)',
     [userId || null, 'acct.' + kind, `${ref} ${party} $${Math.round(amount)} (${status})`]);
+  return { status, external };
 }
 
 export const postInvoice = (ref, party, amount, userId, lines) => record('invoice', ref, party, amount, userId, lines);
 export const postBill = (ref, party, amount, userId) => record('bill', ref, party, amount, userId);
 // Cost of goods sold — the WIP cost relieved into COGS when an order is invoiced.
 export const postCOGS = (ref, amount, userId) => record('cogs', ref, 'COGS', amount, userId);
+// Cycle-count adjustment — the net value of the variance, posted to QuickBooks as a journal
+// entry (Inventory Asset vs an adjustment account) when an approver signs off.
+export const postInventoryAdjustment = (ref, amount, userId) => record('inventory-adjust', ref, 'Inventory Adjustment', amount, userId);
 
 export async function ledger() {
   return (await all('SELECT * FROM accounting_event ORDER BY id DESC LIMIT 200', []))

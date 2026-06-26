@@ -14,7 +14,8 @@ const BASE = `http://localhost:${PORT}`;
 // Hermetic env: simulated accounting, no SMS, no QuickBooks creds — tests never touch a
 // real external service regardless of what's in .env.
 const HERMETIC = { PORT: String(PORT), ACCOUNTING_MODE: 'simulated', SMS_ENABLED: '0',
-  QBO_CLIENT_ID: '', QBO_CLIENT_SECRET: '', JWT_SECRET: 'test-secret-smoke' };
+  QBO_CLIENT_ID: '', QBO_CLIENT_SECRET: '', JWT_SECRET: 'test-secret-smoke',
+  LOGIN_RATE_MAX: '100000', PORTAL_RATE_MAX: '100000' };
 
 let server, dbDir, token, orderId, modelId;
 
@@ -269,4 +270,43 @@ test('stock build: VIN still prints, but the MSO is held until the trailer is so
   assert.ok((await sold.json()).msosQueued >= 1, 'selling releases the MSO');
   msoQ = await json(await api('/api/print-queue?kind=mso'));
   assert.ok(msoQ.some(j => j.orderId === sid), 'MSO is queued once the stock trailer is sold');
+});
+
+// ---- Cycle counts ----
+const partOnHand = async id => Number((await json(await api('/api/parts'))).find(x => x.id === id).onHand);
+test('cycle count: pending until approved, then applies on-hand and posts the adjustment', async () => {
+  const parts = await json(await api('/api/parts'));
+  const p = parts[0];
+  const before = Number(p.onHand);
+  const counted = before + 7;
+  const cc = await json(await api('/api/cycle-counts', { method: 'POST', body: JSON.stringify({ lines: [{ partId: p.id, countedQty: counted }], note: 'aisle 3' }) }));
+  assert.ok(cc.id && cc.status === 'pending', 'count created pending');
+  assert.equal(await partOnHand(p.id), before, 'on-hand UNCHANGED while pending');
+  const ap = await api(`/api/cycle-counts/${cc.id}/approve`, { method: 'POST' });
+  assert.equal(ap.status, 200);
+  assert.equal((await ap.json()).status, 'posted');
+  assert.equal(await partOnHand(p.id), counted, 'on-hand applied only on approval');
+});
+
+test('cycle count: reject leaves inventory unchanged', async () => {
+  const p = (await json(await api('/api/parts')))[1];
+  const before = Number(p.onHand);
+  const cc = await json(await api('/api/cycle-counts', { method: 'POST', body: JSON.stringify({ lines: [{ partId: p.id, countedQty: before + 100 }] }) }));
+  assert.equal((await api(`/api/cycle-counts/${cc.id}/reject`, { method: 'POST', body: JSON.stringify({ note: 'recount needed' }) })).status, 200);
+  assert.equal(await partOnHand(p.id), before, 'on-hand unchanged after reject');
+});
+
+test('permissions: cycle counts (ops/managers) and stock orders (Sales/office) are gated', async () => {
+  const tok = async u => (await (await api('/api/auth/login', { method: 'POST', body: JSON.stringify({ username: u, password: 'built2026' }) })).json()).token;
+  const H = t => ({ 'Content-Type': 'application/json', Authorization: 'Bearer ' + t });
+  const sales = await tok('aruiz');   // Sales
+  const rep = await tok('mtran');     // Rep Specialist
+  const office = await tok('dolsen'); // Office Manager
+  const models = await json(await api('/api/models'));
+  // cycle count: Sales (not ops/office) is blocked from creating + approving
+  assert.equal((await fetch(BASE + '/api/cycle-counts', { method: 'POST', headers: H(sales), body: '{"lines":[]}' })).status, 403, 'sales cannot create a cycle count');
+  assert.equal((await fetch(BASE + '/api/cycle-counts/1/approve', { method: 'POST', headers: H(sales) })).status, 403, 'sales cannot approve');
+  // stock orders: Rep Specialist no longer allowed; Office Manager is
+  assert.equal((await fetch(BASE + '/api/orders/stock', { method: 'POST', headers: H(rep), body: JSON.stringify({ modelId: models[0].id, qty: 1 }) })).status, 403, 'rep specialist cannot create stock orders');
+  assert.equal((await fetch(BASE + '/api/orders/stock', { method: 'POST', headers: H(office), body: JSON.stringify({ modelId: models[0].id, qty: 1 }) })).status, 200, 'office manager can create stock orders');
 });

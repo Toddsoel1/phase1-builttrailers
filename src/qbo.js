@@ -352,6 +352,32 @@ export async function createBill({ vendor, amount, ref }) {
   return bill.Bill.Id;
 }
 
+async function inventoryAssetAccountId() {
+  const a = (await query(`select Id from Account where AccountType = 'Other Current Asset' and AccountSubType = 'Inventory' maxresults 1`)).Account
+         || (await query(`select Id from Account where Classification = 'Asset' and FullyQualifiedName like '%Inventory%' maxresults 1`)).Account;
+  if (!a || !a[0]) throw new QBOFeatureError('No inventory asset account found in QuickBooks — create or map one before posting cycle counts.', 'journalentry');
+  return a[0].Id;
+}
+// Post the net value of an approved cycle-count adjustment as a balanced journal entry: Inventory
+// Asset vs an adjustment/shrinkage account. (QBO's API doesn't expose per-item quantity
+// adjustments — the per-part on-hand is corrected in the app; this posts the dollar value.)
+export async function createJournalEntry({ ref, amount, memo }) {
+  const amt = Math.round(Math.abs(Number(amount) || 0) * 100) / 100;
+  if (amt < 0.005) return null; // a zero-variance count posts nothing
+  const assetId = await inventoryAssetAccountId();
+  const adjId = await anyExpenseAccountId();
+  const gained = Number(amount) > 0; // counted more than the system had → inventory value up
+  const line = (postingType, accountId) => ({
+    Amount: amt, DetailType: 'JournalEntryLineDetail', Description: (memo || '').slice(0, 1000),
+    JournalEntryLineDetail: { PostingType: postingType, AccountRef: { value: accountId } },
+  });
+  const je = await call('POST', `journalentry?minorversion=${MINOR}`, {
+    DocNumber: (ref || '').slice(0, 21) || undefined, PrivateNote: memo,
+    Line: [line(gained ? 'Debit' : 'Credit', assetId), line(gained ? 'Credit' : 'Debit', adjId)],
+  });
+  return je.JournalEntry.Id;
+}
+
 // ---- Pull sync: QB → Built Trailers ----
 
 async function paginate(entity, where = '') {
