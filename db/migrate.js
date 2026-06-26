@@ -85,6 +85,11 @@ const colMigrations = [
   `ALTER TABLE model ADD COLUMN IF NOT EXISTS qb_item_id TEXT`,
   // Align terminology: the two account kinds are now "Dealership" and "Customer".
   `UPDATE customer SET kind='Customer' WHERE kind='Retail'`,
+  // Owner accounts for owner.builttrailers.app — email = username, self-service password reset.
+  `CREATE TABLE IF NOT EXISTS owner_user (id TEXT PRIMARY KEY, email TEXT UNIQUE NOT NULL, password_hash TEXT NOT NULL, name TEXT, status TEXT NOT NULL DEFAULT 'active', reset_token TEXT, reset_expires TIMESTAMPTZ, created_at TIMESTAMPTZ NOT NULL DEFAULT now(), last_login TIMESTAMPTZ)`,
+  // Maintenance log gains mileage/hours + parts columns to match the BUILT maintenance schedule.
+  `ALTER TABLE maintenance_record ADD COLUMN IF NOT EXISTS mileage TEXT`,
+  `ALTER TABLE maintenance_record ADD COLUMN IF NOT EXISTS parts TEXT`,
 ];
 
 export async function ensureSchema() {

@@ -34,6 +34,7 @@ import * as trailers from './trailers.js';
 import * as warranty from './warranty.js';
 import * as portal from './portal.js';
 import * as dealer from './dealer.js';
+import * as owner from './owner.js';
 import * as dealernotify from './dealernotify.js';
 import * as storage from './storage.js';
 import * as push from './push.js';
@@ -229,6 +230,33 @@ app.post('/api/public/claim', portalLimiter, async (req, res) => {
 app.post('/api/public/maintenance', portalLimiter, async (req, res) => {
   try { res.json(await portal.submitMaintenance(req.body || {})); }
   catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+// ---- Owner account portal (owner.builttrailers.app) ----
+app.post('/api/owner/register', portalLimiter, async (req, res) => {
+  try { res.json(await owner.register(req.body || {})); } catch (e) { res.status(400).json({ error: e.message }); }
+});
+app.post('/api/owner/login', loginLimiter, async (req, res) => {
+  try { res.json(await owner.login(req.body || {})); } catch (e) { res.status(401).json({ error: e.message }); }
+});
+app.post('/api/owner/forgot', loginLimiter, async (req, res) => {
+  try { res.json(await owner.requestReset(req.body?.email, process.env.OWNER_PORTAL_URL)); } catch { res.json({ ok: true }); }
+});
+app.post('/api/owner/reset', loginLimiter, async (req, res) => {
+  try { res.json(await owner.resetPassword(req.body?.token, req.body?.password)); } catch (e) { res.status(400).json({ error: e.message }); }
+});
+app.get('/api/owner/me', owner.ownerAuth, async (req, res) => res.json(await owner.me(req.owner)));
+app.post('/api/owner/change-password', owner.ownerAuth, async (req, res) => {
+  try { res.json(await owner.changePassword(req.owner, req.body?.currentPassword, req.body?.newPassword)); } catch (e) { res.status(400).json({ error: e.message }); }
+});
+app.get('/api/owner/trailers', owner.ownerAuth, async (req, res) => res.json(await owner.myTrailers(req.owner)));
+app.get('/api/owner/claims', owner.ownerAuth, async (req, res) => res.json(await owner.myClaims(req.owner)));
+app.post('/api/owner/claims', owner.ownerAuth, async (req, res) => {
+  try { res.json(await owner.submitClaim(req.owner, req.body || {})); } catch (e) { res.status(400).json({ error: e.message }); }
+});
+app.get('/api/owner/maintenance', owner.ownerAuth, async (req, res) => res.json(await owner.myMaintenance(req.owner)));
+app.post('/api/owner/maintenance', owner.ownerAuth, async (req, res) => {
+  try { res.json(await owner.logMaintenance(req.owner, req.body || {})); } catch (e) { res.status(400).json({ error: e.message }); }
 });
 
 // ---- Dealership portal (dealership.builttrailers.app) ----

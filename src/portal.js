@@ -142,12 +142,12 @@ export async function submitPublicClaim(data) {
 }
 
 export async function submitMaintenance(data) {
-  const { vin, item, performedOn, note, submittedBy } = data || {};
+  const { vin, item, performedOn, note, mileage, parts, submittedBy } = data || {};
   if (!vin || !item) throw new Error('VIN and a maintenance item are required.');
   const t = await one(`SELECT id FROM trailer WHERE upper(vin)=upper($1)`, [String(vin).trim()]);
   if (!t) throw new Error('That VIN was not found.');
-  await q(`INSERT INTO maintenance_record(trailer_id,item,performed_on,note,source,submitted_by) VALUES($1,$2,$3,$4,'portal',$5)`,
-    [t.id, item, performedOn || null, note || null, submittedBy || null]);
+  await q(`INSERT INTO maintenance_record(trailer_id,item,performed_on,note,mileage,parts,source,submitted_by) VALUES($1,$2,$3,$4,$5,$6,'portal',$7)`,
+    [t.id, item, performedOn || null, note || null, mileage || null, parts || null, submittedBy || null]);
   return { ok: true };
 }
 

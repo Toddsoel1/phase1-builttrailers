@@ -147,3 +147,58 @@ test('QuickBooks trailer-cost preview computes cost from the BOM', async () => {
   assert.ok(Array.isArray(d.rows) && d.rows.length, 'preview rows present');
   assert.ok(d.rows.every(x => typeof x.appCost === 'number'), 'each row has an app cost from the BOM');
 });
+
+// ---- Owner account portal ----
+let ownerToken;
+const oapi = (p, opt = {}) => fetch(BASE + p, { ...opt, headers: {
+  'Content-Type': 'application/json', Accept: 'application/json',
+  ...(ownerToken ? { Authorization: 'Bearer ' + ownerToken } : {}), ...(opt.headers || {}) } });
+
+test('owner: register creates an account (email = username) and auto-logs-in', async () => {
+  const r = await oapi('/api/owner/register', { method: 'POST', body: JSON.stringify({ email: 'owner@example.com', password: 'ownerpass1', name: 'Olive Owner' }) });
+  assert.equal(r.status, 200);
+  const d = await r.json();
+  ownerToken = d.token;
+  assert.ok(ownerToken, 'token issued');
+  assert.equal(d.owner.email, 'owner@example.com');
+  assert.equal(d.owner.trailerCount, 0);
+});
+
+test('owner: duplicate email is rejected', async () => {
+  const r = await oapi('/api/owner/register', { method: 'POST', body: JSON.stringify({ email: 'owner@example.com', password: 'another1x', name: 'Dup' }) });
+  assert.equal(r.status, 400);
+});
+
+test('owner: login works and rejects a bad password', async () => {
+  const ok = await oapi('/api/owner/login', { method: 'POST', body: JSON.stringify({ email: 'owner@example.com', password: 'ownerpass1' }) });
+  assert.equal(ok.status, 200);
+  assert.ok((await ok.json()).token);
+  const bad = await oapi('/api/owner/login', { method: 'POST', body: JSON.stringify({ email: 'owner@example.com', password: 'wrong' }) });
+  assert.equal(bad.status, 401);
+});
+
+test('owner: /me requires an owner token (rejects none + staff token)', async () => {
+  const meR = await oapi('/api/owner/me');
+  assert.equal(meR.status, 200);
+  assert.equal((await meR.json()).email, 'owner@example.com');
+  assert.equal((await fetch(BASE + '/api/owner/me')).status, 401, 'no token rejected');
+  assert.equal((await fetch(BASE + '/api/owner/me', { headers: { Authorization: 'Bearer ' + token } })).status, 403, 'staff token rejected');
+});
+
+test('owner: forgot-password always returns ok (no account enumeration)', async () => {
+  const known = await oapi('/api/owner/forgot', { method: 'POST', body: JSON.stringify({ email: 'owner@example.com' }) });
+  const unknown = await oapi('/api/owner/forgot', { method: 'POST', body: JSON.stringify({ email: 'nobody@nowhere.test' }) });
+  assert.equal(known.status, 200); assert.equal(unknown.status, 200);
+  assert.equal((await known.json()).ok, true); assert.equal((await unknown.json()).ok, true);
+});
+
+test('owner: reset with an invalid token is rejected', async () => {
+  const r = await oapi('/api/owner/reset', { method: 'POST', body: JSON.stringify({ token: 'bogus-token', password: 'newpass12' }) });
+  assert.equal(r.status, 400);
+});
+
+test('owner: cannot file a claim for a VIN not registered to the account', async () => {
+  const r = await oapi('/api/owner/claims', { method: 'POST', body: JSON.stringify({ vin: 'NOTMYVIN123456789', issue: 'test issue' }) });
+  assert.equal(r.status, 400);
+  assert.match((await r.json()).error, /not registered to your account/i);
+});
