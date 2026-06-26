@@ -205,7 +205,7 @@ async function loadInvoices(){
 async function loadDocs(){
   try{const docs=await api('/api/public/documents');
     $('docsBody').innerHTML=docs.length?`<table><thead><tr><th>Document</th><th>For</th><th></th></tr></thead><tbody>
-      ${docs.map(d=>`<tr><td><b>${d.title}</b>${d.category?` <span class="muted" style="font-size:11px">${d.category}</span>`:''}</td><td class="muted" style="font-size:12px">${d.model||'All models'}</td><td><a class="btn sec" style="padding:5px 12px;font-size:13px;text-decoration:none" href="/api/public/document/${d.id}" target="_blank">Download</a></td></tr>`).join('')}
+      ${docs.map(d=>`<tr><td><b>${d.title}</b>${d.category?` <span class="muted" style="font-size:11px">${d.category}</span>`:''}</td><td class="muted" style="font-size:12px">${d.model||'All models'}</td><td><a class="btn sec" style="padding:5px 12px;font-size:13px;text-decoration:none" href="${d.url||'/api/public/document/'+d.id}" target="_blank">Download</a></td></tr>`).join('')}
     </tbody></table>`:'<p class="lead">No documents posted yet.</p>';
   }catch(e){$('docsBody').innerHTML='<p class="msg err">'+e.message+'</p>';}
 }

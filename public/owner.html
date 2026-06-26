@@ -316,7 +316,7 @@ async function doMaint(){
 async function loadDocs(){
   try{ const docs=await api('/api/public/documents');
     $('docsBody').innerHTML=docs.length?`<table><thead><tr><th>Document</th><th>For</th><th></th></tr></thead><tbody>
-      ${docs.map(d=>`<tr><td><b>${esc(d.title)}</b></td><td class="small muted">${esc(d.category||d.model||'All')}</td><td><a class="btn ghost" href="/api/public/document/${esc(d.id)}" target="_blank" rel="noopener">Open</a></td></tr>`).join('')}
+      ${docs.map(d=>`<tr><td><b>${esc(d.title)}</b></td><td class="small muted">${esc(d.category||d.model||'All')}</td><td><a class="btn ghost" href="${d.url?esc(d.url):'/api/public/document/'+esc(d.id)}" target="_blank" rel="noopener">Open</a></td></tr>`).join('')}
       </tbody></table>`:'<p class="lead">No documents posted yet. Warranty terms are always at <a href="/terms">/terms</a>.</p>';
   }catch(e){ $('docsBody').innerHTML='<p class="msg err">'+esc(e.message)+'</p>'; }
 }

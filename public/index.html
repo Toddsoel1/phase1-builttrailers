@@ -1976,8 +1976,8 @@ async function trailersDocsTab(){
   </div>`:'';
   const listCard=`<div class="card"><h3>Documents (${docs.length})</h3>
     ${docs.length?`<table><thead><tr><th>Title</th><th>Category</th><th>Model</th>${admin?'<th></th>':''}</tr></thead><tbody>
-      ${docs.map(d=>`<tr><td><a class="lnk" href="/api/public/document/${d.id}" target="_blank">${esc(d.title)}</a></td><td>${esc(d.category||'')}</td><td>${esc(d.model||'All')}</td>
-        ${admin?`<td><button class="btn sm sec" onclick="deleteDoc(${d.id})">Delete</button></td>`:''}</tr>`).join('')}
+      ${docs.map(d=>`<tr><td><a class="lnk" href="${d.url?esc(d.url):'/api/public/document/'+d.id}" target="_blank">${esc(d.title)}</a></td><td>${esc(d.category||'')}</td><td>${esc(d.model||'All')}</td>
+        ${admin?`<td>${d.builtin?'<span class="muted" style="font-size:11px">built-in</span>':`<button class="btn sm sec" onclick="deleteDoc(${d.id})">Delete</button>`}</td>`:''}</tr>`).join('')}
     </tbody></table>`:'<p class="muted">No documents posted yet.</p>'}
   </div>`;
   return uploadCard+listCard;

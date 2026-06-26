@@ -66,11 +66,18 @@ export async function addDocument({ title, modelId, category, dataUrl }, by) {
     [title, modelId || null, category || null, filePath, ct, by || null]);
   return { id: r.id };
 }
+// Official BUILT documents bundled with the app (public/docs) — always present in the
+// library, downloadable directly, and not deletable. Admin-uploaded documents follow.
+const BUILTIN_DOCS = [
+  { id: 'warranty-policy',      title: 'Limited Warranty Policy',      category: 'Warranty',    url: '/docs/BUILT-Trailers-Limited-Warranty-Policy.docx',      builtin: true },
+  { id: 'maintenance-schedule', title: 'Routine Maintenance Schedule', category: 'Maintenance', url: '/docs/BUILT-Trailers-Routine-Maintenance-Schedule.docx', builtin: true },
+];
 export async function listDocuments() {
-  return (await all(`SELECT d.id,d.title,d.category,d.model_id,m.name AS model,d.created_at
+  const db = (await all(`SELECT d.id,d.title,d.category,d.model_id,m.name AS model,d.created_at
                        FROM document d LEFT JOIN model m ON m.id=d.model_id
                       ORDER BY d.category NULLS FIRST, d.title`, []).catch(() => []))
     .map(d => ({ id: d.id, title: d.title, category: d.category, modelId: d.model_id, model: d.model, at: d.created_at }));
+  return [...BUILTIN_DOCS, ...db];
 }
 export async function getDocumentPath(id) {
   return one(`SELECT file_path AS path, content_type AS ct FROM document WHERE id=$1`, [id]);
