@@ -36,6 +36,7 @@ import * as portal from './portal.js';
 import * as dealer from './dealer.js';
 import * as owner from './owner.js';
 import * as inventory from './inventory.js';
+import QRCode from 'qrcode';
 import * as dealernotify from './dealernotify.js';
 import * as storage from './storage.js';
 import * as push from './push.js';
@@ -216,6 +217,20 @@ app.get('/terms',   (_req, res) => res.sendFile(path.join(__dir, '..', 'public',
 
 // ---- Public warranty registration portal (no staff login; rate-limited) ----
 app.get('/register', (_req, res) => res.sendFile(path.join(__dir, '..', 'public', 'register.html')));
+// Where a traveler's QR resolves — a minimal public unit page (VIN looked up live).
+app.get('/u/:id', portalLimiter, async (req, res) => {
+  const u = await trailers.publicUnit(req.params.id).catch(() => null);
+  if (!u) return res.status(404).type('html').send('<p style="font-family:system-ui;margin:40px">Trailer unit not found.</p>');
+  const e = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  res.type('html').send(`<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>BUILT Trailers unit</title>
+<div style="font-family:-apple-system,system-ui,sans-serif;max-width:420px;margin:36px auto;padding:0 20px;color:#1a2230">
+  <h2 style="margin:0">BUILT <span style="color:#ff7a18">TRAILERS</span></h2>
+  <p style="color:#6b7785;margin:2px 0 16px">Trailer unit</p>
+  <div style="font-family:ui-monospace,Menlo,monospace;font-size:24px;font-weight:700;letter-spacing:1.5px">${e(u.vin) || '(VIN pending)'}</div>
+  <p style="font-size:16px">${e(u.model)}${u.type ? ' · ' + e(u.type) : ''}</p>
+  <p style="color:#6b7785">Status: ${e(u.status)}</p>
+</div>`);
+});
 app.get('/api/public/trailer/:vin', portalLimiter, async (req, res) => {
   try { res.json(await portal.publicTrailerLookup(req.params.vin)); }
   catch (e) { res.status(400).json({ error: e.message }); }
@@ -1418,6 +1433,15 @@ app.post('/api/trailers/:id/vin', authMiddleware, requireVinAuthority, async (re
     await audit(req, 'vin.correct', `${r.unitId}: ${r.oldVin || '(none)'} -> ${r.newVin}`);
     res.json(r);
   } catch (e) { res.status(400).json({ error: e.message }); }
+});
+// Printable build traveler (with a QR that points at the unit, not the VIN, so a VIN correction
+// never breaks it) — for the shop/office.
+app.get('/api/trailers/:id/traveler', authMiddleware, requireSection('trailers'), async (req, res) => {
+  const d = await trailers.travelerData(req.params.id);
+  if (!d) return res.status(404).json({ error: 'unit not found' });
+  const base = process.env.APP_URL || `https://${req.get('host')}`;
+  const qr = await QRCode.toDataURL(`${base}/u/${encodeURIComponent(d.unitId)}`, { margin: 1, width: 240 }).catch(() => null);
+  res.json({ ...d, qr });
 });
 
 // ---- Warranty & build history ----

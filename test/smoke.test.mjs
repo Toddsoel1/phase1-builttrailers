@@ -251,6 +251,18 @@ test('VIN: print center + correction are restricted to OM/GM/Admin', async () =>
   assert.equal((await fetch(BASE + `/api/trailers/${vinUnitId}/vin`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + sales }, body: JSON.stringify({ vin: 'BLTHACKVIN0000001' }) })).status, 403, 'sales cannot change a VIN');
 });
 
+test('traveler: build sheet returns unit data + a QR, and /u/:id resolves the unit', async () => {
+  const tr = await api(`/api/trailers/${vinUnitId}/traveler`);
+  assert.equal(tr.status, 200);
+  const d = await tr.json();
+  assert.equal(d.unitId, vinUnitId);
+  assert.ok(d.qr && d.qr.startsWith('data:image'), 'QR data URL present');
+  assert.ok(Array.isArray(d.stagesDone), 'build stages included');
+  const pu = await fetch(BASE + `/u/${vinUnitId}`);
+  assert.equal(pu.status, 200);
+  assert.match(await pu.text(), /BUILT/, 'public unit page renders');
+});
+
 test('stock build: VIN still prints, but the MSO is held until the trailer is sold', async () => {
   const custs = (await json(await api('/api/customers'))).filter(c => c.active !== false && c.allowed?.length);
   const models = await json(await api('/api/models'));

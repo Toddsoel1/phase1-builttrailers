@@ -165,7 +165,7 @@ function logout(){TOKEN=null;ME=null;$('app').classList.add('hidden');$('login')
 $('liPass').addEventListener('keydown',e=>{if(e.key==='Enter')login();});
 
 // ---- nav/render ----
-const NAV=[['dashboard','📊 Dashboard'],['orders','🔨 Production Flow'],['daily','📋 Daily Update'],['neworder','➕ New Order'],['customers','🏬 Customers & Dealers'],['parts','📦 Parts Master'],['predict','🤖 Predictive Ordering'],['pos','🧾 Purchase Orders'],['boms','🧩 BOMs & Cost'],['inventory','📈 Inventory Value'],['accounting','💵 Accounting'],['trailers','🚛 Trailers & Warranty'],['team','👷 Team & Payroll'],['timeoff','📅 Schedule & Time Off'],['outcomes','🎯 Goals & Outcomes'],['wins','🎉 Wins'],['forecast','🔮 Forecasting & Planning'],['notify','💬 Notifications'],['support','🆘 Support'],['users','👤 Users & Roles']];
+const NAV=[['dashboard','📊 Dashboard'],['orders','🔨 Production Flow'],['daily','📋 Daily Update'],['neworder','➕ New Order'],['customers','🏬 Customers & Dealers'],['parts','📦 Parts Master'],['predict','🤖 Predictive Ordering'],['pos','🧾 Purchase Orders'],['boms','🧩 BOMs & Cost'],['inventory','📈 Inventory Value'],['accounting','💵 Accounting'],['trailers','🚛 Trailers & Warranty'],['printcenter','🖨️ Print Center'],['team','👷 Team & Payroll'],['timeoff','📅 Schedule & Time Off'],['outcomes','🎯 Goals & Outcomes'],['wins','🎉 Wins'],['forecast','🔮 Forecasting & Planning'],['notify','💬 Notifications'],['support','🆘 Support'],['users','👤 Users & Roles']];
 function canSee(section){
   if(isAdmin()) return true;
   if(!ME.sections) return true; // null = all sections (admin)
@@ -174,6 +174,7 @@ function canSee(section){
 function navVisible(n){
   if(n[0]==='users') return isAdmin();
   if(n[0]==='neworder') return canSell()&&canSee('neworder');
+  if(n[0]==='printcenter') return hasTitle('Office Manager','General Manager')||isAdmin();
   return canSee(n[0]);
 }
 function renderNav(){
@@ -184,7 +185,7 @@ function renderNav(){
 function go(p){page=p;render();}
 async function render(){
   renderNav();
-  const map={dashboard:viewDash,orders:viewOrders,daily:viewDaily,neworder:viewNewOrder,customers:viewCustomers,parts:viewParts,predict:viewPredict,pos:viewPOs,boms:viewBoms,inventory:viewInv,accounting:viewAccounting,trailers:viewTrailers,team:viewTeam,timeoff:viewTimeoff,outcomes:viewOutcomes,wins:viewWins,forecast:viewForecast,notify:viewNotify,support:viewSupport,users:viewUsers};
+  const map={dashboard:viewDash,orders:viewOrders,daily:viewDaily,neworder:viewNewOrder,customers:viewCustomers,parts:viewParts,predict:viewPredict,pos:viewPOs,boms:viewBoms,inventory:viewInv,accounting:viewAccounting,trailers:viewTrailers,printcenter:viewPrintCenter,team:viewTeam,timeoff:viewTimeoff,outcomes:viewOutcomes,wins:viewWins,forecast:viewForecast,notify:viewNotify,support:viewSupport,users:viewUsers};
   try{
     await (map[page]||viewDash)();
     const pa=$('pActions');
@@ -1892,6 +1893,63 @@ function warrantyBadge(w){
   if(w.status==='Rejected') return '<span class="badge b-below">Rejected</span>';
   return '<span class="badge b-below">Expired</span>';
 }
+// ── Print Center (office) — VIN labels + MSOs queued by the build stage ───────
+async function viewPrintCenter(){
+  $('pTitle').textContent='Print Center';$('pSub').textContent='VIN labels and MSOs queued for the office';$('pActions').innerHTML='';
+  let vinQ=[],msoQ=[];
+  try{ [vinQ,msoQ]=await Promise.all([api('/api/print-queue?kind=vin'),api('/api/print-queue?kind=mso')]); }
+  catch(e){ $('content').innerHTML=`<div class="card"><p class="msg err">${esc(e.message)}</p></div>`; return; }
+  const queueCard=(title,jobs,soon,empty)=>`<div class="card" style="margin-bottom:16px">
+    <h3>${title} <span class="badge ${jobs.length?'b-low':'b-ok'}">${jobs.length}</span></h3>
+    ${jobs.length?`<table><thead><tr><th>VIN</th><th>Model</th><th>Order</th><th>Customer</th><th>Queued</th><th></th></tr></thead><tbody>
+      ${jobs.map(j=>`<tr>
+        <td><b style="font-family:ui-monospace,Menlo,monospace;letter-spacing:.5px">${esc(j.vin||'')}</b></td>
+        <td>${esc(j.model||'')}${j.type?` <span class="badge b-buy">${esc(j.type)}</span>`:''}</td>
+        <td>${esc(j.orderId||'')}</td><td>${esc(j.customer||'')}</td>
+        <td class="muted" style="font-size:12px">${j.queuedAt?new Date(j.queuedAt).toLocaleDateString():''}</td>
+        <td style="display:flex;gap:6px;white-space:nowrap"><button class="btn sm sec" onclick="comingSoon(${ja(soon)})">🖨️ Print</button><button class="btn sm" onclick="printJobDone(${j.jobId})">✓ Mark printed</button></td>
+      </tr>`).join('')}
+    </tbody></table>`:`<p class="muted">${empty}</p>`}
+  </div>`;
+  $('content').innerHTML=
+    queueCard('🏷️ VIN labels to print',vinQ,'The VIN label','Nothing queued. VIN labels queue automatically when a trailer enters Paint.')+
+    queueCard('📄 MSOs to print',msoQ,'The MSO','Nothing queued. MSOs queue when Paint is complete — held for stock trailers until sold.')+
+    `<div class="card" style="border-style:dashed"><p class="muted" style="margin:0">🖨️ The actual VIN label and MSO print layouts are being finalized with your samples. Until then, print through your current process and tap <b>Mark printed</b> to keep the queue accurate.</p></div>`;
+}
+function comingSoon(what){ toast(`${what} layout is coming soon — being finalized with your samples.`); }
+async function printJobDone(jobId){ try{ await api('/api/print-queue/'+jobId+'/printed',{method:'POST'}); toast('Marked printed'); viewPrintCenter(); }catch(e){ toast(e.message); } }
+
+// Open a printable build traveler (with a QR pointing at the unit) in a new window.
+async function printTraveler(unitId){
+  let d; try{ d=await api('/api/trailers/'+encodeURIComponent(unitId)+'/traveler'); }catch(e){ return toast(e.message); }
+  const stages=['Build','Paint/Powder Coat','Finish'];
+  const cell=(label,val)=>`<div><span>${label}</span>${esc(val||'—')}</div>`;
+  const html=`<!doctype html><html><head><meta charset="utf-8"><title>Traveler ${esc(d.vin||d.unitId)}</title><style>
+    @page{size:letter;margin:.5in} body{font-family:Arial,Helvetica,sans-serif;color:#111;margin:0}
+    .hd{display:flex;justify-content:space-between;align-items:flex-start;border-bottom:3px solid #ff7a18;padding-bottom:10px}
+    .hd h1{font-size:20px;margin:0}.hd h1 b{color:#ff7a18}.hd .sub{font-size:12px;color:#555}
+    .vin{font-family:'Courier New',monospace;font-size:26px;font-weight:bold;letter-spacing:2px;margin:6px 0}
+    .qr{text-align:center}.qr img{width:128px;height:128px}.qr .cap{font-size:10px;color:#555}
+    .grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px 18px;font-size:13px;margin:14px 0}
+    .grid span{color:#555;display:block;font-size:10px;text-transform:uppercase;letter-spacing:.4px}
+    h3{font-size:12px;text-transform:uppercase;letter-spacing:.5px;color:#555;border-bottom:1px solid #ccc;padding-bottom:4px;margin:18px 0 0}
+    .stage{display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid #eee;font-size:15px}
+    .box{width:20px;height:20px;border:2px solid #333;border-radius:4px;display:inline-block}.box.done{background:#1a7f4b;border-color:#1a7f4b}
+    .by{margin-left:auto;color:#999;font-size:12px} .notes{margin-top:16px;border:1px solid #ccc;border-radius:6px;min-height:110px;padding:8px}.notes span{font-size:10px;color:#555;text-transform:uppercase}
+    .foot{margin-top:14px;font-size:10px;color:#888}</style></head><body>
+    <div class="hd"><div><h1>BUILT <b>TRAILERS</b></h1><div class="sub">Build Traveler · keep with the trailer</div>
+      <div class="vin">${esc(d.vin||'(VIN pending)')}</div><div class="sub">Unit ${esc(d.unitId)}${d.serial?' · Serial '+esc(String(d.serial)):''}</div></div>
+      ${d.qr?`<div class="qr"><img src="${d.qr}"><div class="cap">scan to open this unit</div></div>`:''}</div>
+    <div class="grid">${cell('Model',d.model)}${cell('Type',d.type)}${cell('Axle',d.axle)}${cell('Order',d.orderId)}${cell('Customer',d.customer)}${cell('Due',d.due)}</div>
+    <h3>Build stages — initial &amp; date as each is completed</h3>
+    ${stages.map(s=>`<div class="stage"><span class="box ${(d.stagesDone||[]).includes(s)?'done':''}"></span> ${esc(s)} <span class="by">by __________  date ________</span></div>`).join('')}
+    <div class="notes"><span>Notes</span></div>
+    <div class="foot">Generated ${new Date().toLocaleString()} · Built Trailers</div></body></html>`;
+  const w=window.open('','_blank');
+  if(!w){ toast('Allow pop-ups to print the traveler'); return; }
+  w.document.write(html); w.document.close(); w.focus(); setTimeout(()=>{try{w.print();}catch(e){}},400);
+}
+
 async function viewTrailers(){
   $('pTitle').textContent='Trailers & Warranty';
   $('pSub').textContent='Per-trailer VINs, build history, and warranty';
@@ -2047,12 +2105,13 @@ async function trailersVinsTab(){
   </div>`;
   const registryCard=`<div class="card">
     <h3 style="margin:0 0 10px">Trailer Registry <span class="muted" style="text-transform:none;letter-spacing:0">— ${registry.length} VIN${registry.length===1?'':'s'} issued · WMI <b>${esc(config.wmi)}</b> · click a row for build &amp; warranty</span></h3>
-    ${registry.length?`<table><thead><tr><th>VIN</th><th>Model</th><th>Dealer</th><th>Order</th><th>Assigned</th></tr></thead><tbody>
+    ${registry.length?`<table><thead><tr><th>VIN</th><th>Model</th><th>Dealer</th><th>Order</th><th>Assigned</th><th></th></tr></thead><tbody>
       ${registry.map(t=>`<tr style="cursor:pointer" onclick="openTrailerDetail('${esc(t.id)}')">
         <td><b style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:.5px">${esc(t.vin)}</b></td>
         <td>${esc(t.model||'')} <span class="badge b-buy">${esc(t.type||'')}</span></td>
         <td>${esc(t.customer||'')}</td><td>${esc(t.orderId||'')}</td>
         <td class="muted" style="font-size:12px">${t.assignedAt?new Date(t.assignedAt).toLocaleDateString():''}</td>
+        <td><button class="btn sm sec" onclick="event.stopPropagation();printTraveler('${esc(t.id)}')">🏷️ Traveler</button></td>
       </tr>`).join('')}
     </tbody></table>`:`<p class="muted">No VINs issued yet. Assign VINs to an order above to populate the registry.</p>`}
   </div>`;
