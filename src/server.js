@@ -872,6 +872,37 @@ app.post('/api/orders', authMiddleware, requireSales, async (req, res) => {
   await audit(req, 'order.create', `${id} ${cust.name} ${mdl.category} x${qty}`);
   res.json({ id });
 });
+// Build-to-stock: a production order with no customer yet. Flows through the stages and gets a
+// VIN like any build; its MSO is held until the trailer is sold (a customer assigned below).
+app.post('/api/orders/stock', authMiddleware, requireSales, async (req, res) => {
+  const { modelId, qty, due } = req.body || {};
+  const mdl = await one('SELECT * FROM model WHERE id=$1', [modelId]);
+  if (!mdl) return res.status(400).json({ error: 'model required' });
+  const n = Math.max(1, Number(qty) || 1);
+  const id = 'SO-' + (1049 + (await all('SELECT id FROM sales_order', [])).length);
+  const seqRow = await one('SELECT COALESCE(MAX(production_seq),0)+1 AS n FROM sales_order', []);
+  await q('INSERT INTO sales_order(id,customer_id,model_id,qty,stage,due,deposit,channel,rep_id,production_seq) VALUES ($1,NULL,$2,$3,$4,$5,0,$6,$7,$8)',
+    [id, modelId, n, 'Scheduled', due || null, 'Stock', req.user.id, seqRow?.n || 1]);
+  await audit(req, 'order.stock', `${id} STOCK ${mdl.category} x${n}`);
+  res.json({ id, stock: true });
+});
+// Assign a customer to a stock order (it's been sold) and release any held MSOs.
+app.post('/api/orders/:id/customer', authMiddleware, requireSales, async (req, res) => {
+  const { customerId } = req.body || {};
+  const o = await one('SELECT * FROM sales_order WHERE id=$1', [req.params.id]);
+  if (!o) return res.status(404).json({ error: 'order not found' });
+  const cust = await one('SELECT * FROM customer WHERE id=$1', [customerId]);
+  if (!cust) return res.status(400).json({ error: 'customer required' });
+  const mdl = await one('SELECT category FROM model WHERE id=$1', [o.model_id]);
+  const allowed = await allowedTypesFor(customerId);
+  if (mdl && !allowed.includes(mdl.category))
+    return res.status(403).json({ error: `${cust.name} is not authorized to take ${mdl.category} trailers` });
+  await q('UPDATE sales_order SET customer_id=$1 WHERE id=$2', [customerId, o.id]);
+  await q('UPDATE trailer SET customer_id=$1 WHERE order_id=$2', [customerId, o.id]);
+  const msosQueued = await trailers.releaseMsosIfPaintDone(o.id);
+  await audit(req, 'order.sold', `${o.id} -> ${cust.name}${msosQueued ? ` (${msosQueued} MSO queued)` : ''}`);
+  res.json({ ok: true, msosQueued });
+});
 // Resequence the production queue — order = full ordered array of order IDs
 app.post('/api/orders/production-order', authMiddleware, requireProductionPlanner, async (req, res) => {
   const ids = Array.isArray(req.body?.order) ? req.body.order.filter(x => typeof x === 'string') : null;

@@ -249,3 +249,24 @@ test('VIN: print center + correction are restricted to OM/GM/Admin', async () =>
   assert.equal((await fetch(BASE + '/api/print-queue', h)).status, 403, 'sales cannot open the print center');
   assert.equal((await fetch(BASE + `/api/trailers/${vinUnitId}/vin`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + sales }, body: JSON.stringify({ vin: 'BLTHACKVIN0000001' }) })).status, 403, 'sales cannot change a VIN');
 });
+
+test('stock build: VIN still prints, but the MSO is held until the trailer is sold', async () => {
+  const custs = (await json(await api('/api/customers'))).filter(c => c.active !== false && c.allowed?.length);
+  const models = await json(await api('/api/models'));
+  let cu, mo;
+  for (const c of custs) { const m = models.find(mm => c.allowed.includes(mm.category)); if (m) { cu = c; mo = m; break; } }
+  // build to stock (no customer)
+  const sid = (await json(await api('/api/orders/stock', { method: 'POST', body: JSON.stringify({ modelId: mo.id, qty: 1, due: '2026-12-22' }) }))).id;
+  for (const st of ['Build', 'Paint/Powder Coat', 'Finish'])
+    await api(`/api/orders/${sid}/stage`, { method: 'PATCH', body: JSON.stringify({ stage: st }) });
+  let vinQ = await json(await api('/api/print-queue?kind=vin'));
+  let msoQ = await json(await api('/api/print-queue?kind=mso'));
+  assert.ok(vinQ.some(j => j.orderId === sid), 'VIN print queues for a stock build');
+  assert.ok(!msoQ.some(j => j.orderId === sid), 'MSO is HELD for a stock build (no customer)');
+  // sold: assign an authorized customer → MSO releases
+  const sold = await api(`/api/orders/${sid}/customer`, { method: 'POST', body: JSON.stringify({ customerId: cu.id }) });
+  assert.equal(sold.status, 200);
+  assert.ok((await sold.json()).msosQueued >= 1, 'selling releases the MSO');
+  msoQ = await json(await api('/api/print-queue?kind=mso'));
+  assert.ok(msoQ.some(j => j.orderId === sid), 'MSO is queued once the stock trailer is sold');
+});

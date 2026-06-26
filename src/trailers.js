@@ -83,11 +83,27 @@ export async function afterStageChange(orderId, fromStage, toStage, user) {
   } catch (e) { console.warn('afterStageChange:', e.message); }
 }
 
-// One print job per VIN'd unit on the order — idempotent (a unit can't be queued twice for the same kind).
+// One print job per VIN'd unit on the order — idempotent (a unit can't be queued twice for the
+// same kind). MSOs are HELD for stock units (no customer yet): the MSO names the buyer, so it
+// only queues once a dealer/customer has been assigned (the trailer is sold).
 async function queuePrints(orderId, kind) {
-  const units = await all('SELECT id FROM trailer WHERE order_id=$1 AND vin IS NOT NULL', [orderId]);
-  for (const u of units)
+  const units = await all('SELECT id, customer_id FROM trailer WHERE order_id=$1 AND vin IS NOT NULL', [orderId]);
+  for (const u of units) {
+    if (kind === 'mso' && !u.customer_id) continue; // stock build — hold the MSO until sold
     await q(`INSERT INTO print_job(unit_id,order_id,kind) VALUES($1,$2,$3) ON CONFLICT(unit_id,kind) DO NOTHING`, [u.id, orderId, kind]);
+  }
+}
+
+// When a stock order is sold (a customer is assigned), release any held MSOs — but only if the
+// trailer has already passed Paint. If it hasn't, the MSO will queue normally at paint-complete.
+// "Past paint" = the order is at Finish/Ready, or Paint is recorded done in the daily-update log.
+export async function releaseMsosIfPaintDone(orderId) {
+  const o = await one('SELECT stage FROM sales_order WHERE id=$1', [orderId]);
+  const pastPaint = (o && ['Finish', 'Ready'].includes(o.stage))
+    || !!await one(`SELECT 1 AS x FROM order_stage_done WHERE order_id=$1 AND stage=$2`, [orderId, PAINT]);
+  if (!pastPaint) return 0;
+  await queuePrints(orderId, 'mso');
+  return (await all(`SELECT id FROM trailer WHERE order_id=$1 AND vin IS NOT NULL`, [orderId])).length;
 }
 
 // The office print center: queued (unprinted) VIN labels and/or MSOs, oldest first.
