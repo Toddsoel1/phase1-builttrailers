@@ -886,6 +886,7 @@ app.patch('/api/orders/:id/stage', authMiddleware, requireTier('editor'), async 
   const cur = await one('SELECT * FROM sales_order WHERE id=$1', [req.params.id]);
   if (!cur) return res.status(404).json({ error: 'not found' });
   await q('UPDATE sales_order SET stage=$1 WHERE id=$2', [stage, req.params.id]);
+  await trailers.afterStageChange(req.params.id, cur.stage, stage, req.user); // VINs at Build, print queues at Paint
   await audit(req, 'order.stage', `${req.params.id} -> ${stage}`);
   await sms.notifyOrderStage(req.params.id, stage, req.user.id); // Phase 6: text the customer
   await dealernotify.notifyDealer(cur.customer_id, 'order', `Order ${req.params.id} is now "${stage}".`, req.params.id);
@@ -917,6 +918,7 @@ app.post('/api/work-log', authMiddleware, async (req, res) => {
   const userId = (req.body?.userId && canLogForOthers) ? req.body.userId : req.user.id;
   try {
     const r = await logWork({ userId, orderId, workstation, stage, hours, note, stageComplete, logDate: req.body?.logDate });
+    if (r.advanced) await trailers.afterStageChange(orderId, r.stage, r.advanced, req.user); // queue VIN/MSO prints as paint begins/completes
     await audit(req, 'work.log', `${orderId} ${workstation || ''} ${Number(hours) || 0}h${r.consumed?.consumed ? ` — ${r.stage} complete, $${Math.round(r.consumed.materialValue)} consumed` : ''}`);
     res.json({ ok: true, ...r });
   } catch (e) { res.status(400).json({ error: e.message }); }
@@ -1324,6 +1326,28 @@ app.put('/api/trailers/config', authMiddleware, requireSection('accounting'), as
   const cfg = await trailers.setVinConfig(req.body || {});
   await audit(req, 'vin.config', JSON.stringify(cfg));
   res.json(cfg);
+});
+
+// Only the Office Manager, General Manager, or an Admin may run the VIN/MSO print center or
+// correct an assigned VIN.
+function requireVinAuthority(req, res, next) {
+  const ok = req.user.role === 'admin' || (req.user.titles || []).some(t => ['Office Manager', 'General Manager'].includes(t));
+  if (!ok) return res.status(403).json({ error: 'Only the Office Manager, General Manager, or an Admin can do this.' });
+  next();
+}
+// VIN/MSO print center (office): VIN labels queue when paint begins, MSOs when paint completes.
+app.get('/api/print-queue', authMiddleware, requireVinAuthority, async (req, res) => res.json(await trailers.printQueue(req.query.kind)));
+app.post('/api/print-queue/:id/printed', authMiddleware, requireVinAuthority, async (req, res) => {
+  try { const r = await trailers.markPrinted(Number(req.params.id), req.user); await audit(req, 'print.done', req.params.id); res.json(r); }
+  catch (e) { res.status(400).json({ error: e.message }); }
+});
+// Correct an assigned VIN after the fact (e.g. crossed stickers). Build history stays with the unit.
+app.post('/api/trailers/:id/vin', authMiddleware, requireVinAuthority, async (req, res) => {
+  try {
+    const r = await trailers.correctVin(req.params.id, req.body?.vin);
+    await audit(req, 'vin.correct', `${r.unitId}: ${r.oldVin || '(none)'} -> ${r.newVin}`);
+    res.json(r);
+  } catch (e) { res.status(400).json({ error: e.message }); }
 });
 
 // ---- Warranty & build history ----

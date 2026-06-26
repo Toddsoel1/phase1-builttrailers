@@ -202,3 +202,50 @@ test('owner: cannot file a claim for a VIN not registered to the account', async
   assert.equal(r.status, 400);
   assert.match((await r.json()).error, /not registered to your account/i);
 });
+
+// ---- VIN / MSO print workflow ----
+let vinUnitId, vinJobId;
+test('VIN: Build auto-assigns a VIN, Paint queues the VIN print, Paint-complete queues the MSO', async () => {
+  const custs = (await json(await api('/api/customers'))).filter(c => c.active !== false && c.allowed?.length);
+  const models = await json(await api('/api/models'));
+  let cu, mo;
+  for (const c of custs) { const m = models.find(mm => c.allowed.includes(mm.category)); if (m) { cu = c; mo = m; break; } }
+  const oid = (await json(await api('/api/orders', { method: 'POST', body: JSON.stringify({ customerId: cu.id, modelId: mo.id, qty: 1, due: '2026-12-20' }) }))).id;
+  // enter Build → VIN auto-assigned; enter Paint → VIN print queues
+  await api(`/api/orders/${oid}/stage`, { method: 'PATCH', body: JSON.stringify({ stage: 'Build' }) });
+  await api(`/api/orders/${oid}/stage`, { method: 'PATCH', body: JSON.stringify({ stage: 'Paint/Powder Coat' }) });
+  const vinQ = await json(await api('/api/print-queue?kind=vin'));
+  const job = vinQ.find(j => j.orderId === oid);
+  assert.ok(job, 'a VIN print job is queued for the order');
+  assert.equal(String(job.vin).length, 17, 'unit has a 17-char VIN (auto-assigned at Build)');
+  assert.match(job.vin, /^BLT/, 'VIN uses the BUILT WMI');
+  vinUnitId = job.unitId; vinJobId = job.jobId;
+  // complete Paint → MSO queues
+  await api(`/api/orders/${oid}/stage`, { method: 'PATCH', body: JSON.stringify({ stage: 'Finish' }) });
+  const msoQ = await json(await api('/api/print-queue?kind=mso'));
+  assert.ok(msoQ.some(j => j.unitId === vinUnitId), 'an MSO print job is queued once Paint is complete');
+});
+
+test('VIN: marking a print job done removes it from the queue', async () => {
+  assert.equal((await api(`/api/print-queue/${vinJobId}/printed`, { method: 'POST' })).status, 200);
+  const vinQ = await json(await api('/api/print-queue?kind=vin'));
+  assert.ok(!vinQ.some(j => j.jobId === vinJobId), 'printed job left the queue');
+});
+
+test('VIN: correction changes the VIN but keeps the same unit (build history stays)', async () => {
+  const r = await api(`/api/trailers/${vinUnitId}/vin`, { method: 'POST', body: JSON.stringify({ vin: 'BLTTESTVIN0000099' }) });
+  assert.equal(r.status, 200);
+  const d = await r.json();
+  assert.equal(d.unitId, vinUnitId, 'same physical unit');
+  assert.equal(d.newVin, 'BLTTESTVIN0000099');
+  assert.ok(d.oldVin && d.oldVin !== d.newVin, 'old VIN recorded');
+  assert.equal((await api(`/api/trailers/${vinUnitId}/vin`, { method: 'POST', body: JSON.stringify({ vin: 'TOOSHORT' }) })).status, 400, 'invalid VIN rejected');
+});
+
+test('VIN: print center + correction are restricted to OM/GM/Admin', async () => {
+  const sr = await api('/api/auth/login', { method: 'POST', body: JSON.stringify({ username: 'aruiz', password: 'built2026' }) });
+  const sales = (await sr.json()).token; // Angela Ruiz — Sales (editor), not an office authority
+  const h = { headers: { Authorization: 'Bearer ' + sales } };
+  assert.equal((await fetch(BASE + '/api/print-queue', h)).status, 403, 'sales cannot open the print center');
+  assert.equal((await fetch(BASE + `/api/trailers/${vinUnitId}/vin`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + sales }, body: JSON.stringify({ vin: 'BLTHACKVIN0000001' }) })).status, 403, 'sales cannot change a VIN');
+});

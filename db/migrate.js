@@ -90,6 +90,9 @@ const colMigrations = [
   // Maintenance log gains mileage/hours + parts columns to match the BUILT maintenance schedule.
   `ALTER TABLE maintenance_record ADD COLUMN IF NOT EXISTS mileage TEXT`,
   `ALTER TABLE maintenance_record ADD COLUMN IF NOT EXISTS parts TEXT`,
+  // VIN/MSO print jobs for the office: VIN label queues when paint begins, MSO when paint completes.
+  `CREATE TABLE IF NOT EXISTS print_job (id SERIAL PRIMARY KEY, unit_id TEXT NOT NULL, order_id TEXT, kind TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'queued', queued_at TIMESTAMPTZ NOT NULL DEFAULT now(), printed_at TIMESTAMPTZ, printed_by TEXT)`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_print_job_uq ON print_job(unit_id, kind)`,
 ];
 
 export async function ensureSchema() {

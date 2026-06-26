@@ -70,4 +70,58 @@ export async function assignVinsForOrder(orderId, user) {
   return assigned;
 }
 
+const PAINT = 'Paint/Powder Coat';
+
+// Stage-driven unit lifecycle (idempotent): VINs are created when an order enters Build; the
+// VIN print job queues for the office when Paint begins; the MSO print job queues when Paint
+// is completed. A print/VIN side effect must never make a stage move fail.
+export async function afterStageChange(orderId, fromStage, toStage, user) {
+  try {
+    if (toStage === 'Build') await assignVinsForOrder(orderId, user);
+    if (toStage === PAINT) await queuePrints(orderId, 'vin');
+    if (fromStage === PAINT) await queuePrints(orderId, 'mso');
+  } catch (e) { console.warn('afterStageChange:', e.message); }
+}
+
+// One print job per VIN'd unit on the order — idempotent (a unit can't be queued twice for the same kind).
+async function queuePrints(orderId, kind) {
+  const units = await all('SELECT id FROM trailer WHERE order_id=$1 AND vin IS NOT NULL', [orderId]);
+  for (const u of units)
+    await q(`INSERT INTO print_job(unit_id,order_id,kind) VALUES($1,$2,$3) ON CONFLICT(unit_id,kind) DO NOTHING`, [u.id, orderId, kind]);
+}
+
+// The office print center: queued (unprinted) VIN labels and/or MSOs, oldest first.
+export async function printQueue(kind) {
+  const rows = await all(
+    `SELECT pj.id, pj.kind, pj.queued_at, t.id AS unit_id, t.vin, t.serial, t.order_id,
+            m.name AS model, m.category AS type, m.axle, c.name AS customer
+       FROM print_job pj
+       JOIN trailer t ON t.id = pj.unit_id
+       LEFT JOIN model m ON m.id = t.model_id
+       LEFT JOIN customer c ON c.id = t.customer_id
+      WHERE pj.status='queued'${kind ? ' AND pj.kind=$1' : ''}
+      ORDER BY pj.queued_at`, kind ? [kind] : []);
+  return rows.map(r => ({ jobId: r.id, kind: r.kind, queuedAt: r.queued_at, unitId: r.unit_id,
+    vin: r.vin, serial: r.serial, orderId: r.order_id, model: r.model, type: r.type, axle: r.axle, customer: r.customer }));
+}
+
+export async function markPrinted(jobId, user) {
+  if (!await one('SELECT id FROM print_job WHERE id=$1', [jobId])) throw new Error('print job not found');
+  await q(`UPDATE print_job SET status='printed', printed_at=now(), printed_by=$1 WHERE id=$2`, [user?.id || null, jobId]);
+  return { ok: true };
+}
+
+// Correct a VIN after the fact (crossed stickers, etc.). Every build detail stays with the unit
+// because the build log, registration, claims and consumption all key on the trailer id — not the
+// VIN — so only the vin column changes. The endpoint restricts this to OM/GM/Admin.
+export async function correctVin(unitId, newVin) {
+  const u = await one('SELECT * FROM trailer WHERE id=$1', [unitId]);
+  if (!u) throw new Error('Trailer unit not found.');
+  const vin = String(newVin || '').trim().toUpperCase();
+  if (vin.length !== 17) throw new Error('A VIN must be exactly 17 characters.');
+  if (await one('SELECT id FROM trailer WHERE upper(vin)=$1 AND id<>$2', [vin, unitId])) throw new Error('That VIN is already assigned to another unit.');
+  await q('UPDATE trailer SET vin=$1 WHERE id=$2', [vin, unitId]);
+  return { unitId, oldVin: u.vin, newVin: vin };
+}
+
 export { vinConfig, setVinConfig };
