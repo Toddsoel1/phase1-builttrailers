@@ -117,6 +117,9 @@ const colMigrations = [
   // model BOM at stage-completion so a configured trailer consumes exactly its real parts.
   `CREATE TABLE IF NOT EXISTS order_bom_delta (id SERIAL PRIMARY KEY, order_id TEXT NOT NULL, part_id TEXT NOT NULL, qty NUMERIC(12,3) NOT NULL DEFAULT 0, stage TEXT NOT NULL DEFAULT 'Build')`,
   `CREATE INDEX IF NOT EXISTS idx_obd_order ON order_bom_delta(order_id, stage)`,
+  // Paragon trailers are Nautique trailers — fold the Paragon make into Nautique.
+  `UPDATE boat_model SET make_id='NQ' WHERE make_id='PG'`,
+  `DELETE FROM boat_make WHERE id='PG'`,
 ];
 
 export async function ensureSchema() {

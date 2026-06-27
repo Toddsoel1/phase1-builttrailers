@@ -25,7 +25,7 @@ const NEW_PARTS = [
   ['BUY-AXL-5200', 'Straight Axle, 5200lb'],
 ];
 
-const MAKES = [['NQ', 'Nautique'], ['PG', 'Paragon'], ['YA', 'Yamaha']];
+const MAKES = [['NQ', 'Nautique'], ['YA', 'Yamaha']];
 
 // id, make, display name, length (ft), base trailer model id (an existing `model` row). Mappings
 // marked ASSUMED are inferred by size; the rest match an exact existing base trailer. These are the
@@ -40,8 +40,8 @@ const BOAT_MODELS = [
   ['NQ-S23', 'NQ', 'Super Air Nautique S23', 23, 'G23TR'],     // ASSUMED (shares the G23 trailer)
   ['NQ-S25', 'NQ', 'Super Air Nautique S25', 25, 'G25TR'],     // ASSUMED (shares the G25 trailer)
   ['NQ-SKI', 'NQ', 'Ski Nautique', 20, 'GS20TAN'],             // ASSUMED (shares the GS20 trailer)
-  ['PG-G23', 'PG', 'G23 Paragon', 23, 'P23TR'],
-  ['PG-G25', 'PG', 'G25 Paragon', 25, 'P25TR'],
+  ['PG-G23', 'NQ', 'G23 Paragon', 23, 'P23TR'],
+  ['PG-G25', 'NQ', 'G25 Paragon', 25, 'P25TR'],
   ['YA-27', 'YA', "Yamaha 27'", 27, '27TR'],                   // ASSUMED triple (27TAN tandem also exists)
 ];
 
