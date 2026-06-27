@@ -25,14 +25,24 @@ const NEW_PARTS = [
   ['BUY-AXL-5200', 'Straight Axle, 5200lb'],
 ];
 
-const MAKES = [['NQ', 'Nautique']];
+const MAKES = [['NQ', 'Nautique'], ['PG', 'Paragon'], ['YA', 'Yamaha']];
 
-// id, make, display name, length (ft), base trailer model id (must exist in `model`).
+// id, make, display name, length (ft), base trailer model id (an existing `model` row). Mappings
+// marked ASSUMED are inferred by size and await the user's confirmation; the rest match an exact
+// existing base trailer. base_model_id is code-owned (kept in sync), so corrections re-seed cleanly.
 const BOAT_MODELS = [
   ['NQ-GS20', 'NQ', 'Super Air Nautique GS20', 20, 'GS20TAN'],
-  ['NQ-G23', 'NQ', 'Super Air Nautique G23', 23, 'G23TR'],
+  ['NQ-GS22', 'NQ', 'Super Air Nautique GS22', 22, 'GS24TR'],  // ASSUMED
   ['NQ-GS24', 'NQ', 'Super Air Nautique GS24', 24, 'GS24TR'],
+  ['NQ-G21', 'NQ', 'Super Air Nautique G21', 21, 'GS20TAN'],   // ASSUMED
+  ['NQ-G23', 'NQ', 'Super Air Nautique G23', 23, 'G23TR'],
   ['NQ-G25', 'NQ', 'Super Air Nautique G25', 25, 'G25TR'],
+  ['NQ-S23', 'NQ', 'Super Air Nautique S23', 23, 'G23TR'],     // ASSUMED (shares the G23 trailer)
+  ['NQ-S25', 'NQ', 'Super Air Nautique S25', 25, 'G25TR'],     // ASSUMED (shares the G25 trailer)
+  ['NQ-SKI', 'NQ', 'Ski Nautique', 20, 'GS20TAN'],             // ASSUMED (shares the GS20 trailer)
+  ['PG-G23', 'PG', 'G23 Paragon', 23, 'P23TR'],
+  ['PG-G25', 'PG', 'G25 Paragon', 25, 'P25TR'],
+  ['YA-27', 'YA', "Yamaha 27'", 27, '27TR'],                   // ASSUMED triple (27TAN tandem also exists)
 ];
 
 const STANDARD_COLORS = ['Mystic White', 'Lunar White', 'Sahara Sand', 'Teton Green', 'Haze Grey',
@@ -111,7 +121,8 @@ export async function ensureBoatCatalog() {
     await q(`INSERT INTO boat_make(id,name) VALUES($1,$2) ON CONFLICT(id) DO NOTHING`, [id, name]);
   let bs = 0;
   for (const [id, make, name, len, base] of BOAT_MODELS)
-    await q(`INSERT INTO boat_model(id,make_id,name,length_ft,base_model_id,sort) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT(id) DO NOTHING`, [id, make, name, len, base, bs++]);
+    await q(`INSERT INTO boat_model(id,make_id,name,length_ft,base_model_id,sort) VALUES($1,$2,$3,$4,$5,$6)
+             ON CONFLICT(id) DO UPDATE SET make_id=$2,name=$3,length_ft=$4,base_model_id=$5,sort=$6,active=true`, [id, make, name, len, base, bs++]);
   // Part mappings are entirely code-owned — reset them so they always match this file.
   await q(`DELETE FROM option_choice_part`).catch(() => {});
   let gs = 0;
