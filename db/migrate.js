@@ -98,6 +98,19 @@ const colMigrations = [
   `CREATE TABLE IF NOT EXISTS cycle_count (id SERIAL PRIMARY KEY, status TEXT NOT NULL DEFAULT 'pending', note TEXT, created_by TEXT, created_at TIMESTAMPTZ NOT NULL DEFAULT now(), reviewed_by TEXT, reviewed_at TIMESTAMPTZ, review_note TEXT, qb_status TEXT, qb_external_id TEXT)`,
   `CREATE TABLE IF NOT EXISTS cycle_count_line (id SERIAL PRIMARY KEY, count_id INTEGER NOT NULL, part_id TEXT NOT NULL, system_qty NUMERIC(14,3) NOT NULL DEFAULT 0, counted_qty NUMERIC(14,3) NOT NULL DEFAULT 0, unit_cost NUMERIC(12,2) NOT NULL DEFAULT 0)`,
   `CREATE INDEX IF NOT EXISTS idx_cc_line ON cycle_count_line(count_id)`,
+  // Boat Trailer Builder (dealer portal): a Nautique boat catalog + an office-editable options
+  // catalog (each choice wired to real parts for BOM/inventory + a dealer price), and storage of
+  // a submitted configuration on the order. Dollar figures seed at 0 and are admin-editable.
+  `CREATE TABLE IF NOT EXISTS boat_make (id TEXT PRIMARY KEY, name TEXT NOT NULL, active BOOLEAN NOT NULL DEFAULT true, sort INTEGER NOT NULL DEFAULT 0)`,
+  `CREATE TABLE IF NOT EXISTS boat_model (id TEXT PRIMARY KEY, make_id TEXT NOT NULL, name TEXT NOT NULL, length_ft NUMERIC(5,1), beam_in NUMERIC(5,1), dry_weight_lb INTEGER, base_model_id TEXT, active BOOLEAN NOT NULL DEFAULT true, sort INTEGER NOT NULL DEFAULT 0)`,
+  `CREATE TABLE IF NOT EXISTS option_group (id TEXT PRIMARY KEY, name TEXT NOT NULL, step INTEGER NOT NULL DEFAULT 0, ui TEXT NOT NULL DEFAULT 'single', required BOOLEAN NOT NULL DEFAULT false, help TEXT, sort INTEGER NOT NULL DEFAULT 0, active BOOLEAN NOT NULL DEFAULT true)`,
+  `CREATE TABLE IF NOT EXISTS option_choice (id TEXT PRIMARY KEY, group_id TEXT NOT NULL, name TEXT NOT NULL, dealer_price NUMERIC(12,2) NOT NULL DEFAULT 0, is_default BOOLEAN NOT NULL DEFAULT false, active BOOLEAN NOT NULL DEFAULT true, sort INTEGER NOT NULL DEFAULT 0, note TEXT)`,
+  `CREATE TABLE IF NOT EXISTS option_choice_part (id SERIAL PRIMARY KEY, choice_id TEXT NOT NULL, part_id TEXT NOT NULL, qty NUMERIC(12,3) NOT NULL DEFAULT 1, op TEXT NOT NULL DEFAULT 'add', per_axle BOOLEAN NOT NULL DEFAULT false)`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_ocp_uq ON option_choice_part(choice_id, part_id, op)`,
+  `CREATE INDEX IF NOT EXISTS idx_choice_group ON option_choice(group_id)`,
+  `CREATE TABLE IF NOT EXISTS order_build (order_id TEXT PRIMARY KEY, boat_make TEXT, boat_model TEXT, boat_year INTEGER, boat_length NUMERIC(5,1), base_model_id TEXT, total_price NUMERIC(12,2) NOT NULL DEFAULT 0, note TEXT, created_by TEXT, created_at TIMESTAMPTZ NOT NULL DEFAULT now())`,
+  `CREATE TABLE IF NOT EXISTS order_build_option (id SERIAL PRIMARY KEY, order_id TEXT NOT NULL, group_id TEXT, group_name TEXT, choice_id TEXT, choice_name TEXT, dealer_price NUMERIC(12,2) NOT NULL DEFAULT 0)`,
+  `CREATE INDEX IF NOT EXISTS idx_obo_order ON order_build_option(order_id)`,
 ];
 
 export async function ensureSchema() {

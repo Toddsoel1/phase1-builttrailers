@@ -263,6 +263,18 @@ test('traveler: build sheet returns unit data + a QR, and /u/:id resolves the un
   assert.match(await pu.text(), /BUILT/, 'public unit page renders');
 });
 
+test('boat builder: catalog seeds Nautique boats + option groups (idempotent at boot)', async () => {
+  const cat = await json(await api('/api/boat-catalog'));
+  assert.ok(cat.makes.some(m => m.name === 'Nautique'), 'Nautique make seeded');
+  const g23 = cat.boats.find(b => b.id === 'NQ-G23');
+  assert.ok(g23 && g23.base_model_id === 'G23TR', 'G23 maps to base trailer G23TR');
+  const brakes = cat.groups.find(g => g.id === 'brakes');
+  assert.ok(brakes && brakes.choices.find(c => c.id === 'brk_eoh' && c.is_default), 'EOH is the default brake');
+  assert.equal(cat.groups.find(g => g.id === 'wheels').choices.length, 3, 'three wheel choices');
+  const flake = cat.groups.find(g => g.id === 'paint_color').choices.find(c => /metal flake/i.test(c.name));
+  assert.ok(flake.parts.some(p => p.part_id === 'BUY-FLK-001'), 'a flake color adds the flake additive part');
+});
+
 test('stock build: VIN still prints, but the MSO is held until the trailer is sold', async () => {
   const custs = (await json(await api('/api/customers'))).filter(c => c.active !== false && c.allowed?.length);
   const models = await json(await api('/api/models'));

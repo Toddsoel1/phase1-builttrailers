@@ -36,6 +36,7 @@ import * as portal from './portal.js';
 import * as dealer from './dealer.js';
 import * as owner from './owner.js';
 import * as inventory from './inventory.js';
+import * as boatbuilder from './boatbuilder.js';
 import QRCode from 'qrcode';
 import * as dealernotify from './dealernotify.js';
 import * as storage from './storage.js';
@@ -1443,6 +1444,11 @@ app.get('/api/trailers/:id/traveler', authMiddleware, requireSection('trailers')
   const qr = await QRCode.toDataURL(`${base}/u/${encodeURIComponent(d.unitId)}`, { margin: 1, width: 240 }).catch(() => null);
   res.json({ ...d, qr });
 });
+// Boat Trailer Builder — the configurator catalog (Nautique boats + option groups/choices). The
+// sizing/validation/pricing engine + dealer submit route come in Phase 1B.
+app.get('/api/boat-catalog', authMiddleware, async (_req, res) => {
+  res.json(await boatbuilder.getCatalog());
+});
 
 // ---- Warranty & build history ----
 app.get('/api/warranty/steps', authMiddleware, requireSection('trailers'), (_req, res) => res.json(warranty.BUILD_STEPS));
@@ -1618,6 +1624,9 @@ const kind = await initDb();
 // with the seed so structure can never drift). Then run data backfills, which operate on
 // existing rows and therefore must come AFTER the structural schema.
 await ensureSchema();
+  // Boat Trailer Builder catalog (Nautique boats + options) — idempotent, never overwrites
+  // office-edited prices. After ensureSchema so its tables + the part table exist.
+  await boatbuilder.ensureBoatCatalog().catch(e => log('warn', 'boatCatalog', { error: e.message }));
   // Migrate existing app_user.title into user_title junction (idempotent)
   await q(`INSERT INTO user_title(user_id,role_name)
     SELECT u.id, u.title FROM app_user u JOIN role r ON r.name=u.title
