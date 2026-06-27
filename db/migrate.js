@@ -111,6 +111,12 @@ const colMigrations = [
   `CREATE TABLE IF NOT EXISTS order_build (order_id TEXT PRIMARY KEY, boat_make TEXT, boat_model TEXT, boat_year INTEGER, boat_length NUMERIC(5,1), base_model_id TEXT, total_price NUMERIC(12,2) NOT NULL DEFAULT 0, note TEXT, created_by TEXT, created_at TIMESTAMPTZ NOT NULL DEFAULT now())`,
   `CREATE TABLE IF NOT EXISTS order_build_option (id SERIAL PRIMARY KEY, order_id TEXT NOT NULL, group_id TEXT, group_name TEXT, choice_id TEXT, choice_name TEXT, dealer_price NUMERIC(12,2) NOT NULL DEFAULT 0)`,
   `CREATE INDEX IF NOT EXISTS idx_obo_order ON order_build_option(order_id)`,
+  // Exclusive option groups (axle type, wheels) swap a base BOM part rather than add to it.
+  `ALTER TABLE option_group ADD COLUMN IF NOT EXISTS exclusive BOOLEAN NOT NULL DEFAULT false`,
+  // Per-order BOM deltas resolved at submit (signed: + adds, - removes), netted against the base
+  // model BOM at stage-completion so a configured trailer consumes exactly its real parts.
+  `CREATE TABLE IF NOT EXISTS order_bom_delta (id SERIAL PRIMARY KEY, order_id TEXT NOT NULL, part_id TEXT NOT NULL, qty NUMERIC(12,3) NOT NULL DEFAULT 0, stage TEXT NOT NULL DEFAULT 'Build')`,
+  `CREATE INDEX IF NOT EXISTS idx_obd_order ON order_bom_delta(order_id, stage)`,
 ];
 
 export async function ensureSchema() {

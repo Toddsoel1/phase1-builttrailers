@@ -275,6 +275,29 @@ test('boat builder: catalog seeds Nautique boats + option groups (idempotent at 
   assert.ok(flake.parts.some(p => p.part_id === 'BUY-FLK-001'), 'a flake color adds the flake additive part');
 });
 
+test('boat builder: validate, reconcile BOM (no double-count), and submit', async () => {
+  const full = { axle_type: 'axle_torsion', brakes: 'brk_eoh', paint_style: 'paint_single', paint_color: 'color_mystic_white', wheels: 'wheel_std', fender_style: 'fender_squared', winch_stand: 'winch_f2' };
+  // missing required selections → invalid
+  let r = await json(await api('/api/boat-build/preview', { method: 'POST', body: JSON.stringify({ boatId: 'NQ-G23', selections: {} }) }));
+  assert.equal(r.ok, false, 'empty config is invalid');
+  // full config → valid; G23's base trailer is already torsion, so torsion adds NO axle delta
+  r = await json(await api('/api/boat-build/preview', { method: 'POST', body: JSON.stringify({ boatId: 'NQ-G23', selections: full }) }));
+  assert.equal(r.ok, true, 'full config valid');
+  assert.ok(!r.bom.deltas.find(d => d.part_id === 'BUY-AXL-3500T'), 'no torsion delta when base is already torsion');
+  assert.ok(r.bom.deltas.find(d => d.part_id === 'BUY-BRK-EOH' && d.qty === 1), 'EOH brake kit added (base has no brakes)');
+  // GS20 base is sprung → choosing torsion swaps the axle parts out
+  const g = await json(await api('/api/boat-build/preview', { method: 'POST', body: JSON.stringify({ boatId: 'NQ-GS20', selections: full }) }));
+  assert.ok(g.bom.deltas.find(d => d.part_id === 'BUY-AXL-3500T' && d.qty === 1), 'GS20 gains a torsion axle');
+  assert.ok(g.bom.deltas.find(d => d.part_id === 'BUY-AXL-3500' && d.qty === -1), 'GS20 drops the sprung axle');
+  assert.ok(g.bom.deltas.find(d => d.part_id === 'BUY-SPR-3500' && d.qty === -2), 'GS20 drops the leaf springs');
+  // two-tone without a fender color → invalid
+  const tt = await json(await api('/api/boat-build/preview', { method: 'POST', body: JSON.stringify({ boatId: 'NQ-G23', selections: { ...full, paint_style: 'paint_twotone' } }) }));
+  assert.equal(tt.ok, false, 'two-tone requires a fender color');
+  // submit creates a Quote order
+  const s = await json(await api('/api/boat-build/submit', { method: 'POST', body: JSON.stringify({ boatId: 'NQ-G23', year: 2025, qty: 1, selections: full }) }));
+  assert.ok(s.orderId && s.orderId.startsWith('SO-'), 'configured order created');
+});
+
 test('stock build: VIN still prints, but the MSO is held until the trailer is sold', async () => {
   const custs = (await json(await api('/api/customers'))).filter(c => c.active !== false && c.allowed?.length);
   const models = await json(await api('/api/models'));

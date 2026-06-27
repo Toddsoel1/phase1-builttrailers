@@ -31,22 +31,37 @@ export async function consumeStage(orderId, stage, ctx = {}) {
   if (await one('SELECT 1 AS x FROM order_stage_done WHERE order_id=$1 AND stage=$2', [orderId, stage]))
     return { consumed: false, reason: 'already done' };
   const logDate = ctx.logDate || new Date().toISOString().slice(0, 10);
-  const lines = await all(
+  // Effective per-unit BOM for this stage = the base model BOM + this order's configurator deltas
+  // (signed; from the Boat Trailer Builder). A standard order has no deltas and behaves as before;
+  // a configured boat trailer consumes exactly its real parts (swapped axle/wheels, brakes, etc.).
+  const eff = new Map(); // part_id -> { qty, cost }
+  for (const l of await all(
     `SELECT b.part_id, b.qty, p.cost FROM bom_line b JOIN part p ON p.id=b.part_id
-      WHERE b.model_id=$1 AND b.stage=$2`, [o.model_id, stage]);
-  let materialValue = 0;
-  for (const l of lines) {
-    const qty = Number(l.qty) * Number(o.qty), unit = Number(l.cost) || 0;
-    await q('UPDATE part SET on_hand = GREATEST(0, on_hand - $1) WHERE id=$2', [qty, l.part_id]);
+      WHERE b.model_id=$1 AND b.stage=$2`, [o.model_id, stage]))
+    eff.set(l.part_id, { qty: Number(l.qty), cost: Number(l.cost) || 0 });
+  for (const d of await all(
+    `SELECT d.part_id, d.qty, p.cost FROM order_bom_delta d JOIN part p ON p.id=d.part_id
+      WHERE d.order_id=$1 AND d.stage=$2`, [orderId, stage])) {
+    const e = eff.get(d.part_id) || { qty: 0, cost: Number(d.cost) || 0 };
+    e.qty += Number(d.qty);
+    e.cost = Number(d.cost) || e.cost;
+    eff.set(d.part_id, e);
+  }
+  let materialValue = 0, partsConsumed = 0;
+  for (const [partId, e] of eff) {
+    if (e.qty <= 0) continue;
+    const qty = e.qty * Number(o.qty), unit = e.cost;
+    await q('UPDATE part SET on_hand = GREATEST(0, on_hand - $1) WHERE id=$2', [qty, partId]);
     await q(`INSERT INTO inventory_consumption(order_id,stage,workstation,user_id,part_id,qty,unit_cost,ext_value,log_date)
              VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
-      [orderId, stage, ctx.workstation || null, ctx.userId || null, l.part_id, qty, unit, qty * unit, logDate]);
+      [orderId, stage, ctx.workstation || null, ctx.userId || null, partId, qty, unit, qty * unit, logDate]);
     materialValue += qty * unit;
+    partsConsumed++;
   }
   await q(`INSERT INTO order_stage_done(order_id,stage,completed_by,workstation,completed_at)
            VALUES ($1,$2,$3,$4,now()) ON CONFLICT(order_id,stage) DO NOTHING`,
     [orderId, stage, ctx.userId || null, ctx.workstation || null]);
-  return { consumed: true, parts: lines.length, materialValue };
+  return { consumed: true, parts: partsConsumed, materialValue };
 }
 
 // Standard labor $ for the stages already completed on an order (hours × rate × qty).

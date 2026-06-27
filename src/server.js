@@ -1449,6 +1449,20 @@ app.get('/api/trailers/:id/traveler', authMiddleware, requireSection('trailers')
 app.get('/api/boat-catalog', authMiddleware, async (_req, res) => {
   res.json(await boatbuilder.getCatalog());
 });
+// Preview a configuration — validation + live dealer price + the resolved BOM (no order created).
+app.post('/api/boat-build/preview', authMiddleware, async (req, res) => {
+  const cat = await boatbuilder.getCatalog();
+  const valid = await boatbuilder.validateBuild(req.body || {}, cat);
+  const price = await boatbuilder.priceBuild(req.body || {}, cat);
+  const boat = cat.boats.find(b => b.id === req.body?.boatId);
+  const bom = boat?.base_model_id ? await boatbuilder.computeFinalBOM(boat.base_model_id, req.body?.selections || {}, cat) : null;
+  res.json({ ...valid, price, bom });
+});
+// Submit a configuration → creates the Quote order, persisting the build, options, and BOM deltas.
+app.post('/api/boat-build/submit', authMiddleware, requireStockCreator, async (req, res) => {
+  try { res.json(await boatbuilder.submitBuild(req.user, req.body || {})); }
+  catch (e) { res.status(e.status || 400).json({ error: e.message }); }
+});
 
 // ---- Warranty & build history ----
 app.get('/api/warranty/steps', authMiddleware, requireSection('trailers'), (_req, res) => res.json(warranty.BUILD_STEPS));
