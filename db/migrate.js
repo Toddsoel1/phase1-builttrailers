@@ -120,6 +120,11 @@ const colMigrations = [
   // Paragon trailers are Nautique trailers — fold the Paragon make into Nautique.
   `UPDATE boat_model SET make_id='NQ' WHERE make_id='PG'`,
   `DELETE FROM boat_make WHERE id='PG'`,
+  // Test mode: flag test customers/dealers/owners so their activity stays out of the Action Inbox
+  // and can be wiped (admin only) without ever touching real data.
+  `ALTER TABLE customer ADD COLUMN IF NOT EXISTS is_test BOOLEAN NOT NULL DEFAULT false`,
+  `ALTER TABLE dealer_user ADD COLUMN IF NOT EXISTS is_test BOOLEAN NOT NULL DEFAULT false`,
+  `ALTER TABLE owner_user ADD COLUMN IF NOT EXISTS is_test BOOLEAN NOT NULL DEFAULT false`,
 ];
 
 export async function ensureSchema() {

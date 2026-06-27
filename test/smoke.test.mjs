@@ -328,6 +328,21 @@ test('boat builder admin: office price edit flows into the catalog + pricing; bo
   assert.equal((await fetch(BASE + '/api/boat-admin/price', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + salesTok }, body: '{}' })).status, 403, 'sales blocked from boat-builder settings');
 });
 
+test('test mode: provision flags accounts, wipe is failproof + scoped, admin-gated', async () => {
+  const acc = await json(await api('/api/admin/test-accounts', { method: 'POST' }));
+  assert.ok(acc.dealer.email && acc.dealer.password && acc.owner.email && acc.owner.password, 'test creds returned');
+  let st = await json(await api('/api/admin/test-data'));
+  assert.ok(st.customers >= 1 && st.dealers >= 1 && st.owners >= 1, 'accounts flagged as test');
+  assert.equal((await fetch(BASE + '/api/admin/test-data/wipe', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token }, body: '{}' })).status, 400, 'wipe needs the confirm token');
+  const w = (await json(await api('/api/admin/test-data/wipe', { method: 'POST', body: JSON.stringify({ confirm: 'WIPE' }) }))).wiped;
+  assert.ok(w.customers >= 1, 'test dealership wiped');
+  assert.equal(w.orders, 0, 'no real orders touched — wipe is scoped to test data only');
+  st = await json(await api('/api/admin/test-data'));
+  assert.equal(st.customers + st.dealers + st.owners, 0, 'all test accounts gone after wipe');
+  const salesTok = (await json(await api('/api/auth/login', { method: 'POST', body: JSON.stringify({ username: 'aruiz', password: 'built2026' }) }))).token;
+  assert.equal((await fetch(BASE + '/api/admin/test-accounts', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + salesTok }, body: '{}' })).status, 403, 'non-admin blocked from test mode');
+});
+
 test('stock build: VIN still prints, but the MSO is held until the trailer is sold', async () => {
   const custs = (await json(await api('/api/customers'))).filter(c => c.active !== false && c.allowed?.length);
   const models = await json(await api('/api/models'));

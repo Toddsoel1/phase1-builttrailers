@@ -41,6 +41,7 @@ import QRCode from 'qrcode';
 import * as dealernotify from './dealernotify.js';
 import * as storage from './storage.js';
 import * as push from './push.js';
+import * as testdata from './testdata.js';
 
 // Crash fast if JWT_SECRET is unset in production — predictable fallback is a critical vuln
 if (!process.env.JWT_SECRET) {
@@ -1525,6 +1526,14 @@ app.post('/api/boat-admin/boat', authMiddleware, requireBoatAdmin, async (req, r
   vals.push(b.boatId);
   await q(`UPDATE boat_model SET ${sets.join(',')} WHERE id=$${vals.length}`, vals);
   res.json({ ok: true });
+});
+
+// ---- Test mode (admin only): provision flagged test portal accounts + a failproof wipe ----
+app.get('/api/admin/test-data', authMiddleware, requireTier('admin'), async (_req, res) => res.json(await testdata.testStatus()));
+app.post('/api/admin/test-accounts', authMiddleware, requireTier('admin'), async (_req, res) => res.json(await testdata.provisionTestAccounts()));
+app.post('/api/admin/test-data/wipe', authMiddleware, requireTier('admin'), async (req, res) => {
+  if (req.body?.confirm !== 'WIPE') return res.status(400).json({ error: 'Confirmation required.' });
+  res.json({ wiped: await testdata.wipeTestData() });
 });
 
 // ---- Warranty & build history ----

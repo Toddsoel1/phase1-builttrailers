@@ -5,6 +5,7 @@
 // Each item: { key, icon, label, count, link }
 //   link = the in-app page to open (matches a NAV key in index.html)
 import { all, one } from './db.js';
+import { TEST_FILTERS as T } from './testdata.js'; // exclude flagged test data from the inbox
 
 // Resolve a raw app_user row into the shape actionItemsFor() expects.
 // Admins implicitly have every section (sections = null).
@@ -66,20 +67,20 @@ export async function actionItemsFor(user) {
     if (n) items.push({ key: 'orders_due', icon: '📋',
       label: `${plural(n, 'order')} due within 7 days`, count: n, link: 'orders' });
     // Dealer-portal orders awaiting Built Trailers sales approval
-    const da = await count(`SELECT COUNT(*)::int AS n FROM sales_order WHERE stage='Quote' AND channel='Dealer Portal'`);
+    const da = await count(`SELECT COUNT(*)::int AS n FROM sales_order WHERE stage='Quote' AND channel='Dealer Portal' AND customer_id NOT IN ${T.TEST_CUST}`);
     if (da) items.push({ key: 'dealer_orders', icon: '🛒',
       label: `${plural(da, 'dealer order')} awaiting approval`, count: da, link: 'orders' });
   }
 
   // 5b. Open warranty claims + portal registrations awaiting verification (trailers section)
   if (has('trailers')) {
-    const n = await count(`SELECT COUNT(*)::int AS n FROM warranty_claim WHERE status='Open'`);
+    const n = await count(`SELECT COUNT(*)::int AS n FROM warranty_claim WHERE status='Open' AND trailer_id NOT IN ${T.TEST_TRL} AND (submitted_by IS NULL OR submitted_by NOT IN ${T.TEST_OWNER})`);
     if (n) items.push({ key: 'warranty_claims', icon: '🛠️',
       label: `${plural(n, 'open warranty claim')}`, count: n, link: 'trailers' });
-    const pr = await count(`SELECT COUNT(*)::int AS n FROM warranty_registration WHERE verification_status='pending'`);
+    const pr = await count(`SELECT COUNT(*)::int AS n FROM warranty_registration WHERE verification_status='pending' AND trailer_id NOT IN ${T.TEST_TRL}`);
     if (pr) items.push({ key: 'warranty_regs', icon: '📝',
       label: `${plural(pr, 'warranty registration')} to verify`, count: pr, link: 'trailers' });
-    const dl = await count(`SELECT COUNT(*)::int AS n FROM dealer_user WHERE status='pending'`);
+    const dl = await count(`SELECT COUNT(*)::int AS n FROM dealer_user WHERE status='pending' AND is_test=false`);
     if (dl) items.push({ key: 'dealer_signups', icon: '🤝',
       label: `${plural(dl, 'dealership account')} to approve`, count: dl, link: 'trailers' });
   }

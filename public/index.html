@@ -165,7 +165,7 @@ function logout(){TOKEN=null;ME=null;$('app').classList.add('hidden');$('login')
 $('liPass').addEventListener('keydown',e=>{if(e.key==='Enter')login();});
 
 // ---- nav/render ----
-const NAV=[['dashboard','📊 Dashboard'],['orders','🔨 Production Flow'],['daily','📋 Daily Update'],['neworder','➕ New Order'],['customers','🏬 Customers & Dealers'],['parts','📦 Parts Master'],['predict','🤖 Predictive Ordering'],['pos','🧾 Purchase Orders'],['boms','🧩 BOMs & Cost'],['inventory','📈 Inventory Value'],['accounting','💵 Accounting'],['trailers','🚛 Trailers & Warranty'],['printcenter','🖨️ Print Center'],['boatadmin','🚤 Boat Builder'],['team','👷 Team & Payroll'],['timeoff','📅 Schedule & Time Off'],['outcomes','🎯 Goals & Outcomes'],['wins','🎉 Wins'],['forecast','🔮 Forecasting & Planning'],['notify','💬 Notifications'],['support','🆘 Support'],['users','👤 Users & Roles']];
+const NAV=[['dashboard','📊 Dashboard'],['orders','🔨 Production Flow'],['daily','📋 Daily Update'],['neworder','➕ New Order'],['customers','🏬 Customers & Dealers'],['parts','📦 Parts Master'],['predict','🤖 Predictive Ordering'],['pos','🧾 Purchase Orders'],['boms','🧩 BOMs & Cost'],['inventory','📈 Inventory Value'],['accounting','💵 Accounting'],['trailers','🚛 Trailers & Warranty'],['printcenter','🖨️ Print Center'],['boatadmin','🚤 Boat Builder'],['testdata','🧪 Test Data'],['team','👷 Team & Payroll'],['timeoff','📅 Schedule & Time Off'],['outcomes','🎯 Goals & Outcomes'],['wins','🎉 Wins'],['forecast','🔮 Forecasting & Planning'],['notify','💬 Notifications'],['support','🆘 Support'],['users','👤 Users & Roles']];
 function canSee(section){
   if(isAdmin()) return true;
   if(!ME.sections) return true; // null = all sections (admin)
@@ -176,6 +176,7 @@ function navVisible(n){
   if(n[0]==='neworder') return canSell()&&canSee('neworder');
   if(n[0]==='printcenter') return hasTitle('Office Manager','General Manager')||isAdmin();
   if(n[0]==='boatadmin') return hasTitle('Office Manager','General Manager')||isAdmin();
+  if(n[0]==='testdata') return isAdmin();
   return canSee(n[0]);
 }
 function renderNav(){
@@ -186,7 +187,7 @@ function renderNav(){
 function go(p){page=p;render();}
 async function render(){
   renderNav();
-  const map={dashboard:viewDash,orders:viewOrders,daily:viewDaily,neworder:viewNewOrder,customers:viewCustomers,parts:viewParts,predict:viewPredict,pos:viewPOs,boms:viewBoms,inventory:viewInv,accounting:viewAccounting,trailers:viewTrailers,printcenter:viewPrintCenter,boatadmin:viewBoatAdmin,team:viewTeam,timeoff:viewTimeoff,outcomes:viewOutcomes,wins:viewWins,forecast:viewForecast,notify:viewNotify,support:viewSupport,users:viewUsers};
+  const map={dashboard:viewDash,orders:viewOrders,daily:viewDaily,neworder:viewNewOrder,customers:viewCustomers,parts:viewParts,predict:viewPredict,pos:viewPOs,boms:viewBoms,inventory:viewInv,accounting:viewAccounting,trailers:viewTrailers,printcenter:viewPrintCenter,boatadmin:viewBoatAdmin,testdata:viewTestData,team:viewTeam,timeoff:viewTimeoff,outcomes:viewOutcomes,wins:viewWins,forecast:viewForecast,notify:viewNotify,support:viewSupport,users:viewUsers};
   try{
     await (map[page]||viewDash)();
     const pa=$('pActions');
@@ -1894,6 +1895,42 @@ function warrantyBadge(w){
   if(w.status==='Rejected') return '<span class="badge b-below">Rejected</span>';
   return '<span class="badge b-below">Expired</span>';
 }
+// ── Test Data (admin only) — provision test portal accounts + failproof wipe ──
+async function viewTestData(){
+  $('pTitle').textContent='Test Data';$('pSub').textContent='Provision test portal accounts and wipe test data — admin only';$('pActions').innerHTML='';
+  let s; try{ s=await api('/api/admin/test-data'); }catch(e){ $('content').innerHTML=`<div class="card"><p class="msg err">${esc(e.message)}</p></div>`; return; }
+  $('content').innerHTML=`
+    <div class="card">
+      <h3>🧪 Test portal accounts</h3>
+      <p class="muted" style="font-size:13px">Creates a pre-approved test login for the <b>dealer</b> and <b>owner</b> portals, flagged as test — so orders, registrations, claims, and signups they create stay <b>out of the Action Inbox and approval queues</b>. Re-running resets the passwords.</p>
+      <button class="btn" onclick="makeTestAccounts()">Create / reset test accounts</button>
+      <div id="tdCreds" style="margin-top:10px"></div>
+    </div>
+    <div class="card" style="border:1px solid #f5c3bc;background:#fffafa">
+      <h3>🧹 Wipe test data</h3>
+      <p class="muted" style="font-size:13px">Permanently deletes <b>only</b> test-flagged data and everything tied to it. Real customers, orders, and trailers are never touched.</p>
+      <p style="font-size:13px;margin:8px 0">Currently flagged as test: <b>${s.customers}</b> dealership(s), <b>${s.dealers}</b> dealer + <b>${s.owners}</b> owner login(s), <b>${s.orders}</b> order(s), <b>${s.trailers}</b> trailer(s).</p>
+      <button class="btn" style="background:#c0392b;color:#fff" onclick="wipeTestData()">Wipe all test data</button>
+      <div id="tdWipe" style="margin-top:10px"></div>
+    </div>`;
+}
+async function makeTestAccounts(){
+  try{ const d=await api('/api/admin/test-accounts',{method:'POST'});
+    $('tdCreds').innerHTML=`<div class="msg ok" style="display:block">✓ Ready — log in at the dealer &amp; owner portals with these (copy now; passwords aren't stored readable):
+      <div style="margin-top:8px;font-family:ui-monospace,Menlo,monospace;font-size:13px;line-height:1.7">
+      Dealer: <b>${esc(d.dealer.email)}</b> &nbsp;/&nbsp; <b>${esc(d.dealer.password)}</b><br>
+      Owner: <b>${esc(d.owner.email)}</b> &nbsp;/&nbsp; <b>${esc(d.owner.password)}</b></div></div>`;
+  }catch(e){ $('tdCreds').innerHTML=`<p class="msg err">${esc(e.message)}</p>`; }
+}
+async function wipeTestData(){
+  if(!confirm('Delete ALL test data? This removes every test account and everything it created. Real data is not affected.')) return;
+  try{ const d=await api('/api/admin/test-data/wipe',{method:'POST',body:JSON.stringify({confirm:'WIPE'})});
+    const total=Object.values(d.wiped||{}).reduce((a,b)=>a+Number(b||0),0);
+    $('tdWipe').innerHTML=`<div class="msg ok" style="display:block">✓ Wiped ${total} test record(s). The Action Inbox and approval queues are clear of test data.</div>`;
+    setTimeout(viewTestData,1400);
+  }catch(e){ $('tdWipe').innerHTML=`<p class="msg err">${esc(e.message)}</p>`; }
+}
+
 // ── Boat Builder admin (office) — option pricing, new-part costs, boat catalog ──
 async function viewBoatAdmin(){
   $('pTitle').textContent='Boat Builder';$('pSub').textContent='Option pricing, part costs, and the boat catalog';$('pActions').innerHTML='';
