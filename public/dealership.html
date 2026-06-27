@@ -95,6 +95,7 @@ footer a{color:var(--accent)}
   <div id="dash" class="hidden">
     <div class="tabs">
       <button id="tabOrders" class="active" onclick="showDash('orders')">Orders</button>
+      <button id="tabBuild" onclick="showDash('build')">🚤 Build a Boat</button>
       <button id="tabReg" onclick="showDash('reg')">Register a Trailer</button>
       <button id="tabMine" onclick="showDash('mine')">My Registrations</button>
       <button id="tabClaims" onclick="showDash('claims')">Claims</button>
@@ -133,6 +134,12 @@ footer a{color:var(--accent)}
       <div id="oMsg" class="msg"></div>
       <h2 style="margin-top:24px">Your orders</h2>
       <div id="ordersBody"><p class="lead">Loading…</p></div>
+    </div>
+
+    <div id="paneBuild" class="card hidden">
+      <h2>Build a boat trailer</h2>
+      <p class="lead">Pick the Nautique — we size the trailer automatically. Choose your options and submit; Built Trailers approves it like any order.</p>
+      <div id="buildForm"><p class="lead">Loading…</p></div>
     </div>
 
     <div id="paneReg" class="card">
@@ -190,7 +197,7 @@ async function api(path,opts={}){
   if(!r.ok) throw new Error(d.error||('Error '+r.status)); return d;
 }
 function showAuth(t){$('paneLogin').classList.toggle('hidden',t!=='login');$('paneSignup').classList.toggle('hidden',t!=='signup');$('tabLogin').classList.toggle('active',t==='login');$('tabSignup').classList.toggle('active',t==='signup');}
-function showDash(t){for(const k of ['orders','reg','mine','claims','invoices','docs','team','notif']){const pe=$('pane'+k[0].toUpperCase()+k.slice(1)),tb=$('tab'+k[0].toUpperCase()+k.slice(1));if(pe)pe.classList.toggle('hidden',k!==t);if(tb)tb.classList.toggle('active',k===t);}({orders:loadOrders,mine:loadMine,claims:loadClaims,notif:loadNotifs,invoices:loadInvoices,docs:loadDocs,team:loadTeam}[t]||(()=>{}))();}
+function showDash(t){for(const k of ['orders','build','reg','mine','claims','invoices','docs','team','notif']){const pe=$('pane'+k[0].toUpperCase()+k.slice(1)),tb=$('tab'+k[0].toUpperCase()+k.slice(1));if(pe)pe.classList.toggle('hidden',k!==t);if(tb)tb.classList.toggle('active',k===t);}({orders:loadOrders,build:loadBuild,mine:loadMine,claims:loadClaims,notif:loadNotifs,invoices:loadInvoices,docs:loadDocs,team:loadTeam}[t]||(()=>{}))();}
 async function loadInvoices(){
   try{const r=await api('/api/dealer/invoices');
     $('invBody').innerHTML=`<div class="row" style="margin-bottom:14px">
@@ -257,7 +264,7 @@ async function login(){
   }catch(e){setMsg('lMsg','err',e.message);}
 }
 function logout(){DTOKEN=null;DEALER=null;localStorage.removeItem('dealerToken');$('dash').classList.add('hidden');$('auth').classList.remove('hidden');$('who').innerHTML='';}
-const ROLE_TABS={admin:['orders','reg','mine','claims','invoices','docs','team','notif'],sales:['orders','invoices','docs','team','notif'],service:['claims','docs','team','notif'],warranty:['reg','mine','claims','docs','team','notif']};
+const ROLE_TABS={admin:['orders','build','reg','mine','claims','invoices','docs','team','notif'],sales:['orders','build','invoices','docs','team','notif'],service:['claims','docs','team','notif'],warranty:['reg','mine','claims','docs','team','notif']};
 function enterDash(){
   $('auth').classList.add('hidden');$('dash').classList.remove('hidden');
   const role=DEALER.role||'admin';
@@ -265,7 +272,7 @@ function enterDash(){
   $('who').innerHTML=`<span>${DEALER.dealership||DEALER.name||''} · ${roleLabel}</span><button class="btn ghost" onclick="logout()">Log out</button>`;
   $('regDealer').textContent=DEALER.dealership||'(your dealership)';
   const allowed=ROLE_TABS[role]||ROLE_TABS.admin;
-  for(const k of ['orders','reg','mine','claims','invoices','docs','team','notif']){const tb=$('tab'+k[0].toUpperCase()+k.slice(1));if(tb)tb.style.display=allowed.includes(k)?'':'none';}
+  for(const k of ['orders','build','reg','mine','claims','invoices','docs','team','notif']){const tb=$('tab'+k[0].toUpperCase()+k.slice(1));if(tb)tb.style.display=allowed.includes(k)?'':'none';}
   showDash(allowed[0]);refreshNotifBadge();maybeShowPushNudge();
 }
 let _models=[];
@@ -288,6 +295,79 @@ async function placeOrder(){
   }catch(e){setMsg('oMsg','err',e.message);}
 }
 function reorder(modelId,qty){$('oModel').value=modelId;$('oQty').value=qty;window.scrollTo({top:0,behavior:'smooth'});setMsg('oMsg','ok','Pre-filled from a past order — review and submit.');}
+
+// ---- Boat Trailer Builder (configurator) ----
+let BCAT=null;
+async function loadBuild(){
+  try{ if(!BCAT) BCAT=await api('/api/dealer/boat-catalog'); renderBuild(); }
+  catch(e){ $('buildForm').innerHTML='<p class="msg err">'+e.message+'</p>'; }
+}
+function priceTag(c){ return Number(c.dealer_price)>0?` (+$${Number(c.dealer_price).toLocaleString()})`:''; }
+function axleLabel(a){ a=a||''; return /triple/.test(a)?'Triple axle':/tandem/.test(a)?'Tandem axle':/single/.test(a)?'Single axle':a; }
+function renderBuild(){
+  const boats=(BCAT.boats||[]).filter(b=>b.base_model_id);
+  if(!boats.length){ $('buildForm').innerHTML='<p class="lead">No boats are set up for the builder yet — contact Built Trailers.</p>'; return; }
+  let h=`<label class="req">Boat</label>
+    <select id="bBoat" onchange="onBuildChange()">${boats.map(b=>`<option value="${b.id}">${b.name} — ${b.length_ft} ft</option>`).join('')}</select>
+    <div id="bBase" class="lookup"></div>
+    <div class="row">
+      <div><label>Boat year</label><input id="bYear" type="number" min="1990" max="2031" placeholder="e.g. 2025" onchange="onBuildChange()"></div>
+      <div><label class="req">Quantity</label><input id="bQty" type="number" min="1" value="1" onchange="onBuildChange()"></div>
+    </div>`;
+  for(const g of BCAT.groups){
+    const hidden = g.id==='paint_fender_color' ? ' style="display:none"' : '';
+    h+=`<div id="grp_${g.id}"${hidden}><label class="${g.required?'req':''}" style="margin-top:16px">${g.name}</label>`;
+    if(g.help) h+=`<div class="muted" style="font-size:12px;color:#6b7785;margin-bottom:2px">${g.help}</div>`;
+    if(g.ui==='bool'){
+      const c=g.choices[0];
+      h+=`<div class="chk"><input type="checkbox" id="opt_${g.id}" value="${c.id}" onchange="onBuildChange()"><label for="opt_${g.id}" style="margin:0;font-weight:500">${c.name}${priceTag(c)}</label></div>`;
+    } else {
+      h+=`<select id="opt_${g.id}" onchange="onBuildChange()">${g.choices.map(c=>`<option value="${c.id}"${c.is_default?' selected':''}>${c.name}${priceTag(c)}</option>`).join('')}</select>`;
+    }
+    h+=`</div>`;
+  }
+  h+=`<div id="bSummary" class="card" style="margin:18px 0 0;background:#f8fafc;border-color:#e2e7ec"></div>
+    <button class="btn" id="bSubmit" onclick="submitBuild()">Submit Build</button>
+    <div id="bMsg" class="msg"></div>`;
+  $('buildForm').innerHTML=h;
+  onBuildChange();
+}
+function readBuildSel(){
+  const sel={};
+  for(const g of BCAT.groups){ const el=$('opt_'+g.id); if(!el) continue;
+    if(g.ui==='bool'){ if(el.checked) sel[g.id]=el.value; } else sel[g.id]=el.value; }
+  return sel;
+}
+function onBuildChange(){
+  const boat=(BCAT.boats||[]).find(b=>b.id===$('bBoat').value);
+  if(boat) $('bBase').innerHTML=`Trailer: <b>${boat.base_model_name||boat.base_model_id}</b> · ${axleLabel(boat.axle)} · base $${Number(boat.base_price).toLocaleString()}`;
+  const ps=$('opt_paint_style'), twotone=ps&&ps.value==='paint_twotone';
+  const fg=$('grp_paint_fender_color'); if(fg) fg.style.display=twotone?'':'none';
+  const sel=readBuildSel();
+  let total=boat?Number(boat.base_price):0; const lines=[];
+  for(const g of BCAT.groups){ const c=g.choices.find(x=>x.id===sel[g.id]);
+    if(c&&Number(c.dealer_price)>0){ total+=Number(c.dealer_price); lines.push(`${g.name}: ${c.name} +$${Number(c.dealer_price).toLocaleString()}`); } }
+  const errs=[];
+  for(const g of BCAT.groups){ if(g.required&&!sel[g.id]) errs.push('Choose '+g.name+'.'); }
+  if(sel.paint_style==='paint_twotone'&&!sel.paint_fender_color) errs.push('Pick a fender color for two-tone.');
+  const yr=$('bYear')&&$('bYear').value?' '+$('bYear').value:'';
+  $('bSummary').innerHTML=`<div style="font-size:13px;color:#6b7785;margin-bottom:6px">${boat?boat.name+yr:''}</div>
+    ${lines.length?lines.map(l=>`<div style="font-size:13px;padding:1px 0">${l}</div>`).join(''):'<div style="font-size:13px;color:#6b7785">No options added — standard build</div>'}
+    <div style="font-size:24px;font-weight:800;margin-top:8px">$${Math.round(total).toLocaleString()}</div>
+    <div style="font-size:11px;color:#6b7785">Dealer price · Built Trailers confirms on approval</div>`;
+  const btn=$('bSubmit'); if(btn) btn.disabled=errs.length>0;
+  const m=$('bMsg'); if(m){ if(errs.length){ m.className='msg err'; m.innerHTML=errs[0]; } else m.className='msg'; }
+}
+async function submitBuild(){
+  const boatId=$('bBoat').value, qty=Number($('bQty').value)||1, year=Number($('bYear').value)||undefined;
+  const btn=$('bSubmit'), old=btn.textContent; btn.disabled=true; btn.textContent='Submitting…';
+  try{
+    const d=await api('/api/dealer/boat-build',{method:'POST',body:JSON.stringify({boatId,year,qty,selections:readBuildSel()})});
+    setMsg('bMsg','ok','✓ Build '+d.orderId+' submitted — pending approval by Built Trailers. Dealer price $'+Math.round(d.total).toLocaleString()+'.');
+    if(typeof loadOrders==='function') loadOrders();
+  }catch(e){ setMsg('bMsg','err',e.message); }
+  finally{ btn.disabled=false; btn.textContent=old; }
+}
 
 async function lookupVin(){
   const vin=$('rVin').value.trim(); if(!vin){$('rLookup').textContent='';return;}

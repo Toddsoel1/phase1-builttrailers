@@ -298,6 +298,11 @@ test('boat builder: validate, reconcile BOM (no double-count), and submit', asyn
   assert.ok(s.orderId && s.orderId.startsWith('SO-'), 'configured order created');
 });
 
+test('boat builder: dealer configurator endpoints require dealer auth', async () => {
+  assert.equal((await fetch(BASE + '/api/dealer/boat-catalog')).status, 401, 'dealer catalog needs auth');
+  assert.equal((await fetch(BASE + '/api/dealer/boat-build', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })).status, 401, 'dealer submit needs auth');
+});
+
 test('stock build: VIN still prints, but the MSO is held until the trailer is sold', async () => {
   const custs = (await json(await api('/api/customers'))).filter(c => c.active !== false && c.allowed?.length);
   const models = await json(await api('/api/models'));

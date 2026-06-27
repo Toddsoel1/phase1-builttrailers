@@ -231,10 +231,10 @@ export async function submitBuild(actor, payload) {
   const seq = (await one('SELECT COALESCE(MAX(production_seq),0)+1 AS n FROM sales_order', [])).n;
   await q(`INSERT INTO sales_order(id,customer_id,model_id,qty,stage,due,channel,rep_id,production_seq)
            VALUES($1,$2,$3,$4,'Quote',$5,$6,$7,$8)`,
-    [id, payload.customerId || null, boat.base_model_id, payload.qty || 1, payload.due || null, payload.channel || 'Configurator', actor?.id || null, seq]);
+    [id, payload.customerId || null, boat.base_model_id, payload.qty || 1, payload.due || null, payload.channel || 'Configurator', payload.repId || actor?.id || null, seq]);
   await q(`INSERT INTO order_build(order_id,boat_make,boat_model,boat_year,boat_length,base_model_id,total_price,note,created_by)
            VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
-    [id, boat.make_id, boat.name, payload.year || null, boat.length_ft, boat.base_model_id, price.total, payload.note || null, actor?.id || null]);
+    [id, boat.make_id, boat.name, payload.year || null, boat.length_ft, boat.base_model_id, price.total, payload.note || null, actor?.id || payload.createdBy || null]);
   const sel = payload.selections || {};
   for (const g of cat.groups) {
     const c = g.choices.find(x => x.id === sel[g.id]);

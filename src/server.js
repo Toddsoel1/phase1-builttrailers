@@ -302,6 +302,25 @@ app.get('/api/dealer/orders', dealer.dealerAuth, dealer.dealerRole('sales'), asy
 app.post('/api/dealer/orders', dealer.dealerAuth, dealer.dealerRole('sales'), async (req, res) => {
   try { res.json(await dealer.placeOrder(req.dealer, req.body || {})); } catch (e) { res.status(400).json({ error: e.message }); }
 });
+// Boat Trailer Builder (dealer): the configurator catalog (internal part mappings stripped) and
+// submit, which checks the dealership is authorized for the boat's trailer category, then creates
+// a Quote order under the dealer's account for Built Trailers to approve.
+app.get('/api/dealer/boat-catalog', dealer.dealerAuth, dealer.dealerRole('sales'), async (_req, res) => {
+  const cat = await boatbuilder.getCatalog();
+  res.json({ makes: cat.makes, boats: cat.boats, groups: cat.groups.map(g => ({ ...g, choices: g.choices.map(({ parts, ...c }) => c) })) });
+});
+app.post('/api/dealer/boat-build', dealer.dealerAuth, dealer.dealerRole('sales'), async (req, res) => {
+  try {
+    const d = req.dealer;
+    if (!d.customer_id) throw new Error('Your account is not linked to a dealer record yet — contact Built Trailers.');
+    const bm = await one('SELECT base_model_id FROM boat_model WHERE id=$1', [req.body?.boatId]);
+    const mdl = bm && await one('SELECT category FROM model WHERE id=$1', [bm.base_model_id]);
+    const allowed = (await all('SELECT type FROM customer_allowed_type WHERE customer_id=$1', [d.customer_id])).map(a => a.type);
+    if (mdl && !allowed.includes(mdl.category)) throw new Error(`Your dealership isn't authorized to order ${mdl.category} trailers.`);
+    const cust = await one('SELECT rep_id FROM customer WHERE id=$1', [d.customer_id]);
+    res.json(await boatbuilder.submitBuild(null, { ...(req.body || {}), customerId: d.customer_id, channel: 'Dealer Portal', repId: cust?.rep_id || null, createdBy: d.id }));
+  } catch (e) { res.status(e.status || 400).json({ error: e.message }); }
+});
 app.get('/api/dealer/invoices', dealer.dealerAuth, dealer.dealerRole('sales'), async (req, res) => res.json(await dealer.myInvoices(req.dealer)));
 // Everyone: notifications, team view
 app.get('/api/dealer/notifications', dealer.dealerAuth, async (req, res) => res.json(await dealernotify.myNotifications(req.dealer)));
