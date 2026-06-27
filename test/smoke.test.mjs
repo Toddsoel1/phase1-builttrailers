@@ -303,6 +303,31 @@ test('boat builder: dealer configurator endpoints require dealer auth', async ()
   assert.equal((await fetch(BASE + '/api/dealer/boat-build', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })).status, 401, 'dealer submit needs auth');
 });
 
+test('boat builder: order spec returns the config + resolved BOM (production view)', async () => {
+  const full = { axle_type: 'axle_torsion', brakes: 'brk_disc', paint_style: 'paint_single', paint_color: 'color_jet_black', wheels: 'wheel_prem', fender_style: 'fender_squared', winch_stand: 'winch_elec' };
+  const s = await json(await api('/api/boat-build/submit', { method: 'POST', body: JSON.stringify({ boatId: 'NQ-GS20', year: 2025, qty: 1, selections: full }) }));
+  const spec = await json(await api('/api/orders/' + s.orderId + '/build'));
+  assert.equal(spec.boat_model, 'Super Air Nautique GS20');
+  assert.ok(spec.options.find(o => o.choice_name === 'Disc'), 'chosen options captured');
+  assert.ok(spec.bom.find(p => p.part_id === 'BUY-WHL-PREM'), 'premium wheels in resolved BOM');
+  assert.ok(spec.bom.find(p => p.part_id === 'BUY-BRK-DISC'), 'disc brakes in resolved BOM');
+  assert.ok(!spec.bom.find(p => p.part_id === 'BUY-WHL-001'), 'standard wheels swapped out of the BOM');
+});
+
+test('boat builder admin: office price edit flows into the catalog + pricing; boat remap; gated', async () => {
+  await api('/api/boat-admin/price', { method: 'POST', body: JSON.stringify({ choiceId: 'wheel_prem', dealerPrice: 800 }) });
+  const cat = await json(await api('/api/boat-catalog'));
+  assert.equal(Number(cat.groups.find(g => g.id === 'wheels').choices.find(c => c.id === 'wheel_prem').dealer_price), 800, 'price persisted');
+  const sel = { axle_type: 'axle_sprung', brakes: 'brk_eoh', paint_style: 'paint_single', paint_color: 'color_mystic_white', wheels: 'wheel_prem', fender_style: 'fender_squared', winch_stand: 'winch_f2' };
+  const pv = await json(await api('/api/boat-build/preview', { method: 'POST', body: JSON.stringify({ boatId: 'NQ-G23', selections: sel }) }));
+  assert.equal(pv.price.total, Number(pv.price.base) + 800, 'premium-wheel upcharge reflected in the quoted price');
+  await api('/api/boat-admin/boat', { method: 'POST', body: JSON.stringify({ boatId: 'NQ-G21', baseModelId: 'GS24TR' }) });
+  const cat2 = await json(await api('/api/boat-catalog'));
+  assert.equal(cat2.boats.find(b => b.id === 'NQ-G21').base_model_id, 'GS24TR', 'boat base trailer remapped');
+  const salesTok = (await json(await api('/api/auth/login', { method: 'POST', body: JSON.stringify({ username: 'aruiz', password: 'built2026' }) }))).token;
+  assert.equal((await fetch(BASE + '/api/boat-admin/price', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + salesTok }, body: '{}' })).status, 403, 'sales blocked from boat-builder settings');
+});
+
 test('stock build: VIN still prints, but the MSO is held until the trailer is sold', async () => {
   const custs = (await json(await api('/api/customers'))).filter(c => c.active !== false && c.allowed?.length);
   const models = await json(await api('/api/models'));

@@ -28,8 +28,8 @@ const NEW_PARTS = [
 const MAKES = [['NQ', 'Nautique'], ['PG', 'Paragon'], ['YA', 'Yamaha']];
 
 // id, make, display name, length (ft), base trailer model id (an existing `model` row). Mappings
-// marked ASSUMED are inferred by size and await the user's confirmation; the rest match an exact
-// existing base trailer. base_model_id is code-owned (kept in sync), so corrections re-seed cleanly.
+// marked ASSUMED are inferred by size; the rest match an exact existing base trailer. These are the
+// INITIAL values — the office confirms/edits the mapping + dimensions in the admin screen (1E).
 const BOAT_MODELS = [
   ['NQ-GS20', 'NQ', 'Super Air Nautique GS20', 20, 'GS20TAN'],
   ['NQ-GS22', 'NQ', 'Super Air Nautique GS22', 22, 'GS24TR'],  // ASSUMED
@@ -120,9 +120,11 @@ export async function ensureBoatCatalog() {
   for (const [id, name] of MAKES)
     await q(`INSERT INTO boat_make(id,name) VALUES($1,$2) ON CONFLICT(id) DO NOTHING`, [id, name]);
   let bs = 0;
+  // Insert-only: boats are office-owned data once seeded — the admin screen owns the base-trailer
+  // mapping + dimensions, so re-seeding never clobbers a correction. New boats added to the list
+  // still seed on first boot.
   for (const [id, make, name, len, base] of BOAT_MODELS)
-    await q(`INSERT INTO boat_model(id,make_id,name,length_ft,base_model_id,sort) VALUES($1,$2,$3,$4,$5,$6)
-             ON CONFLICT(id) DO UPDATE SET make_id=$2,name=$3,length_ft=$4,base_model_id=$5,sort=$6,active=true`, [id, make, name, len, base, bs++]);
+    await q(`INSERT INTO boat_model(id,make_id,name,length_ft,base_model_id,sort) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT(id) DO NOTHING`, [id, make, name, len, base, bs++]);
   // Part mappings are entirely code-owned — reset them so they always match this file.
   await q(`DELETE FROM option_choice_part`).catch(() => {});
   let gs = 0;
@@ -261,6 +263,23 @@ export async function submitBuild(actor, payload) {
 export async function orderBuild(orderId) {
   const b = await one('SELECT * FROM order_build WHERE order_id=$1', [orderId]);
   if (!b) return null;
-  const options = await all('SELECT group_name, choice_name, dealer_price FROM order_build_option WHERE order_id=$1', [orderId]);
+  const options = await all('SELECT group_id, group_name, choice_name, dealer_price FROM order_build_option WHERE order_id=$1 ORDER BY id', [orderId]);
   return { ...b, options };
+}
+
+// Full production spec for a configured order: the build + options + the resolved final BOM
+// (base model BOM netted with the order's deltas), each part named — drives the build sheet.
+export async function orderSpec(orderId) {
+  const build = await orderBuild(orderId);
+  if (!build) return null;
+  const map = new Map();
+  for (const l of await all('SELECT b.part_id, b.qty, p.name FROM bom_line b JOIN part p ON p.id=b.part_id WHERE b.model_id=$1', [build.base_model_id]))
+    map.set(l.part_id, { part_id: l.part_id, name: l.name, qty: Number(l.qty) });
+  for (const d of await all('SELECT d.part_id, d.qty, p.name FROM order_bom_delta d JOIN part p ON p.id=d.part_id WHERE d.order_id=$1', [orderId])) {
+    const e = map.get(d.part_id) || { part_id: d.part_id, name: d.name, qty: 0 };
+    e.qty += Number(d.qty);
+    map.set(d.part_id, e);
+  }
+  const bom = [...map.values()].filter(x => x.qty > 0).sort((a, b) => a.part_id.localeCompare(b.part_id));
+  return { ...build, bom };
 }

@@ -1461,7 +1461,14 @@ app.get('/api/trailers/:id/traveler', authMiddleware, requireSection('trailers')
   if (!d) return res.status(404).json({ error: 'unit not found' });
   const base = process.env.APP_URL || `https://${req.get('host')}`;
   const qr = await QRCode.toDataURL(`${base}/u/${encodeURIComponent(d.unitId)}`, { margin: 1, width: 240 }).catch(() => null);
-  res.json({ ...d, qr });
+  const build = await boatbuilder.orderBuild(d.orderId).catch(() => null); // boat-build config, if any
+  res.json({ ...d, qr, build });
+});
+// The configured boat-build spec for an order (production view: options + resolved BOM).
+app.get('/api/orders/:id/build', authMiddleware, async (req, res) => {
+  const spec = await boatbuilder.orderSpec(req.params.id);
+  if (!spec) return res.status(404).json({ error: 'no configured build for this order' });
+  res.json(spec);
 });
 // Boat Trailer Builder — the configurator catalog (Nautique boats + option groups/choices). The
 // sizing/validation/pricing engine + dealer submit route come in Phase 1B.
@@ -1481,6 +1488,43 @@ app.post('/api/boat-build/preview', authMiddleware, async (req, res) => {
 app.post('/api/boat-build/submit', authMiddleware, requireStockCreator, async (req, res) => {
   try { res.json(await boatbuilder.submitBuild(req.user, req.body || {})); }
   catch (e) { res.status(e.status || 400).json({ error: e.message }); }
+});
+
+// ---- Boat Trailer Builder admin (the office): option pricing, new-part costs, boat catalog ----
+function requireBoatAdmin(req, res, next) {
+  if (hasTitle(req, ['Office Manager', 'General Manager'])) return next(); // hasTitle passes admin too
+  return res.status(403).json({ error: 'Boat Builder settings are for the office managers or admin.' });
+}
+app.get('/api/boat-admin/catalog', authMiddleware, requireBoatAdmin, async (_req, res) => {
+  const cat = await boatbuilder.getCatalog();
+  const baseModels = await all(`SELECT id, name, axle FROM model WHERE category='Boat' ORDER BY id`, []);
+  const parts = await all(`SELECT id, name, cost FROM part WHERE spec='TBD — set cost' ORDER BY id`, []);
+  res.json({ groups: cat.groups.map(g => ({ id: g.id, name: g.name, choices: g.choices.map(({ parts: _p, ...c }) => c) })), boats: cat.boats, baseModels, parts });
+});
+app.post('/api/boat-admin/price', authMiddleware, requireBoatAdmin, async (req, res) => {
+  if (!req.body?.choiceId) return res.status(400).json({ error: 'choiceId required' });
+  await q('UPDATE option_choice SET dealer_price=$1 WHERE id=$2', [Number(req.body.dealerPrice) || 0, req.body.choiceId]);
+  res.json({ ok: true });
+});
+app.post('/api/boat-admin/cost', authMiddleware, requireBoatAdmin, async (req, res) => {
+  if (!req.body?.partId) return res.status(400).json({ error: 'partId required' });
+  await q('UPDATE part SET cost=$1 WHERE id=$2', [Number(req.body.cost) || 0, req.body.partId]);
+  res.json({ ok: true });
+});
+app.post('/api/boat-admin/boat', authMiddleware, requireBoatAdmin, async (req, res) => {
+  const b = req.body || {};
+  if (!b.boatId) return res.status(400).json({ error: 'boatId required' });
+  const sets = [], vals = [];
+  const add = (col, val) => { vals.push(val); sets.push(`${col}=$${vals.length}`); };
+  if (b.baseModelId !== undefined) add('base_model_id', b.baseModelId || null);
+  if (b.lengthFt !== undefined) add('length_ft', b.lengthFt === '' || b.lengthFt === null ? null : Number(b.lengthFt));
+  if (b.beamIn !== undefined) add('beam_in', b.beamIn === '' || b.beamIn === null ? null : Number(b.beamIn));
+  if (b.dryWeightLb !== undefined) add('dry_weight_lb', b.dryWeightLb === '' || b.dryWeightLb === null ? null : Number(b.dryWeightLb));
+  if (b.active !== undefined) add('active', !!b.active);
+  if (!sets.length) return res.json({ ok: true });
+  vals.push(b.boatId);
+  await q(`UPDATE boat_model SET ${sets.join(',')} WHERE id=$${vals.length}`, vals);
+  res.json({ ok: true });
 });
 
 // ---- Warranty & build history ----
