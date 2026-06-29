@@ -123,8 +123,8 @@ const GROUPS = [
   { id: 'winch_stand', name: 'Jack Stand', step: 8, ui: 'single', required: true, help: 'Fulton F2 is standard.',
     choices: [
       { id: 'winch_f2', name: 'Fulton F2', default: true },
-      { id: 'winch_f2plate', name: 'Fulton F2 Plate', parts: [['BUY-WPLATE-001', 1]] },
-      { id: 'winch_elec', name: 'Electric', parts: [['BUY-WNC-ELEC', 1], ['BUY-WNC-002', 1, 'remove']] },
+      { id: 'winch_f2plate', name: 'Fulton F2 Plate' },
+      { id: 'winch_elec', name: 'Electric' },
     ] },
 ];
 
