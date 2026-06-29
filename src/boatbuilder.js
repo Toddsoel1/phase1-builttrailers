@@ -70,6 +70,12 @@ function colorChoices(fender) {
 // the engine strips every part the group manages from the base BOM, then adds the selected choice's
 // parts — so a base that already carries the chosen variant (e.g. G23 is torsion) never double-counts.
 const GROUPS = [
+  { id: 'axle_count', name: 'Axle Count', step: 3, ui: 'single', required: true, help: 'Sized to your boat — single/tandem under 22 ft, tandem/triple at 22 ft and over.',
+    choices: [
+      { id: 'ac_single', name: 'Single Axle' },
+      { id: 'ac_tandem', name: 'Tandem Axle', default: true },
+      { id: 'ac_triple', name: 'Triple Axle' },
+    ] },
   { id: 'axle_type', name: 'Axle Type', step: 3, ui: 'single', required: true, exclusive: true, help: 'Sprung is standard; torsion rides smoother and is sealed.',
     choices: [
       { id: 'axle_sprung', name: 'Sprung (Leaf Spring)', default: true, parts: [['BUY-AXL-3500', 1], ['BUY-SPR-3500', 2]] },
@@ -176,7 +182,10 @@ export async function validateBuild(payload, cat) {
     if (sel[g.id] && !g.choices.find(c => c.id === sel[g.id])) errors.push(`Invalid ${g.name} selection.`);
   }
   if (sel.paint_style === 'paint_twotone' && !sel.paint_fender_color) errors.push('Two-tone paint needs a fender color.');
-  if (boat && Number(boat.length_ft) >= 22 && /single/i.test(boat.axle || '')) errors.push('Boats 22 ft and over require tandem or triple axles.');
+  // Smart axle rule (by boat length): under 22 ft single/tandem, 22 ft and over tandem/triple.
+  const len = boat ? Number(boat.length_ft) || 0 : 0;
+  if (len && len < 22 && sel.axle_count === 'ac_triple') errors.push('Boats under 22 ft use a single or tandem axle.');
+  if (len >= 22 && sel.axle_count === 'ac_single') errors.push('Boats 22 ft and over need a tandem or triple axle.');
   return { ok: errors.length === 0, errors };
 }
 

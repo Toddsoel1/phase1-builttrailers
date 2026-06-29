@@ -276,17 +276,19 @@ test('boat builder: catalog seeds Nautique boats + option groups (idempotent at 
 });
 
 test('boat builder: validate, reconcile BOM (no double-count), and submit', async () => {
-  const full = { axle_type: 'axle_torsion', brakes: 'brk_eoh', paint_style: 'paint_single', paint_color: 'color_mystic_white', wheels: 'wheel_std', fender_style: 'fender_squared', winch_stand: 'winch_f2' };
+  const full = { axle_count: 'ac_triple', axle_type: 'axle_torsion', brakes: 'brk_eoh', paint_style: 'paint_single', paint_color: 'color_mystic_white', wheels: 'wheel_std', fender_style: 'fender_squared', winch_stand: 'winch_f2' };
   // missing required selections → invalid
   let r = await json(await api('/api/boat-build/preview', { method: 'POST', body: JSON.stringify({ boatId: 'NQ-G23', selections: {} }) }));
   assert.equal(r.ok, false, 'empty config is invalid');
+  // axle count follows the boat: a single axle on a 23 ft boat is rejected
+  assert.equal((await json(await api('/api/boat-build/preview', { method: 'POST', body: JSON.stringify({ boatId: 'NQ-G23', selections: { ...full, axle_count: 'ac_single' } }) }))).ok, false, 'single axle invalid on a 23ft boat');
   // full config → valid; G23's base trailer is already torsion, so torsion adds NO axle delta
   r = await json(await api('/api/boat-build/preview', { method: 'POST', body: JSON.stringify({ boatId: 'NQ-G23', selections: full }) }));
   assert.equal(r.ok, true, 'full config valid');
   assert.ok(!r.bom.deltas.find(d => d.part_id === 'BUY-AXL-3500T'), 'no torsion delta when base is already torsion');
   assert.ok(r.bom.deltas.find(d => d.part_id === 'BUY-BRK-EOH' && d.qty === 1), 'EOH brake kit added (base has no brakes)');
   // GS20 base is sprung → choosing torsion swaps the axle parts out
-  const g = await json(await api('/api/boat-build/preview', { method: 'POST', body: JSON.stringify({ boatId: 'NQ-GS20', selections: full }) }));
+  const g = await json(await api('/api/boat-build/preview', { method: 'POST', body: JSON.stringify({ boatId: 'NQ-GS20', selections: { ...full, axle_count: 'ac_tandem' } }) }));
   assert.ok(g.bom.deltas.find(d => d.part_id === 'BUY-AXL-3500T' && d.qty === 1), 'GS20 gains a torsion axle');
   assert.ok(g.bom.deltas.find(d => d.part_id === 'BUY-AXL-3500' && d.qty === -1), 'GS20 drops the sprung axle');
   assert.ok(g.bom.deltas.find(d => d.part_id === 'BUY-SPR-3500' && d.qty === -2), 'GS20 drops the leaf springs');
@@ -304,7 +306,7 @@ test('boat builder: dealer configurator endpoints require dealer auth', async ()
 });
 
 test('boat builder: order spec returns the config + resolved BOM (production view)', async () => {
-  const full = { axle_type: 'axle_torsion', brakes: 'brk_disc', paint_style: 'paint_single', paint_color: 'color_jet_black', wheels: 'wheel_prem', fender_style: 'fender_squared', winch_stand: 'winch_elec' };
+  const full = { axle_count: 'ac_tandem', axle_type: 'axle_torsion', brakes: 'brk_disc', paint_style: 'paint_single', paint_color: 'color_jet_black', wheels: 'wheel_prem', fender_style: 'fender_squared', winch_stand: 'winch_elec' };
   const s = await json(await api('/api/boat-build/submit', { method: 'POST', body: JSON.stringify({ boatId: 'NQ-GS20', year: 2025, qty: 1, selections: full }) }));
   const spec = await json(await api('/api/orders/' + s.orderId + '/build'));
   assert.equal(spec.boat_model, 'Super Air Nautique GS20');
@@ -318,7 +320,7 @@ test('boat builder admin: office price edit flows into the catalog + pricing; bo
   await api('/api/boat-admin/price', { method: 'POST', body: JSON.stringify({ choiceId: 'wheel_prem', dealerPrice: 800 }) });
   const cat = await json(await api('/api/boat-catalog'));
   assert.equal(Number(cat.groups.find(g => g.id === 'wheels').choices.find(c => c.id === 'wheel_prem').dealer_price), 800, 'price persisted');
-  const sel = { axle_type: 'axle_sprung', brakes: 'brk_eoh', paint_style: 'paint_single', paint_color: 'color_mystic_white', wheels: 'wheel_prem', fender_style: 'fender_squared', winch_stand: 'winch_f2' };
+  const sel = { axle_count: 'ac_triple', axle_type: 'axle_sprung', brakes: 'brk_eoh', paint_style: 'paint_single', paint_color: 'color_mystic_white', wheels: 'wheel_prem', fender_style: 'fender_squared', winch_stand: 'winch_f2' };
   const pv = await json(await api('/api/boat-build/preview', { method: 'POST', body: JSON.stringify({ boatId: 'NQ-G23', selections: sel }) }));
   assert.equal(pv.price.total, Number(pv.price.base) + 800, 'premium-wheel upcharge reflected in the quoted price');
   await api('/api/boat-admin/boat', { method: 'POST', body: JSON.stringify({ boatId: 'NQ-G21', baseModelId: 'GS24TR' }) });

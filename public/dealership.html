@@ -307,11 +307,12 @@ function axleLabel(a){ a=a||''; return /triple/.test(a)?'Triple axle':/tandem/.t
 function renderBuild(){
   const boats=(BCAT.boats||[]).filter(b=>b.base_model_id);
   if(!boats.length){ $('buildForm').innerHTML='<p class="lead">No boats are set up for the builder yet — contact Built Trailers.</p>'; return; }
+  const years=[]; for(let y=2026;y<=2032;y++) years.push(y);
   let h=`<label class="req">Boat</label>
-    <select id="bBoat" onchange="onBuildChange()">${boats.map(b=>`<option value="${b.id}">${b.name} — ${b.length_ft} ft</option>`).join('')}</select>
+    <select id="bBoat" onchange="onBoatChange()">${boats.map(b=>`<option value="${b.id}">${b.name} — ${b.length_ft} ft</option>`).join('')}</select>
     <div id="bBase" class="lookup"></div>
     <div class="row">
-      <div><label>Boat year</label><input id="bYear" type="number" min="1990" max="2031" placeholder="e.g. 2025" onchange="onBuildChange()"></div>
+      <div><label>Boat year</label><select id="bYear" onchange="onBuildChange()">${years.map(y=>`<option value="${y}">${y}</option>`).join('')}</select></div>
       <div><label class="req">Quantity</label><input id="bQty" type="number" min="1" value="1" onchange="onBuildChange()"></div>
     </div>`;
   for(const g of BCAT.groups){
@@ -330,8 +331,29 @@ function renderBuild(){
     <button class="btn" id="bSubmit" onclick="submitBuild()">Submit Build</button>
     <div id="bMsg" class="msg"></div>`;
   $('buildForm').innerHTML=h;
+  populateAxleCount();
   onBuildChange();
 }
+// Axle count is sized to the boat: allowed options follow the smart rule (single/tandem under
+// 22 ft, tandem/triple at 22 ft+), and the default matches the boat's standard base trailer.
+function axleCountFor(boat){
+  const len=Number(boat.length_ft)||0;
+  const all=[['ac_single','Single Axle'],['ac_tandem','Tandem Axle'],['ac_triple','Triple Axle']];
+  const allowed=(len&&len<22)?all.filter(a=>a[0]!=='ac_triple'):(len>=22)?all.filter(a=>a[0]!=='ac_single'):all;
+  const base=/triple/.test(boat.axle||'')?'ac_triple':/single/.test(boat.axle||'')?'ac_single':'ac_tandem';
+  const def=allowed.some(a=>a[0]===base)?base:allowed[allowed.length-1][0];
+  return {allowed,def};
+}
+function populateAxleCount(){
+  const sel=$('opt_axle_count'); if(!sel) return;
+  const boat=(BCAT.boats||[]).find(b=>b.id===$('bBoat').value); if(!boat) return;
+  const grp=(BCAT.groups||[]).find(g=>g.id==='axle_count');
+  const priceOf=id=>{ const c=grp&&grp.choices.find(x=>x.id===id); return c&&Number(c.dealer_price)>0?` (+$${Number(c.dealer_price).toLocaleString()})`:''; };
+  const {allowed,def}=axleCountFor(boat);
+  sel.innerHTML=allowed.map(a=>`<option value="${a[0]}"${a[0]===def?' selected':''}>${a[1]}${priceOf(a[0])}</option>`).join('');
+  sel.value=def;
+}
+function onBoatChange(){ populateAxleCount(); onBuildChange(); }
 function readBuildSel(){
   const sel={};
   for(const g of BCAT.groups){ const el=$('opt_'+g.id); if(!el) continue;
