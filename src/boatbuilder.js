@@ -120,7 +120,7 @@ const GROUPS = [
       { id: 'winch_dl_single', name: 'DL Covered Single Speed', default: true, parts: [['BUY-WNC-002', 1, 'remove'], ['BUY-WNC-DLS', 1]] },
       { id: 'winch_dl_dual', name: 'DL Covered Dual Speed', parts: [['BUY-WNC-002', 1, 'remove'], ['BUY-WNC-DLD', 1]] },
     ] },
-  { id: 'winch_stand', name: 'Winch Stand', step: 8, ui: 'single', required: true, help: 'Fulton F2 is standard.',
+  { id: 'winch_stand', name: 'Jack Stand', step: 8, ui: 'single', required: true, help: 'Fulton F2 is standard.',
     choices: [
       { id: 'winch_f2', name: 'Fulton F2', default: true },
       { id: 'winch_f2plate', name: 'Fulton F2 Plate', parts: [['BUY-WPLATE-001', 1]] },
