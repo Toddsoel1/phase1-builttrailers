@@ -4,7 +4,6 @@
 // there is no test data the subqueries are empty and every delete is a 0-row no-op.
 import { q, all, one } from './db.js';
 import { hashPassword } from './auth.js';
-import { randomBytes } from 'crypto';
 
 // Constant SQL fragments (no user input) tracing the test-data graph from the is_test anchors.
 const TEST_CUST = `(SELECT id FROM customer WHERE is_test=true)`;
@@ -13,10 +12,12 @@ const TEST_TRL = `(SELECT id FROM trailer WHERE order_id IN ${TEST_ORD})`;
 const TEST_OWNER = `(SELECT id FROM owner_user WHERE is_test=true)`;
 export const TEST_FILTERS = { TEST_CUST, TEST_ORD, TEST_TRL, TEST_OWNER };
 
-const DEALER_EMAIL = 'test-dealer@builttrailers.test';
-const OWNER_EMAIL = 'test-owner@builttrailers.test';
+// Fixed, known test credentials — these accounts are test-flagged, isolated from the Action Inbox,
+// and wiped on demand, so a memorable password is an acceptable trade for easy testing.
+const DEALER_EMAIL = 'dealer@builttrailers.test';
+const OWNER_EMAIL = 'owner@builttrailers.test';
+const TEST_PW = 'builttest2026';
 const rows = r => r.rowCount ?? r.affectedRows ?? 0;          // pg vs PGlite
-const newPw = () => 'test' + randomBytes(4).toString('hex');  // readable, shown once
 
 export async function testStatus() {
   const c = async sql => Number((await one(sql))?.n || 0);
@@ -26,7 +27,7 @@ export async function testStatus() {
     owners: await c(`SELECT COUNT(*)::int AS n FROM owner_user WHERE is_test=true`),
     orders: await c(`SELECT COUNT(*)::int AS n FROM sales_order WHERE customer_id IN ${TEST_CUST}`),
     trailers: await c(`SELECT COUNT(*)::int AS n FROM trailer WHERE order_id IN ${TEST_ORD}`),
-    dealerEmail: DEALER_EMAIL, ownerEmail: OWNER_EMAIL,
+    dealerEmail: DEALER_EMAIL, ownerEmail: OWNER_EMAIL, password: TEST_PW,
   };
 }
 
@@ -40,16 +41,16 @@ export async function provisionTestAccounts() {
       await q(`INSERT INTO customer_allowed_type(customer_id,type) VALUES('TESTDLR',$1) ON CONFLICT DO NOTHING`, [t]);
     cust = await one(`SELECT * FROM customer WHERE id='TESTDLR'`);
   }
-  const dealerPw = newPw(), ownerPw = newPw();
+  const hash = hashPassword(TEST_PW);
   await q(`INSERT INTO dealer_user(id,email,password_hash,name,dealership_name,customer_id,status,role,is_test)
            VALUES('TESTDEALER',$1,$2,'Test Dealer','🧪 Test Dealership',$3,'active','admin',true)
            ON CONFLICT(email) DO UPDATE SET password_hash=$2, status='active', is_test=true, customer_id=$3`,
-    [DEALER_EMAIL, hashPassword(dealerPw), cust.id]);
+    [DEALER_EMAIL, hash, cust.id]);
   await q(`INSERT INTO owner_user(id,email,password_hash,name,status,is_test)
            VALUES('TESTOWNER',$1,$2,'Test Owner','active',true)
            ON CONFLICT(email) DO UPDATE SET password_hash=$2, status='active', is_test=true`,
-    [OWNER_EMAIL, hashPassword(ownerPw)]);
-  return { dealer: { email: DEALER_EMAIL, password: dealerPw }, owner: { email: OWNER_EMAIL, password: ownerPw } };
+    [OWNER_EMAIL, hash]);
+  return { dealer: { email: DEALER_EMAIL, password: TEST_PW }, owner: { email: OWNER_EMAIL, password: TEST_PW } };
 }
 
 // Failproof wipe: delete child rows first, then parents — every statement scoped to is_test.

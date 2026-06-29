@@ -1902,8 +1902,12 @@ async function viewTestData(){
   $('content').innerHTML=`
     <div class="card">
       <h3>🧪 Test portal accounts</h3>
-      <p class="muted" style="font-size:13px">Creates a pre-approved test login for the <b>dealer</b> and <b>owner</b> portals, flagged as test — so orders, registrations, claims, and signups they create stay <b>out of the Action Inbox and approval queues</b>. Re-running resets the passwords.</p>
-      <button class="btn" onclick="makeTestAccounts()">Create / reset test accounts</button>
+      <p class="muted" style="font-size:13px">Pre-approved test logins for the <b>dealer</b> and <b>owner</b> portals, flagged as test — so orders, registrations, claims, and signups they create stay <b>out of the Action Inbox and approval queues</b>.</p>
+      <div class="msg ok" style="display:block;font-family:ui-monospace,Menlo,monospace;font-size:13px;line-height:1.8">
+        Dealer portal — <b>${esc(s.dealerEmail)}</b> / <b>${esc(s.password)}</b><br>
+        Owner portal — <b>${esc(s.ownerEmail)}</b> / <b>${esc(s.password)}</b></div>
+      <p class="muted" style="font-size:12px;margin-top:8px">Click once to create + activate these accounts (also re-links them if you'd signed up manually).</p>
+      <button class="btn" onclick="makeTestAccounts()">Create / activate test accounts</button>
       <div id="tdCreds" style="margin-top:10px"></div>
     </div>
     <div class="card" style="border:1px solid #f5c3bc;background:#fffafa">
@@ -1915,11 +1919,8 @@ async function viewTestData(){
     </div>`;
 }
 async function makeTestAccounts(){
-  try{ const d=await api('/api/admin/test-accounts',{method:'POST'});
-    $('tdCreds').innerHTML=`<div class="msg ok" style="display:block">✓ Ready — log in at the dealer &amp; owner portals with these (copy now; passwords aren't stored readable):
-      <div style="margin-top:8px;font-family:ui-monospace,Menlo,monospace;font-size:13px;line-height:1.7">
-      Dealer: <b>${esc(d.dealer.email)}</b> &nbsp;/&nbsp; <b>${esc(d.dealer.password)}</b><br>
-      Owner: <b>${esc(d.owner.email)}</b> &nbsp;/&nbsp; <b>${esc(d.owner.password)}</b></div></div>`;
+  try{ await api('/api/admin/test-accounts',{method:'POST'});
+    $('tdCreds').innerHTML=`<div class="msg ok" style="display:block">✓ Test accounts are active and linked to the 🧪 Test Dealership — log in with the credentials above.</div>`;
   }catch(e){ $('tdCreds').innerHTML=`<p class="msg err">${esc(e.message)}</p>`; }
 }
 async function wipeTestData(){
