@@ -23,6 +23,11 @@ const NEW_PARTS = [
   ['BUY-WPLATE-001', 'Winch Stand Plate, Fulton F2'],
   ['BUY-FLK-001', 'Metal Flake Additive (per build)'],
   ['BUY-AXL-5200', 'Straight Axle, 5200lb'],
+  ['BUY-WNC-DLS', 'Winch, DL Covered Single Speed'],
+  ['BUY-WNC-DLD', 'Winch, DL Covered Dual Speed'],
+  ['BUY-MAT-TIGREY', 'Non-Skid Mat, 3-Layer Titanium Grey (Black accent)'],
+  ['BUY-MAT-MOCHA', 'Non-Skid Mat, 3-Layer Mocha Brown (Black accent)'],
+  ['BUY-MAT-BLACK', 'Non-Skid Mat, 3-Layer Black (White accent)'],
 ];
 
 const MAKES = [['NQ', 'Nautique'], ['YA', 'Yamaha']];
@@ -91,6 +96,13 @@ const GROUPS = [
     choices: [{ id: 'ladder_yes', name: 'Front Ladder', parts: [['BUY-LAD-001', 1]] }] },
   { id: 'spare_tire', name: 'Spare Tire', step: 4, ui: 'bool', required: false, help: 'Includes the spare tire mount.',
     choices: [{ id: 'spare_yes', name: 'Spare Tire + Mount', parts: [['BUY-SPM-001', 1], ['BUY-TIR-001', 1]] }] },
+  { id: 'nonskid_mat', name: 'Non-Skid Mat', step: 4, ui: 'single', required: false, help: '3-layer bunk matting.',
+    choices: [
+      { id: 'mat_none', name: 'None', default: true },
+      { id: 'mat_titanium', name: '3-Layer Titanium Grey (Black accent)', parts: [['BUY-MAT-TIGREY', 1]] },
+      { id: 'mat_mocha', name: '3-Layer Mocha Brown (Black accent)', parts: [['BUY-MAT-MOCHA', 1]] },
+      { id: 'mat_black', name: '3-Layer Black (White accent)', parts: [['BUY-MAT-BLACK', 1]] },
+    ] },
   { id: 'paint_style', name: 'Paint Style', step: 5, ui: 'single', required: true,
     choices: [{ id: 'paint_single', name: 'Single Color', default: true }, { id: 'paint_twotone', name: 'Two-Tone (frame + fender)' }] },
   { id: 'paint_color', name: 'Color', step: 5, ui: 'single', required: true, help: 'Primary (frame) color.' },
@@ -103,6 +115,11 @@ const GROUPS = [
     ] },
   { id: 'fender_style', name: 'Fender Style', step: 7, ui: 'single', required: true,
     choices: [{ id: 'fender_squared', name: 'Squared Style', default: true }] },
+  { id: 'winch', name: 'Winch', step: 8, ui: 'single', required: true, help: 'DL covered winch.',
+    choices: [
+      { id: 'winch_dl_single', name: 'DL Covered Single Speed', default: true, parts: [['BUY-WNC-002', 1, 'remove'], ['BUY-WNC-DLS', 1]] },
+      { id: 'winch_dl_dual', name: 'DL Covered Dual Speed', parts: [['BUY-WNC-002', 1, 'remove'], ['BUY-WNC-DLD', 1]] },
+    ] },
   { id: 'winch_stand', name: 'Winch Stand', step: 8, ui: 'single', required: true, help: 'Fulton F2 is standard.',
     choices: [
       { id: 'winch_f2', name: 'Fulton F2', default: true },
