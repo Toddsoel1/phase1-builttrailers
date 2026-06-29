@@ -28,6 +28,8 @@ const NEW_PARTS = [
   ['BUY-MAT-TIGREY', 'Non-Skid Mat, 3-Layer Titanium Grey (Black accent)'],
   ['BUY-MAT-MOCHA', 'Non-Skid Mat, 3-Layer Mocha Brown (Black accent)'],
   ['BUY-MAT-BLACK', 'Non-Skid Mat, 3-Layer Black (White accent)'],
+  ['BUY-JCK-PLATE', 'Jack Mounting Plate, Fulton F2'],
+  ['BUY-JCK-ELEC', 'Electric Tongue Jack'],
 ];
 
 const MAKES = [['NQ', 'Nautique'], ['YA', 'Yamaha']];
@@ -123,8 +125,8 @@ const GROUPS = [
   { id: 'winch_stand', name: 'Jack Stand', step: 8, ui: 'single', required: true, help: 'Fulton F2 is standard.',
     choices: [
       { id: 'winch_f2', name: 'Fulton F2', default: true },
-      { id: 'winch_f2plate', name: 'Fulton F2 Plate' },
-      { id: 'winch_elec', name: 'Electric' },
+      { id: 'winch_f2plate', name: 'Fulton F2 Plate', parts: [['BUY-JCK-PLATE', 1]] },
+      { id: 'winch_elec', name: 'Electric', parts: [['BUY-JCK-001', 1, 'remove'], ['BUY-JCK-ELEC', 1]] },
     ] },
 ];
 
