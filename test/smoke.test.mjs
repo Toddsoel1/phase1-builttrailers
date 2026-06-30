@@ -305,6 +305,8 @@ test('boat builder: validate, reconcile BOM (no double-count), and submit', asyn
 test('boat builder: dealer configurator endpoints require dealer auth', async () => {
   assert.equal((await fetch(BASE + '/api/dealer/boat-catalog')).status, 401, 'dealer catalog needs auth');
   assert.equal((await fetch(BASE + '/api/dealer/boat-build', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })).status, 401, 'dealer submit needs auth');
+  assert.equal((await fetch(BASE + '/api/dealer/orders/SO-1/cancel', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })).status, 401, 'dealer withdraw needs auth');
+  assert.equal((await fetch(BASE + '/api/dealer/orders/SO-1', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: '{}' })).status, 401, 'dealer edit needs auth');
 });
 
 test('boat builder: order spec returns the config + resolved BOM (production view)', async () => {

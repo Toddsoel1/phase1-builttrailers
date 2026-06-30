@@ -322,6 +322,38 @@ app.post('/api/dealer/boat-build', dealer.dealerAuth, dealer.dealerRole('sales')
     res.json(await boatbuilder.submitBuild(null, { ...(req.body || {}), customerId: d.customer_id, channel: 'Dealer Portal', repId: cust?.rep_id || null, createdBy: d.id }));
   } catch (e) { res.status(e.status || 400).json({ error: e.message }); }
 });
+// Dealer self-service on their own order — allowed only while it's still a Quote (pre-confirmation).
+async function dealerOwnQuote(req, res) {
+  const o = await one('SELECT * FROM sales_order WHERE id=$1', [req.params.id]);
+  if (!o || o.customer_id !== req.dealer.customer_id) { res.status(404).json({ error: 'order not found' }); return null; }
+  if (o.stage !== 'Quote') { res.status(400).json({ error: 'This order has been confirmed — contact Built Trailers to change it.' }); return null; }
+  return o;
+}
+app.get('/api/dealer/orders/:id', dealer.dealerAuth, dealer.dealerRole('sales'), async (req, res) => {
+  const o = await one(`SELECT o.id, o.qty, o.stage, o.due, m.name AS model FROM sales_order o LEFT JOIN model m ON m.id=o.model_id WHERE o.id=$1 AND o.customer_id=$2`, [req.params.id, req.dealer.customer_id]);
+  if (!o) return res.status(404).json({ error: 'order not found' });
+  res.json({ ...o, editable: o.stage === 'Quote', build: await boatbuilder.orderBuild(req.params.id).catch(() => null) });
+});
+app.post('/api/dealer/orders/:id/cancel', dealer.dealerAuth, dealer.dealerRole('sales'), async (req, res) => {
+  const o = await dealerOwnQuote(req, res); if (!o) return;
+  await q(`UPDATE sales_order SET prev_stage='Quote', stage='Cancelled', cancel_reason=$1, cancelled_at=now() WHERE id=$2`, ['Withdrawn by dealer', req.params.id]);
+  res.json({ ok: true });
+});
+app.patch('/api/dealer/orders/:id', dealer.dealerAuth, dealer.dealerRole('sales'), async (req, res) => {
+  const o = await dealerOwnQuote(req, res); if (!o) return;
+  const b = req.body || {};
+  const sets = [], vals = [];
+  if (b.due !== undefined) { vals.push(b.due || null); sets.push(`due=$${vals.length}`); }
+  if (b.qty !== undefined) { vals.push(Math.max(1, Number(b.qty) || 1)); sets.push(`qty=$${vals.length}`); }
+  if (!sets.length) return res.json({ ok: true });
+  vals.push(req.params.id);
+  await q(`UPDATE sales_order SET ${sets.join(',')} WHERE id=$${vals.length}`, vals);
+  res.json({ ok: true });
+});
+app.post('/api/dealer/orders/:id/boat-build', dealer.dealerAuth, dealer.dealerRole('sales'), async (req, res) => {
+  try { const o = await dealerOwnQuote(req, res); if (!o) return; res.json(await boatbuilder.updateBuild(req.params.id, req.body || {})); }
+  catch (e) { res.status(e.status || 400).json({ error: e.message }); }
+});
 app.get('/api/dealer/invoices', dealer.dealerAuth, dealer.dealerRole('sales'), async (req, res) => res.json(await dealer.myInvoices(req.dealer)));
 // Everyone: notifications, team view
 app.get('/api/dealer/notifications', dealer.dealerAuth, async (req, res) => res.json(await dealernotify.myNotifications(req.dealer)));

@@ -117,11 +117,14 @@ export async function placeOrder(d, { modelId, qty, due }) {
 export async function myOrders(d) {
   if (!d.customer_id) return [];
   const rows = await all(`SELECT o.id, o.qty, o.stage, o.due, o.created_at, m.id AS model_id, m.name AS model, m.category AS type, m.price,
-                                 (SELECT COUNT(*) FROM trailer t WHERE t.order_id=o.id AND t.vin IS NOT NULL) AS vins
+                                 (SELECT COUNT(*) FROM trailer t WHERE t.order_id=o.id AND t.vin IS NOT NULL) AS vins,
+                                 (SELECT 1 FROM order_build ob WHERE ob.order_id=o.id) AS is_boat
                             FROM sales_order o LEFT JOIN model m ON m.id=o.model_id
                            WHERE o.customer_id=$1 ORDER BY o.created_at DESC, o.id DESC`, [d.customer_id]);
+  // A dealer can edit/withdraw their own order only while it's still a Quote (before we confirm it).
   return rows.map(o => ({ id: o.id, model: o.model, modelId: o.model_id, type: o.type, qty: o.qty, stage: o.stage, due: o.due,
-    createdAt: o.created_at, price: Number(o.price || 0), revenue: Number(o.price || 0) * o.qty, vinsAssigned: Number(o.vins) }));
+    createdAt: o.created_at, price: Number(o.price || 0), revenue: Number(o.price || 0) * o.qty, vinsAssigned: Number(o.vins),
+    boat: !!o.is_boat, editable: o.stage === 'Quote' }));
 }
 
 // ---- invoices & team ----

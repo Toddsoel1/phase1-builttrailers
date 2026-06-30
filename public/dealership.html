@@ -283,7 +283,7 @@ async function loadOrders(){
     const orders=await api('/api/dealer/orders');
     $('ordersBody').innerHTML=orders.length?`<table><thead><tr><th>Order</th><th>Model</th><th>Qty</th><th>Status</th><th>Due</th><th></th></tr></thead><tbody>
       ${orders.map(o=>`<tr><td><b>${o.id}</b></td><td>${o.model||''}</td><td>${o.qty}</td><td>${orderStatus(o.stage)}${o.vinsAssigned?` <span class="muted" style="font-size:11px">${o.vinsAssigned} VIN${o.vinsAssigned>1?'s':''}</span>`:''}</td><td>${o.due?String(o.due).slice(0,10):'—'}</td>
-      <td><button class="btn sec" style="padding:5px 10px;font-size:12px;margin:0" onclick="reorder('${o.modelId}',${o.qty})">Reorder</button></td></tr>`).join('')}
+      <td style="white-space:nowrap">${o.editable?`<button class="btn sec" style="padding:5px 9px;font-size:12px;margin:0" onclick="editDealerOrder('${o.id}')">Edit</button> <a onclick="withdrawOrder('${o.id}')" style="color:#c0392b;cursor:pointer;font-size:12px;margin-left:3px">Withdraw</a>`:`<button class="btn sec" style="padding:5px 10px;font-size:12px;margin:0" onclick="reorder('${o.modelId}',${o.qty})">Reorder</button>`}</td></tr>`).join('')}
     </tbody></table>`:'<p class="lead">No orders yet — place your first above.</p>';
   }catch(e){$('ordersBody').innerHTML='<p class="msg err">'+e.message+'</p>';}
 }
@@ -295,6 +295,41 @@ async function placeOrder(){
   }catch(e){setMsg('oMsg','err',e.message);}
 }
 function reorder(modelId,qty){$('oModel').value=modelId;$('oQty').value=qty;window.scrollTo({top:0,behavior:'smooth'});setMsg('oMsg','ok','Pre-filled from a past order — review and submit.');}
+
+// ---- Edit / withdraw a pending quote (allowed until Built Trailers confirms it) ----
+function dmodal(title,html){const d=document.createElement('div');d.id='dmodalBg';d.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.45);display:flex;align-items:center;justify-content:center;z-index:100;padding:16px';d.onclick=e=>{if(e.target===d)d.remove();};d.innerHTML=`<div class="card" style="max-width:480px;width:100%;max-height:88vh;overflow:auto;margin:0"><h2 style="font-size:17px;margin-bottom:12px">${title}</h2>${html}</div>`;document.body.appendChild(d);}
+function dclose(){const d=$('dmodalBg');if(d)d.remove();}
+async function withdrawOrder(id){
+  if(!confirm('Withdraw order '+id+'? It will be removed from the Built Trailers queue. You can place a new order anytime.'))return;
+  try{ await api('/api/dealer/orders/'+id+'/cancel',{method:'POST'}); loadOrders(); }catch(e){ alert(e.message); }
+}
+async function editDealerOrder(id){
+  let o; try{ o=await api('/api/dealer/orders/'+id); }catch(e){ return alert(e.message); }
+  if(!o.editable) return alert('This order has been confirmed and can no longer be changed.');
+  let cfg='';
+  if(o.build){
+    if(!BCAT){ try{ BCAT=await api('/api/dealer/boat-catalog'); }catch(e){} }
+    const cur=Object.fromEntries((o.build.options||[]).map(op=>[op.group_id,op.choice_id]));
+    cfg=`<div style="border-top:1px solid var(--line);margin-top:12px;padding-top:8px"><b style="font-size:13px">🚤 Configuration — ${o.build.boat_model||''}</b>`+((BCAT&&BCAT.groups||[]).map(g=>{
+      const sel=cur[g.id]||(g.choices.find(c=>c.is_default)||{}).id;
+      return `<label>${g.name}</label><select id="dq_${g.id}">${g.choices.map(c=>`<option value="${c.id}"${c.id===sel?' selected':''}>${c.name}${Number(c.dealer_price)>0?` (+$${Number(c.dealer_price).toLocaleString()})`:''}</option>`).join('')}</select>`;
+    }).join(''))+`</div>`;
+  }
+  dmodal('Edit '+id,`
+    <div class="row"><div><label class="req">Quantity</label><input id="dqQty" type="number" min="1" value="${o.qty}"></div>
+      <div><label>Requested delivery</label><input id="dqDue" type="date" value="${o.due?String(o.due).slice(0,10):''}"></div></div>
+    ${cfg}
+    <button class="btn" onclick="saveDealerEdit('${id}',${!!o.build})">Save changes</button>
+    <button class="btn sec" style="width:100%;margin-top:8px" onclick="dclose()">Cancel</button>
+    <div id="dqMsg" class="msg"></div>`);
+}
+async function saveDealerEdit(id,isBoat){
+  try{
+    await api('/api/dealer/orders/'+id,{method:'PATCH',body:JSON.stringify({qty:Number($('dqQty').value)||1,due:$('dqDue').value||undefined})});
+    if(isBoat){ const sel={}; document.querySelectorAll('[id^="dq_"]').forEach(el=>{ sel[el.id.slice(3)]=el.value; }); await api('/api/dealer/orders/'+id+'/boat-build',{method:'POST',body:JSON.stringify({selections:sel})}); }
+    dclose(); setMsg('oMsg','ok','✓ Order '+id+' updated.'); loadOrders();
+  }catch(e){ setMsg('dqMsg','err',e.message); }
+}
 
 // ---- Boat Trailer Builder (configurator) ----
 let BCAT=null;
