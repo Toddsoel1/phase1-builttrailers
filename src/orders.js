@@ -27,6 +27,8 @@ export async function customersWithTypes() {
     id: c.id, name: c.name, kind: c.kind, contact: c.contact, phone: c.phone,
     rep: c.rep_name, repId: c.rep_id, active: c.active !== false,
     smsConsent: !!c.sms_consent, smsConsentAt: c.sms_consent_at || null,
+    address: c.address || null, city: c.city || null, state: c.state || null, zip: c.zip || null,
+    lat: c.lat == null ? null : Number(c.lat), lng: c.lng == null ? null : Number(c.lng),
     allowed: allowed.filter(a => a.customer_id === c.id).map(a => a.type)
   }));
 }

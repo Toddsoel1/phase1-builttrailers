@@ -1525,13 +1525,13 @@ async function viewCustomers(){
   window._custTypes=types;
   const active=custs.filter(c=>c.active!==false), inactive=custs.filter(c=>c.active===false);
   const row=c=>{const off=c.active===false;return `<tr style="${off?'opacity:0.5':''}">
-     <td><b>${esc(c.name)}</b>${off?' <span class="pill" style="background:#888;font-size:10px">Inactive</span>':''}<br><span class="muted" style="font-size:11px">${esc(c.contact||'')}</span></td>
+     <td><b>${esc(c.name)}</b>${off?' <span class="pill" style="background:#888;font-size:10px">Inactive</span>':''}${c.kind==='Dealership'?(c.lat!=null?' <span title="On the dealer map">📍</span>':' <span class="badge b-low" style="font-size:9px">no map</span>'):''}<br><span class="muted" style="font-size:11px">${esc(c.contact||'')}</span></td>
      <td>${canSell()?`<select onchange="setCustomerKind('${c.id}',this.value)" style="padding:3px 6px;border-radius:6px;border:1px solid var(--line);background:var(--panel2);color:var(--txt);font-size:12px"><option value="Dealership" ${c.kind==='Dealership'?'selected':''}>Dealership</option><option value="Customer" ${c.kind!=='Dealership'?'selected':''}>Customer</option></select>`:`<span class="badge ${c.kind==='Dealership'?'b-buy':'b-low'}">${esc(c.kind)}</span>`}</td>
      <td class="muted" style="font-size:12px">${esc(c.phone||'—')}</td>
      <td style="font-size:12px">${c.smsConsent?'<span style="color:#4caf50">✓ Consented</span>':'<span class="muted">—</span>'}</td>
      <td class="muted" style="font-size:12px">${esc(c.rep||'—')}</td>
      <td>${types.map((t,i)=>{const on=c.allowed.includes(t);return `<span class="chip" onclick="${canSell()?`toggleType('${c.id}',${i},${!on})`:''}" style="cursor:${canSell()?'pointer':'default'};border-color:${on?'var(--accent)':'var(--line)'};color:${on?'#ffb347':'var(--muted)'}">${on?'✓ ':''}${esc(t)}</span>`;}).join('')}</td>
-     ${canSell()?`<td>${off?`<button class="btn sm" onclick="setCustomerActive('${c.id}',true)">Reactivate</button>`:`<button class="btn sm sec" onclick="setCustomerActive('${c.id}',false)">Inactivate</button>`}</td>`:''}
+     ${canSell()?`<td style="white-space:nowrap">${c.kind==='Dealership'?`<button class="btn sm sec" onclick="editAddress('${c.id}')">📍 Address</button> `:''}${off?`<button class="btn sm" onclick="setCustomerActive('${c.id}',true)">Reactivate</button>`:`<button class="btn sm sec" onclick="setCustomerActive('${c.id}',false)">Inactivate</button>`}</td>`:''}
    </tr>`;};
   $('content').innerHTML=`<div class="card"><h3>Customers &amp; dealers — authorized trailer types</h3>
    <table><thead><tr><th>Account</th><th>Type</th><th>Phone</th><th>SMS</th><th>Rep</th><th>Authorized trailer types</th>${canSell()?'<th></th>':''}</tr></thead><tbody>
@@ -1543,6 +1543,23 @@ async function viewCustomers(){
 async function toggleType(cid,idx,on){ const t=(window._custTypes||[])[idx]; if(t==null)return; try{await api('/api/customers/'+cid+'/types',{method:'PATCH',body:JSON.stringify({type:t,on})});viewCustomers();}catch(e){toast(e.message);} }
 async function setCustomerActive(id,active){ try{await api('/api/customers/'+id,{method:'PATCH',body:JSON.stringify({active})});toast(active?'Reactivated':'Inactivated');viewCustomers();}catch(e){toast(e.message);} }
 async function setCustomerKind(id,kind){ try{await api('/api/customers/'+id,{method:'PATCH',body:JSON.stringify({kind})});toast('Set to '+kind);}catch(e){toast(e.message);viewCustomers();} }
+async function editAddress(id){
+  const c=(await api('/api/customers')).find(x=>x.id===id); if(!c) return toast('Customer not found');
+  modal('Dealer address — '+esc(c.name),`
+    <p class="muted" style="font-size:12px">Used for the public dealer locator. Coordinates fill in automatically from the address (OpenStreetMap).</p>
+    <label>Street address</label><input id="caAddr" value="${esc(c.address||'')}" placeholder="123 Main St">
+    <div class="row" style="display:flex;gap:8px">
+      <div style="flex:1"><label>City</label><input id="caCity" value="${esc(c.city||'')}"></div>
+      <div style="width:70px"><label>State</label><input id="caState" value="${esc(c.state||'')}" maxlength="2" style="text-transform:uppercase"></div>
+      <div style="width:96px"><label>ZIP</label><input id="caZip" value="${esc(c.zip||'')}"></div></div>
+    <p class="muted" style="font-size:11px;margin-top:8px">${c.lat!=null?`📍 On the map at ${Number(c.lat).toFixed(4)}, ${Number(c.lng).toFixed(4)}`:'Not yet on the map.'}</p>
+    <div class="row" style="gap:8px;margin-top:10px"><button class="btn" onclick="saveAddress('${id}')">Save address</button><button class="btn sec" onclick="closeModal()">Cancel</button></div>`);
+}
+async function saveAddress(id){
+  try{ const r=await api('/api/customers/'+id,{method:'PATCH',body:JSON.stringify({address:$('caAddr').value.trim(),city:$('caCity').value.trim(),state:$('caState').value.trim(),zip:$('caZip').value.trim()})});
+    closeModal(); toast(r.geocoded?'Saved — placed on the dealer map':'Saved, but could not geocode — double-check the address'); viewCustomers(); }
+  catch(e){ toast(e.message); }
+}
 async function addDealer(){
   modal('Add Customer / Dealer',`
     <div class="field"><label>Name *</label><input id="adName" placeholder="ABC Trailer Sales"></div>

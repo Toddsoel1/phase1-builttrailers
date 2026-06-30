@@ -158,6 +158,14 @@ async function run() {
     await q('INSERT INTO customer(id,name,kind,contact,phone,rep_id) VALUES ($1,$2,$3,$4,$5,$6)', [id, name, kind, contact, phone, rep]);
     for (const t of allowed) await q('INSERT INTO customer_allowed_type(customer_id,type) VALUES ($1,$2)', [id, t]);
   }
+  // Demo dealer-locator data (address + geocode) so the public dealer feed has complete entries.
+  for (const [id, addr, city, st, zip, lat, lng] of [
+    ['c1', '123 Boulder Ave', 'St. George', 'UT', '84770', 37.0965, -113.5684],
+    ['c2', '456 Dixie Dr', 'Hurricane', 'UT', '84737', 37.1753, -113.2899],
+    ['c3', '789 Main St', 'Logan', 'UT', '84321', 41.7355, -111.8344],
+    ['c4', '321 Ranch Rd', 'Cedar City', 'UT', '84720', 37.6775, -113.0619],
+    ['c5', '654 Summit Way', 'Provo', 'UT', '84601', 40.2338, -111.6585],
+  ]) await q('UPDATE customer SET address=$2,city=$3,state=$4,zip=$5,lat=$6,lng=$7 WHERE id=$1', [id, addr, city, st, zip, lat, lng]);
 
   const ORDERS = [
     ['SO-1042', 'c4', 'LS7X14T', 2, 'In Production', '2026-06-26', 0.3, 'Sales', 'u5'],

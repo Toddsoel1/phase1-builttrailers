@@ -42,6 +42,7 @@ import * as dealernotify from './dealernotify.js';
 import * as storage from './storage.js';
 import * as push from './push.js';
 import * as testdata from './testdata.js';
+import { geocodeAddress } from './geocode.js';
 
 // Crash fast if JWT_SECRET is unset in production — predictable fallback is a critical vuln
 if (!process.env.JWT_SECRET) {
@@ -362,8 +363,10 @@ app.get('/api/public/dealers', portalLimiter, async (req, res) => {
   const provided = (req.headers.authorization || '').replace(/^Bearer\s+/i, '').trim();
   const a = Buffer.from(provided), b = Buffer.from(expected);
   if (a.length !== b.length || !timingSafeEqual(a, b)) return res.status(401).json({ error: 'Unauthorized' });
+  // Only geocoded dealers — a dealer with no coordinates never shows as a blank pin on the site.
   const rows = await all(`SELECT name, address, city, state, zip, phone, lat, lng
-                            FROM customer WHERE kind='Dealership' AND active=true AND is_test=false ORDER BY name`, []);
+                            FROM customer WHERE kind='Dealership' AND active=true AND is_test=false
+                              AND lat IS NOT NULL AND lng IS NOT NULL ORDER BY name`, []);
   const dealers = rows.map(d => ({
     name: d.name, address: d.address || null, city: d.city || null, state: d.state || null,
     zip: d.zip || null, phone: d.phone || null,
@@ -921,7 +924,7 @@ app.post('/api/trailer-types', authMiddleware, requireSales, async (req, res) =>
 // ---- customers / dealers (Phase 2) ----
 app.get('/api/customers', authMiddleware, async (_req, res) => res.json(await customersWithTypes()));
 app.post('/api/customers', authMiddleware, requireSales, async (req, res) => {
-  const { name, kind, allowed, phone, contact, smsConsent } = req.body || {};
+  const { name, kind, allowed, phone, contact, smsConsent, address, city, state, zip } = req.body || {};
   if (!name) return res.status(400).json({ error: 'name required' });
   const id = 'c' + Date.now();
   const normalizedPhone = phone ? sms.normalizePhone(phone) : null;
@@ -929,8 +932,10 @@ app.post('/api/customers', authMiddleware, requireSales, async (req, res) => {
   const priorOptin = normalizedPhone ? await sms.checkOptin(normalizedPhone) : null;
   const effectiveConsent = !!(smsConsent || priorOptin);
   const consentAt = effectiveConsent ? new Date().toISOString() : null;
-  await q('INSERT INTO customer(id,name,kind,rep_id,phone,contact,sms_consent,sms_consent_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)',
-    [id, name, kind || 'Dealership', req.user.id, normalizedPhone || null, contact || null, effectiveConsent, consentAt]);
+  const st = (state || '').toUpperCase().slice(0, 2) || null;
+  const g = address ? await geocodeAddress({ address, city, state: st, zip }) : null;
+  await q('INSERT INTO customer(id,name,kind,rep_id,phone,contact,sms_consent,sms_consent_at,address,city,state,zip,lat,lng) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)',
+    [id, name, kind || 'Dealership', req.user.id, normalizedPhone || null, contact || null, effectiveConsent, consentAt, address || null, city || null, st, zip || null, g?.lat ?? null, g?.lng ?? null]);
   for (const t of (allowed || [])) await q('INSERT INTO customer_allowed_type(customer_id,type) VALUES ($1,$2)', [id, t]);
   await audit(req, 'customer.create', `${name}${effectiveConsent ? ' [sms-consent]' : ''}`);
   res.json({ id, smsConsentAutoLinked: !!(priorOptin && !smsConsent) });
@@ -944,17 +949,27 @@ app.patch('/api/customers/:id/types', authMiddleware, requireSales, async (req, 
 });
 // Update a customer/dealer: soft-active (app use), kind (Dealership/Customer), or details.
 app.patch('/api/customers/:id', authMiddleware, requireSales, async (req, res) => {
-  const { active, kind, name, contact, phone } = req.body || {};
+  const { active, kind, name, contact, phone, address, city, state, zip, lat, lng } = req.body || {};
   const cur = await one('SELECT * FROM customer WHERE id=$1', [req.params.id]);
   if (!cur) return res.status(404).json({ error: 'not found' });
   const normalizedPhone = phone !== undefined ? (phone ? sms.normalizePhone(phone) : null) : cur.phone;
-  await q('UPDATE customer SET active=$1, kind=$2, name=$3, contact=$4, phone=$5 WHERE id=$6',
-    [active !== undefined ? !!active : (cur.active !== false),
-     kind ?? cur.kind, name ?? cur.name,
-     contact !== undefined ? (contact || null) : cur.contact,
-     normalizedPhone, req.params.id]);
-  await audit(req, 'customer.update', `${req.params.id}${active !== undefined ? (active ? ' [active]' : ' [inactive]') : ''}${kind ? ' kind=' + kind : ''}`);
-  res.json({ ok: true });
+  const addr = address !== undefined ? (address || null) : cur.address;
+  const ci = city !== undefined ? (city || null) : cur.city;
+  const st = state !== undefined ? ((state || '').toUpperCase().slice(0, 2) || null) : cur.state;
+  const zp = zip !== undefined ? (zip || null) : cur.zip;
+  // Coordinates: an explicit lat/lng wins; otherwise, if the address changed, geocode it.
+  let la = lat !== undefined ? (lat === '' || lat === null ? null : Number(lat)) : (cur.lat == null ? null : Number(cur.lat));
+  let ln = lng !== undefined ? (lng === '' || lng === null ? null : Number(lng)) : (cur.lng == null ? null : Number(cur.lng));
+  const addrChanged = addr !== cur.address || ci !== cur.city || st !== cur.state || zp !== cur.zip;
+  if (lat === undefined && lng === undefined && addrChanged && addr) {
+    const g = await geocodeAddress({ address: addr, city: ci, state: st, zip: zp });
+    if (g) { la = g.lat; ln = g.lng; }
+  }
+  await q('UPDATE customer SET active=$1, kind=$2, name=$3, contact=$4, phone=$5, address=$6, city=$7, state=$8, zip=$9, lat=$10, lng=$11 WHERE id=$12',
+    [active !== undefined ? !!active : (cur.active !== false), kind ?? cur.kind, name ?? cur.name,
+     contact !== undefined ? (contact || null) : cur.contact, normalizedPhone, addr, ci, st, zp, la, ln, req.params.id]);
+  await audit(req, 'customer.update', `${req.params.id}${active !== undefined ? (active ? ' [active]' : ' [inactive]') : ''}`);
+  res.json({ ok: true, geocoded: la != null && ln != null });
 });
 
 // ---- orders / fulfillment (Phase 2) ----
