@@ -1552,12 +1552,17 @@ async function editAddress(id){
       <div style="flex:1"><label>City</label><input id="caCity" value="${esc(c.city||'')}"></div>
       <div style="width:70px"><label>State</label><input id="caState" value="${esc(c.state||'')}" maxlength="2" style="text-transform:uppercase"></div>
       <div style="width:96px"><label>ZIP</label><input id="caZip" value="${esc(c.zip||'')}"></div></div>
-    <p class="muted" style="font-size:11px;margin-top:8px">${c.lat!=null?`📍 On the map at ${Number(c.lat).toFixed(4)}, ${Number(c.lng).toFixed(4)}`:'Not yet on the map.'}</p>
+    <details style="margin-top:8px"><summary class="muted" style="font-size:11px;cursor:pointer">${c.lat!=null?`📍 On the map at ${Number(c.lat).toFixed(4)}, ${Number(c.lng).toFixed(4)}`:'Not on the map yet'} — set coordinates manually</summary>
+      <div class="row" style="display:flex;gap:8px;margin-top:6px"><div style="flex:1"><label style="font-size:11px">Latitude</label><input id="caLat" type="number" step="any" value="${c.lat??''}" placeholder="37.0965"></div><div style="flex:1"><label style="font-size:11px">Longitude</label><input id="caLng" type="number" step="any" value="${c.lng??''}" placeholder="-113.5684"></div></div>
+      <p class="muted" style="font-size:10px;margin-top:4px">Right-click the spot in Google Maps to copy "lat, lng". Leave blank to auto-geocode from the address.</p></details>
     <div class="row" style="gap:8px;margin-top:10px"><button class="btn" onclick="saveAddress('${id}')">Save address</button><button class="btn sec" onclick="closeModal()">Cancel</button></div>`);
 }
 async function saveAddress(id){
-  try{ const r=await api('/api/customers/'+id,{method:'PATCH',body:JSON.stringify({address:$('caAddr').value.trim(),city:$('caCity').value.trim(),state:$('caState').value.trim(),zip:$('caZip').value.trim()})});
-    closeModal(); toast(r.geocoded?'Saved — placed on the dealer map':'Saved, but could not geocode — double-check the address'); viewCustomers(); }
+  const body={address:$('caAddr').value.trim(),city:$('caCity').value.trim(),state:$('caState').value.trim(),zip:$('caZip').value.trim()};
+  const lat=($('caLat')?.value||'').trim(), lng=($('caLng')?.value||'').trim();
+  if(lat!==''||lng!==''){ body.lat=lat||null; body.lng=lng||null; } // explicit coords override geocoding
+  try{ const r=await api('/api/customers/'+id,{method:'PATCH',body:JSON.stringify(body)});
+    closeModal(); toast(r.geocoded?'Saved — placed on the dealer map':'Saved, but no coordinates yet — add them manually or check the address'); viewCustomers(); }
   catch(e){ toast(e.message); }
 }
 async function addDealer(){
