@@ -351,6 +351,13 @@ test('public dealer feed: token-gated, returns only public-safe fields', async (
   for (const f of ['contact', 'rep_id', 'rep', 'id', 'is_test', 'kind']) assert.ok(!(f in d), 'no internal field ' + f);
 });
 
+test('dealer signup now requires a dealership address', async () => {
+  const r = await fetch(BASE + '/api/dealer/signup', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email: 'noaddr@x.test', password: 'secret1', name: 'No Addr', dealershipName: 'No Addr Co' }) });
+  assert.equal(r.status, 400, 'missing address rejected');
+  assert.match((await r.json()).error, /address/i);
+});
+
 test('boat builder admin: office price edit flows into the catalog + pricing; boat remap; gated', async () => {
   await api('/api/boat-admin/price', { method: 'POST', body: JSON.stringify({ choiceId: 'wheel_prem', dealerPrice: 800 }) });
   const cat = await json(await api('/api/boat-catalog'));

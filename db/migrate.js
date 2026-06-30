@@ -140,6 +140,11 @@ const colMigrations = [
   `ALTER TABLE customer ADD COLUMN IF NOT EXISTS zip TEXT`,
   `ALTER TABLE customer ADD COLUMN IF NOT EXISTS lat NUMERIC(9,6)`,
   `ALTER TABLE customer ADD COLUMN IF NOT EXISTS lng NUMERIC(9,6)`,
+  // Dealership address captured at signup (required), carried onto the customer record at approval.
+  `ALTER TABLE dealer_user ADD COLUMN IF NOT EXISTS address TEXT`,
+  `ALTER TABLE dealer_user ADD COLUMN IF NOT EXISTS city TEXT`,
+  `ALTER TABLE dealer_user ADD COLUMN IF NOT EXISTS state TEXT`,
+  `ALTER TABLE dealer_user ADD COLUMN IF NOT EXISTS zip TEXT`,
 ];
 
 export async function ensureSchema() {

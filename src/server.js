@@ -1733,6 +1733,16 @@ app.get('/api/dealers/pending', authMiddleware, requireSection('trailers'), asyn
 app.post('/api/dealers/:id/approve', authMiddleware, requireTier('editor'), requireSection('trailers'), async (req, res) => {
   try {
     const r = await dealer.approveDealer(req.params.id, req.body?.customerId, req.body?.role);
+    // Carry the dealership's signup address onto the linked customer (if it has none yet) + geocode.
+    if (req.body?.customerId) {
+      const du = await one('SELECT address, city, state, zip FROM dealer_user WHERE id=$1', [req.params.id]);
+      const cust = await one('SELECT address FROM customer WHERE id=$1', [req.body.customerId]);
+      if (du?.address && cust && !cust.address) {
+        const g = await geocodeAddress({ address: du.address, city: du.city, state: du.state, zip: du.zip });
+        await q('UPDATE customer SET address=$1, city=$2, state=$3, zip=$4, lat=$5, lng=$6 WHERE id=$7',
+          [du.address, du.city, du.state, du.zip, g?.lat ?? null, g?.lng ?? null, req.body.customerId]);
+      }
+    }
     await audit(req, 'dealer.approve', `${req.params.id} -> ${req.body?.customerId || '(no link)'} (${r.role})`);
     res.json({ ok: true });
   } catch (e) { res.status(400).json({ error: e.message }); }

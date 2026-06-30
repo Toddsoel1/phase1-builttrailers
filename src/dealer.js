@@ -27,13 +27,15 @@ export async function dealerAuth(req, res, next) {
   } catch { return res.status(401).json({ error: 'Invalid or expired session' }); }
 }
 
-export async function signup({ email, password, name, dealershipName }) {
+export async function signup({ email, password, name, dealershipName, address, city, state, zip }) {
   if (!email || !password || !name || !dealershipName) throw new Error('Name, dealership, email, and password are all required.');
+  if (!address || !city || !state || !zip) throw new Error('Your dealership address — street, city, state, and ZIP — is required.');
   if (String(password).length < 6) throw new Error('Password must be at least 6 characters.');
   if (await one('SELECT id FROM dealer_user WHERE lower(email)=lower($1)', [email])) throw new Error('An account with that email already exists.');
   const id = 'DLR-' + Date.now().toString(36);
-  await q(`INSERT INTO dealer_user(id,email,password_hash,name,dealership_name,status) VALUES($1,$2,$3,$4,$5,'pending')`,
-    [id, email, hashPassword(password), name, dealershipName]);
+  const st = String(state).toUpperCase().slice(0, 2);
+  await q(`INSERT INTO dealer_user(id,email,password_hash,name,dealership_name,status,address,city,state,zip) VALUES($1,$2,$3,$4,$5,'pending',$6,$7,$8,$9)`,
+    [id, email, hashPassword(password), name, dealershipName, address, city, st, zip]);
   return { ok: true, status: 'pending' };
 }
 

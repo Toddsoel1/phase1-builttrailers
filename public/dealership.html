@@ -83,6 +83,13 @@ footer a{color:var(--accent)}
       <h2>Create a dealer account</h2>
       <p class="lead">New accounts are reviewed and approved by Built Trailers before you can sign in.</p>
       <label class="req">Dealership name</label><input id="sDealer" placeholder="Your dealership's name">
+      <label class="req">Street address</label><input id="sAddr" placeholder="123 Main St">
+      <div class="row">
+        <div><label class="req">City</label><input id="sCity"></div>
+        <div style="max-width:84px"><label class="req">State</label><input id="sState" maxlength="2" placeholder="UT" style="text-transform:uppercase"></div>
+        <div style="max-width:120px"><label class="req">ZIP</label><input id="sZip" inputmode="numeric"></div>
+      </div>
+      <p class="note">Your address is shown on the public Built Trailers dealer locator.</p>
       <label class="req">Your name</label><input id="sName" placeholder="Contact person">
       <label class="req">Email</label><input id="sEmail" type="email">
       <label class="req">Password</label><input id="sPass" type="password" placeholder="At least 6 characters">
@@ -251,8 +258,9 @@ async function loadNotifs(){
 
 async function signup(){
   const dealershipName=$('sDealer').value.trim(),name=$('sName').value.trim(),email=$('sEmail').value.trim(),password=$('sPass').value;
-  if(!dealershipName||!name||!email||!password){setMsg('sMsg','err','Please fill in every field.');return;}
-  try{ await api('/api/dealer/signup',{method:'POST',body:JSON.stringify({dealershipName,name,email,password})});
+  const address=$('sAddr').value.trim(),city=$('sCity').value.trim(),state=$('sState').value.trim(),zip=$('sZip').value.trim();
+  if(!dealershipName||!name||!email||!password||!address||!city||!state||!zip){setMsg('sMsg','err','Please fill in every field, including your dealership address.');return;}
+  try{ await api('/api/dealer/signup',{method:'POST',body:JSON.stringify({dealershipName,name,email,password,address,city,state,zip})});
     setMsg('sMsg','ok','✓ Account created. Built Trailers will review and approve it — you’ll be able to log in once approved.');
   }catch(e){setMsg('sMsg','err',e.message);}
 }
