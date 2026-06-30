@@ -413,13 +413,19 @@ app.get('/t&cs',    (_req, res) => res.sendFile(path.join(__dir, '..', 'public',
 
 // ---- health ----
 app.get('/api/health', async (_req, res) => {
+  // Build info so "what commit is actually live?" is answerable without dashboard access.
+  // Render injects RENDER_GIT_COMMIT / RENDER_GIT_BRANCH at deploy time; locally they're absent.
+  const build = {
+    commit: (process.env.RENDER_GIT_COMMIT || '').slice(0, 7) || 'dev',
+    branch: process.env.RENDER_GIT_BRANCH || null,
+  };
   try {
     await q('SELECT 1');
-    res.json({ ok: true, status: 'ok', db: dbKind(), uptime: uptimeSeconds() });
+    res.json({ ok: true, status: 'ok', db: dbKind(), uptime: uptimeSeconds(), ...build });
   } catch (e) {
     // 503 (not 200) so an uptime monitor / Render health check treats a DB outage as down.
     log.error('health check failed: database unreachable', { err: String(e) });
-    res.status(503).json({ ok: false, status: 'degraded', error: 'database unreachable' });
+    res.status(503).json({ ok: false, status: 'degraded', error: 'database unreachable', ...build });
   }
 });
 // Front-end crash capture — the browser posts uncaught errors here so they're visible
