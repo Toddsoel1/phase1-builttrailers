@@ -125,6 +125,14 @@ const colMigrations = [
   `ALTER TABLE customer ADD COLUMN IF NOT EXISTS is_test BOOLEAN NOT NULL DEFAULT false`,
   `ALTER TABLE dealer_user ADD COLUMN IF NOT EXISTS is_test BOOLEAN NOT NULL DEFAULT false`,
   `ALTER TABLE owner_user ADD COLUMN IF NOT EXISTS is_test BOOLEAN NOT NULL DEFAULT false`,
+  // Order editing + a reversible reject/cancel that keeps the record (stage -> 'Cancelled').
+  `ALTER TABLE sales_order ADD COLUMN IF NOT EXISTS note TEXT`,
+  `ALTER TABLE sales_order ADD COLUMN IF NOT EXISTS cancel_reason TEXT`,
+  `ALTER TABLE sales_order ADD COLUMN IF NOT EXISTS cancelled_by TEXT`,
+  `ALTER TABLE sales_order ADD COLUMN IF NOT EXISTS cancelled_at TIMESTAMPTZ`,
+  `ALTER TABLE sales_order ADD COLUMN IF NOT EXISTS prev_stage TEXT`,
+  // Store the boat catalog id on a build so its configuration can be re-edited later.
+  `ALTER TABLE order_build ADD COLUMN IF NOT EXISTS boat_id TEXT`,
 ];
 
 export async function ensureSchema() {

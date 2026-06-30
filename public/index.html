@@ -1331,9 +1331,11 @@ async function viewOrders(){
   $('pSub').textContent=ordView==='queue'?('Production priority — '+(canReorder()?'use ↑ ↓ to resequence':'read-only')):('Production Flow pipeline — '+(canEdit()?'drag a card to change its stage':'read-only'));
   $('pActions').innerHTML=canSell()?`<button class="btn" onclick="go('neworder')">➕ New Order</button>`:'';
   const {stages,orders}=await api('/api/orders');
-  const live=orders.filter(o=>!o.billed); // invoiced orders drop off the board
-  const viewToggle=`<div class="tabs" style="margin-bottom:12px"><button class="${ordView==='board'?'active':''}" onclick="ordView='board';viewOrders()">🗂️ Board</button><button class="${ordView==='queue'?'active':''}" onclick="ordView='queue';viewOrders()">🏭 Production Queue</button></div>`;
+  const live=orders.filter(o=>!o.billed && o.stage!=='Cancelled'); // invoiced + rejected drop off the board
+  const rejected=orders.filter(o=>o.stage==='Cancelled');
+  const viewToggle=`<div class="tabs" style="margin-bottom:12px"><button class="${ordView==='board'?'active':''}" onclick="ordView='board';viewOrders()">🗂️ Board</button><button class="${ordView==='queue'?'active':''}" onclick="ordView='queue';viewOrders()">🏭 Production Queue</button>${rejected.length?`<button class="${ordView==='rejected'?'active':''}" onclick="ordView='rejected';viewOrders()">🚫 Rejected <span style="opacity:.7">${rejected.length}</span></button>`:''}</div>`;
   if(ordView==='queue'){ $('content').innerHTML=viewToggle+renderQueue(orders); return; }
+  if(ordView==='rejected'){ $('content').innerHTML=viewToggle+renderRejected(rejected); return; }
   const types=['All',...Array.from(new Set(live.map(o=>o.type)))];
   const filtered=ordFilter==='All'?live:live.filter(o=>o.type===ordFilter);
   const tabs=`<div class="tabs">${types.map(t=>`<button class="${ordFilter===t?'active':''}" onclick="ordFilter='${t}';viewOrders()">${t}<span style="opacity:.7;margin-left:5px">${t==='All'?live.length:live.filter(o=>o.type===t).length}</span></button>`).join('')}</div>`;
@@ -1389,15 +1391,82 @@ async function dropOrder(e,stage){
 }
 async function orderDetail(id){
   const o=await api('/api/orders/'+id);
-  modal(o.id+' — '+o.customer,`
-    <div style="margin-bottom:10px"><span class="badge b-buy">${o.type}</span> <span class="muted">${o.qty}× ${o.model} · ${o.stage} · due ${o.due||'—'}</span></div>
+  const b=o.build;
+  const buildSec=b?`<div class="card" style="margin:10px 0">
+    <h3 style="font-size:12px;color:var(--muted);text-transform:uppercase;margin-bottom:6px">🚤 Boat Build — ${esc(b.boat_model||'')}${b.boat_year?(' '+esc(String(b.boat_year))):''}</h3>
+    ${(b.options||[]).map(op=>`<div style="font-size:13px;display:flex;justify-content:space-between;padding:1px 0"><span class="muted">${esc(op.group_name)}</span><span>${esc(op.choice_name)}${Number(op.dealer_price)>0?` <span class="muted">+$${Number(op.dealer_price).toLocaleString()}</span>`:''}</span></div>`).join('')}
+    ${canSell()?`<button class="btn sec" style="margin-top:8px" onclick="editBoatBuild('${o.id}')">✏️ Edit configuration</button>`:''}
+  </div>`:'';
+  modal(o.id+' — '+(o.customer||'(no customer)'),`
+    <div style="margin-bottom:10px"><span class="badge b-buy">${esc(o.type)}</span> <span class="muted">${o.qty}× ${esc(o.model)} · ${esc(o.stage)} · due ${o.due||'—'}</span></div>
+    ${o.cancelReason?`<div style="background:rgba(192,57,43,.14);border:1px solid rgba(192,57,43,.35);border-radius:8px;padding:8px 11px;font-size:13px;margin-bottom:10px;color:#f0a0a0">🚫 Rejected: ${esc(o.cancelReason)}</div>`:''}
     <div class="grid g4" style="grid-template-columns:1fr 1fr;margin-bottom:12px">
       ${kpi('Revenue',money(o.revenue),'')}${kpi('Rep',o.rep||'—','')}</div>
+    ${o.note?`<div class="muted" style="font-size:12.5px;margin-bottom:10px">📝 ${esc(o.note)}</div>`:''}
+    ${buildSec}
     <h3 style="font-size:12px;color:var(--muted);text-transform:uppercase;margin-bottom:6px">Parts required</h3>
     <table><thead><tr><th>Part</th><th class="right">Need</th><th class="right">On hand</th><th class="center">Status</th></tr></thead><tbody>
-    ${o.bom.map(b=>`<tr><td>${b.name}</td><td class="right">${b.need}</td><td class="right">${b.onHand}</td><td class="center">${b.short?'<span class="badge b-below">short</span>':'<span class="badge b-ok">ok</span>'}</td></tr>`).join('')}
+    ${o.bom.map(p=>`<tr><td>${esc(p.name)}</td><td class="right">${p.need}</td><td class="right">${p.onHand}</td><td class="center">${p.short?'<span class="badge b-below">short</span>':'<span class="badge b-ok">ok</span>'}</td></tr>`).join('')}
     </tbody></table>
-    ${canSell()&&o.stage==='Ready'?`<div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--line)"><button class="btn" onclick="invoiceOrder('${o.id}')">🧾 Invoice &amp; close</button> <span class="muted" style="font-size:12px">Posts the invoice, relieves inventory, and removes it from the board.</span></div>`:''}`);
+    ${canSell()?`<div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--line);display:flex;gap:8px;flex-wrap:wrap">
+      ${o.stage==='Cancelled'
+        ?`<button class="btn sec" onclick="restoreOrder('${o.id}')">↩️ Restore order</button>`
+        :`<button class="btn sec" onclick="editOrderModal('${o.id}')">✏️ Edit details</button>${!o.billed?`<button class="btn sec" style="color:#e57373" onclick="rejectOrder('${o.id}')">🚫 Reject</button>`:''}${o.stage==='Ready'&&!o.billed?`<button class="btn" onclick="invoiceOrder('${o.id}')">🧾 Invoice &amp; close</button>`:''}`}
+    </div>`:''}`);
+}
+function rejectOrder(id){
+  modal('Reject '+id,`
+    <p class="muted" style="font-size:13px">Drops the order off the board and notifies the dealer. You can restore it later from the Rejected tab.</p>
+    <label>Reason (optional — shared with the dealer)</label><textarea id="rjReason" rows="2" placeholder="e.g. No capacity for that delivery date"></textarea>
+    <div class="row" style="gap:8px;margin-top:10px"><button class="btn" style="background:#c0392b;color:#fff" onclick="doReject('${id}')">Reject order</button><button class="btn sec" onclick="closeModal()">Cancel</button></div>`);
+}
+async function doReject(id){
+  try{ await api('/api/orders/'+id+'/cancel',{method:'POST',body:JSON.stringify({reason:($('rjReason').value||'').trim()})}); closeModal(); toast(id+' rejected'); viewOrders(); }
+  catch(e){ toast(e.message); }
+}
+async function restoreOrder(id){
+  if(!confirm('Restore this order to the board?'))return;
+  try{ const r=await api('/api/orders/'+id+'/uncancel',{method:'POST'}); closeModal(); toast(id+' restored to '+r.stage); viewOrders(); }
+  catch(e){ toast(e.message); }
+}
+async function editOrderModal(id){
+  const o=await api('/api/orders/'+id);
+  modal('Edit '+id,`
+    <div class="row"><div><label>Quantity</label><input id="edQty" type="number" min="1" value="${o.qty}"></div>
+      <div><label>Due date</label><input id="edDue" type="date" value="${o.due?String(o.due).slice(0,10):''}"></div></div>
+    <label>Deposit (fraction, e.g. 0.30)</label><input id="edDep" type="number" step="0.01" min="0" max="1" value="${o.deposit||0}">
+    <label>Note</label><textarea id="edNote" rows="2">${esc(o.note||'')}</textarea>
+    <div class="row" style="gap:8px;margin-top:10px"><button class="btn" onclick="saveEditOrder('${id}')">Save changes</button><button class="btn sec" onclick="closeModal()">Cancel</button></div>
+    <p class="muted" style="font-size:11px;margin-top:8px">Quantity locks once VINs are assigned or the order is in production.</p>`);
+}
+async function saveEditOrder(id){
+  const body={qty:Number($('edQty').value)||1,due:$('edDue').value||null,deposit:Number($('edDep').value)||0,note:($('edNote').value||'').trim()||null};
+  try{ await api('/api/orders/'+id,{method:'PATCH',body:JSON.stringify(body)}); closeModal(); toast('Order updated'); viewOrders(); }
+  catch(e){ toast(e.message); }
+}
+function renderRejected(rejected){
+  return `<div class="card"><h3>Rejected orders</h3><p class="muted" style="font-size:12px">Declined or cancelled orders — click to view, or restore to the board.</p>
+    ${rejected.length?`<table><thead><tr><th>Order</th><th>Customer</th><th>Model</th><th class="center">Qty</th><th></th></tr></thead><tbody>
+      ${rejected.map(o=>`<tr style="cursor:pointer" onclick="orderDetail('${o.id}')"><td><b>${o.id}</b></td><td>${esc(o.customer||'—')}</td><td>${esc(o.model||'')}</td><td class="center">${o.qty}</td>
+        <td><button class="btn sm sec" onclick="event.stopPropagation();restoreOrder('${o.id}')">↩️ Restore</button></td></tr>`).join('')}
+    </tbody></table>`:'<p class="lead">No rejected orders.</p>'}</div>`;
+}
+async function editBoatBuild(id){
+  let cat,o; try{ [cat,o]=await Promise.all([api('/api/boat-catalog'),api('/api/orders/'+id)]); }catch(e){ return toast(e.message); }
+  const b=o.build; if(!b) return toast('No boat build on this order.');
+  const cur=Object.fromEntries((b.options||[]).map(op=>[op.group_id,op.choice_id]));
+  const fields=cat.groups.map(g=>{
+    const sel=cur[g.id]||(g.choices.find(c=>c.is_default)||{}).id;
+    const opts=g.choices.map(c=>`<option value="${c.id}"${c.id===sel?' selected':''}>${esc(c.name)}${Number(c.dealer_price)>0?` (+$${Number(c.dealer_price).toLocaleString()})`:''}</option>`).join('');
+    return `<label style="margin-top:8px">${esc(g.name)}</label><select id="eb_${g.id}">${opts}</select>`;
+  }).join('');
+  modal('Edit configuration — '+esc(b.boat_model||id),`<div style="max-height:55vh;overflow:auto;padding-right:4px">${fields}</div>
+    <div class="row" style="gap:8px;margin-top:12px"><button class="btn" onclick="saveBoatBuild('${id}')">Save configuration</button><button class="btn sec" onclick="closeModal()">Cancel</button></div>`);
+}
+async function saveBoatBuild(id){
+  const sel={}; document.querySelectorAll('[id^="eb_"]').forEach(el=>{ sel[el.id.slice(3)]=el.value; });
+  try{ const r=await api('/api/orders/'+id+'/boat-build',{method:'POST',body:JSON.stringify({selections:sel})}); closeModal(); toast('Configuration updated — $'+Math.round(r.total).toLocaleString()); orderDetail(id); }
+  catch(e){ toast(e.message); }
 }
 async function invoiceOrder(id){
   if(!confirm('Invoice this order?\n\nThis consumes its parts from inventory, posts the customer invoice, and removes it from the Build board.'))return;

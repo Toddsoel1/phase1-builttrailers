@@ -273,9 +273,9 @@ export async function submitBuild(actor, payload) {
   await q(`INSERT INTO sales_order(id,customer_id,model_id,qty,stage,due,channel,rep_id,production_seq)
            VALUES($1,$2,$3,$4,'Quote',$5,$6,$7,$8)`,
     [id, payload.customerId || null, boat.base_model_id, payload.qty || 1, payload.due || null, payload.channel || 'Configurator', payload.repId || actor?.id || null, seq]);
-  await q(`INSERT INTO order_build(order_id,boat_make,boat_model,boat_year,boat_length,base_model_id,total_price,note,created_by)
-           VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
-    [id, boat.make_id, boat.name, payload.year || null, boat.length_ft, boat.base_model_id, price.total, payload.note || null, actor?.id || payload.createdBy || null]);
+  await q(`INSERT INTO order_build(order_id,boat_id,boat_make,boat_model,boat_year,boat_length,base_model_id,total_price,note,created_by)
+           VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+    [id, boat.id, boat.make_id, boat.name, payload.year || null, boat.length_ft, boat.base_model_id, price.total, payload.note || null, actor?.id || payload.createdBy || null]);
   const sel = payload.selections || {};
   for (const g of cat.groups) {
     const c = g.choices.find(x => x.id === sel[g.id]);
@@ -291,8 +291,38 @@ export async function submitBuild(actor, payload) {
 export async function orderBuild(orderId) {
   const b = await one('SELECT * FROM order_build WHERE order_id=$1', [orderId]);
   if (!b) return null;
-  const options = await all('SELECT group_id, group_name, choice_name, dealer_price FROM order_build_option WHERE order_id=$1 ORDER BY id', [orderId]);
+  const options = await all('SELECT group_id, group_name, choice_id, choice_name, dealer_price FROM order_build_option WHERE order_id=$1 ORDER BY id', [orderId]);
   return { ...b, options };
+}
+
+// Re-spec an existing boat build: re-validate, re-price, and replace the options + BOM deltas.
+// Locked once VINs are assigned or the order is in production (the BOM would otherwise desync).
+export async function updateBuild(orderId, payload) {
+  const ob = await one('SELECT * FROM order_build WHERE order_id=$1', [orderId]);
+  if (!ob) { const e = new Error('This order has no boat build to edit.'); e.status = 400; throw e; }
+  const used = await one('SELECT COUNT(*)::int AS n FROM trailer WHERE order_id=$1', [orderId]);
+  const so = await one('SELECT consumed FROM sales_order WHERE id=$1', [orderId]);
+  if ((used?.n || 0) > 0 || so?.consumed) { const e = new Error('The configuration is locked once VINs are assigned or the order is in production.'); e.status = 400; throw e; }
+  const cat = await getCatalog();
+  const boatId = payload.boatId || ob.boat_id;
+  const p = { boatId, selections: payload.selections || {}, year: payload.year };
+  const v = await validateBuild(p, cat);
+  if (!v.ok) { const e = new Error(v.errors.join(' ')); e.status = 400; throw e; }
+  const boat = cat.boats.find(b => b.id === boatId);
+  const price = await priceBuild(p, cat);
+  const { deltas } = await computeFinalBOM(boat.base_model_id, p.selections, cat);
+  await q(`UPDATE order_build SET boat_id=$1,boat_make=$2,boat_model=$3,boat_year=$4,boat_length=$5,base_model_id=$6,total_price=$7 WHERE order_id=$8`,
+    [boat.id, boat.make_id, boat.name, payload.year ?? ob.boat_year, boat.length_ft, boat.base_model_id, price.total, orderId]);
+  await q('UPDATE sales_order SET model_id=$1 WHERE id=$2', [boat.base_model_id, orderId]); // base trailer can change
+  await q('DELETE FROM order_build_option WHERE order_id=$1', [orderId]);
+  await q('DELETE FROM order_bom_delta WHERE order_id=$1', [orderId]);
+  for (const g of cat.groups) {
+    const c = g.choices.find(x => x.id === p.selections[g.id]);
+    if (c) await q('INSERT INTO order_build_option(order_id,group_id,group_name,choice_id,choice_name,dealer_price) VALUES($1,$2,$3,$4,$5,$6)',
+      [orderId, g.id, g.name, c.id, c.name, Number(c.dealer_price) || 0]);
+  }
+  for (const d of deltas) await q('INSERT INTO order_bom_delta(order_id,part_id,qty,stage) VALUES($1,$2,$3,$4)', [orderId, d.part_id, d.qty, d.stage]);
+  return { orderId, total: price.total };
 }
 
 // Full production spec for a configured order: the build + options + the resolved final BOM

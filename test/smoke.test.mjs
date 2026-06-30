@@ -319,6 +319,23 @@ test('boat builder: order spec returns the config + resolved BOM (production vie
   assert.ok(spec.bom.find(p => p.part_id === 'BUY-MAT-TIGREY'), 'chosen non-skid mat in the resolved BOM');
 });
 
+test('orders: edit details, reject + restore, and re-configure a boat build', async () => {
+  const sel = { axle_count: 'ac_triple', axle_type: 'axle_sprung', brakes: 'brk_eoh', paint_style: 'paint_single', paint_color: 'color_mystic_white', wheels: 'wheel_std', fender_style: 'fender_squared', winch: 'winch_dl_single', winch_stand: 'winch_f2' };
+  const oid = (await json(await api('/api/boat-build/submit', { method: 'POST', body: JSON.stringify({ boatId: 'NQ-G25', year: 2026, qty: 1, selections: sel }) }))).orderId;
+  // edit details
+  assert.equal((await api('/api/orders/' + oid, { method: 'PATCH', body: JSON.stringify({ due: '2026-09-01', note: 'rush' }) })).status, 200);
+  assert.equal((await json(await api('/api/orders/' + oid))).note, 'rush', 'note saved');
+  // re-configure: standard -> premium wheels lands in the resolved BOM
+  await api('/api/orders/' + oid + '/boat-build', { method: 'POST', body: JSON.stringify({ selections: { ...sel, wheels: 'wheel_prem' } }) });
+  assert.ok((await json(await api('/api/orders/' + oid + '/build'))).bom.find(p => p.part_id === 'BUY-WHL-PREM'), 're-config updated the BOM');
+  // reject -> off the board, then restore -> back to Quote
+  assert.equal((await api('/api/orders/' + oid + '/cancel', { method: 'POST', body: JSON.stringify({ reason: 'test reject' }) })).status, 200);
+  const cancelled = await json(await api('/api/orders/' + oid));
+  assert.equal(cancelled.stage, 'Cancelled');
+  assert.equal(cancelled.cancelReason, 'test reject');
+  assert.equal((await json(await api('/api/orders/' + oid + '/uncancel', { method: 'POST' }))).stage, 'Quote', 'restored to Quote');
+});
+
 test('boat builder admin: office price edit flows into the catalog + pricing; boat remap; gated', async () => {
   await api('/api/boat-admin/price', { method: 'POST', body: JSON.stringify({ choiceId: 'wheel_prem', dealerPrice: 800 }) });
   const cat = await json(await api('/api/boat-catalog'));

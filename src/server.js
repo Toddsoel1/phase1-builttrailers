@@ -914,6 +914,10 @@ app.get('/api/orders/:id', authMiddleware, async (req, res) => {
   if (!o) return res.status(404).json({ error: 'not found' });
   const lines = await all(`SELECT b.part_id, b.qty, p.name, p.on_hand FROM bom_line b JOIN part p ON p.id=b.part_id WHERE b.model_id=$1`, [o.modelId]);
   o.bom = lines.map(l => ({ partId: l.part_id, name: l.name, need: Math.round(Number(l.qty) * o.qty), onHand: l.on_hand, short: l.on_hand < Number(l.qty) * o.qty }));
+  const extra = await one('SELECT note, cancel_reason FROM sales_order WHERE id=$1', [req.params.id]);
+  o.note = extra?.note || null;
+  o.cancelReason = extra?.cancel_reason || null;
+  o.build = await boatbuilder.orderBuild(req.params.id).catch(() => null); // boat-build config, if any
   res.json(o);
 });
 app.post('/api/orders', authMiddleware, requireSales, async (req, res) => {
@@ -981,6 +985,66 @@ app.patch('/api/orders/:id/stage', authMiddleware, requireTier('editor'), async 
   await sms.notifyOrderStage(req.params.id, stage, req.user.id); // Phase 6: text the customer
   await dealernotify.notifyDealer(cur.customer_id, 'order', `Order ${req.params.id} is now "${stage}".`, req.params.id);
   res.json({ ok: true });
+});
+// Reject / cancel an order (a dealer quote we won't accept, or any non-invoiced order). Soft: keeps
+// the record, drops it off the board (stage 'Cancelled'), reversible, and notifies the dealer.
+app.post('/api/orders/:id/cancel', authMiddleware, requireSales, async (req, res) => {
+  const cur = await one('SELECT * FROM sales_order WHERE id=$1', [req.params.id]);
+  if (!cur) return res.status(404).json({ error: 'not found' });
+  if (cur.billed) return res.status(400).json({ error: 'This order is already invoiced — it can\'t be rejected.' });
+  if (cur.stage === 'Cancelled') return res.json({ ok: true });
+  const reason = (req.body?.reason || '').trim() || null;
+  await q(`UPDATE sales_order SET prev_stage=$1, stage='Cancelled', cancel_reason=$2, cancelled_by=$3, cancelled_at=now() WHERE id=$4`,
+    [cur.stage, reason, req.user.id, req.params.id]);
+  await audit(req, 'order.cancel', `${req.params.id}${reason ? ': ' + reason : ''}`);
+  await dealernotify.notifyDealer(cur.customer_id, 'order', `Order ${req.params.id} was not accepted${reason ? ': ' + reason : '.'}`, req.params.id);
+  res.json({ ok: true });
+});
+app.post('/api/orders/:id/uncancel', authMiddleware, requireSales, async (req, res) => {
+  const cur = await one('SELECT * FROM sales_order WHERE id=$1', [req.params.id]);
+  if (!cur) return res.status(404).json({ error: 'not found' });
+  if (cur.stage !== 'Cancelled') return res.status(400).json({ error: 'Order is not cancelled.' });
+  const back = cur.prev_stage || 'Quote';
+  await q(`UPDATE sales_order SET stage=$1, cancel_reason=NULL, cancelled_by=NULL, cancelled_at=NULL, prev_stage=NULL WHERE id=$2`, [back, req.params.id]);
+  await audit(req, 'order.uncancel', `${req.params.id} -> ${back}`);
+  res.json({ ok: true, stage: back });
+});
+// Edit order details. Due/deposit/note are always editable; quantity locks once VINs are assigned
+// (changing it would desync the trailer units); customer locks once invoiced.
+app.patch('/api/orders/:id', authMiddleware, requireSales, async (req, res) => {
+  const cur = await one('SELECT * FROM sales_order WHERE id=$1', [req.params.id]);
+  if (!cur) return res.status(404).json({ error: 'not found' });
+  const b = req.body || {};
+  const sets = [], vals = [];
+  const set = (col, val) => { vals.push(val); sets.push(`${col}=$${vals.length}`); };
+  if (b.due !== undefined) set('due', b.due || null);
+  if (b.deposit !== undefined) set('deposit', Number(b.deposit) || 0);
+  if (b.note !== undefined) set('note', b.note || null);
+  if (b.qty !== undefined && Number(b.qty) !== cur.qty) {
+    const vins = await one('SELECT COUNT(*)::int AS n FROM trailer WHERE order_id=$1', [req.params.id]);
+    if ((vins?.n || 0) > 0 || cur.consumed) return res.status(400).json({ error: 'Quantity is locked once VINs are assigned or the order is in production.' });
+    set('qty', Math.max(1, Number(b.qty) || 1));
+  }
+  if (b.customerId !== undefined && b.customerId !== cur.customer_id) {
+    if (cur.billed) return res.status(400).json({ error: 'Customer is locked once the order is invoiced.' });
+    if (b.customerId) {
+      const mdl = await one('SELECT category FROM model WHERE id=$1', [cur.model_id]);
+      const allowed = await allowedTypesFor(b.customerId);
+      if (mdl && !allowed.includes(mdl.category)) return res.status(403).json({ error: `That customer isn't authorized for ${mdl.category} trailers.` });
+      await q('UPDATE trailer SET customer_id=$1 WHERE order_id=$2', [b.customerId, req.params.id]);
+    }
+    set('customer_id', b.customerId || null);
+  }
+  if (!sets.length) return res.json({ ok: true });
+  vals.push(req.params.id);
+  await q(`UPDATE sales_order SET ${sets.join(',')} WHERE id=$${vals.length}`, vals);
+  await audit(req, 'order.edit', `${req.params.id} (${sets.map(s => s.split('=')[0]).join(', ')})`);
+  res.json({ ok: true });
+});
+// Re-configure the boat build on an existing order (re-validates, re-prices, rebuilds the BOM).
+app.post('/api/orders/:id/boat-build', authMiddleware, requireSales, async (req, res) => {
+  try { res.json(await boatbuilder.updateBuild(req.params.id, req.body || {})); }
+  catch (e) { res.status(e.status || 400).json({ error: e.message }); }
 });
 // Invoice a finished (Ready) order: consume its BOM from inventory, post the customer
 // invoice, mark it billed, and drop it off the Build board. Decoupled from the stage so
