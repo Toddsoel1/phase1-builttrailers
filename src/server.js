@@ -354,6 +354,24 @@ app.post('/api/dealer/orders/:id/boat-build', dealer.dealerAuth, dealer.dealerRo
   try { const o = await dealerOwnQuote(req, res); if (!o) return; res.json(await boatbuilder.updateBuild(req.params.id, req.body || {})); }
   catch (e) { res.status(e.status || 400).json({ error: e.message }); }
 });
+// Public dealer directory (locator feed) — protected by a static bearer token (env DEALER_FEED_TOKEN).
+// Returns only public-safe fields for active dealerships; never internal contacts, reps, or margins.
+app.get('/api/public/dealers', portalLimiter, async (req, res) => {
+  const expected = process.env.DEALER_FEED_TOKEN;
+  if (!expected) return res.status(503).json({ error: 'Dealer feed is not configured.' });
+  const provided = (req.headers.authorization || '').replace(/^Bearer\s+/i, '').trim();
+  const a = Buffer.from(provided), b = Buffer.from(expected);
+  if (a.length !== b.length || !timingSafeEqual(a, b)) return res.status(401).json({ error: 'Unauthorized' });
+  const rows = await all(`SELECT name, address, city, state, zip, phone, lat, lng
+                            FROM customer WHERE kind='Dealership' AND active=true AND is_test=false ORDER BY name`, []);
+  const dealers = rows.map(d => ({
+    name: d.name, address: d.address || null, city: d.city || null, state: d.state || null,
+    zip: d.zip || null, phone: d.phone || null,
+    lat: d.lat == null ? null : Number(d.lat), lng: d.lng == null ? null : Number(d.lng),
+    status: 'active',
+  }));
+  res.json({ dealers });
+});
 app.get('/api/dealer/invoices', dealer.dealerAuth, dealer.dealerRole('sales'), async (req, res) => res.json(await dealer.myInvoices(req.dealer)));
 // Everyone: notifications, team view
 app.get('/api/dealer/notifications', dealer.dealerAuth, async (req, res) => res.json(await dealernotify.myNotifications(req.dealer)));

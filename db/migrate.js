@@ -133,6 +133,13 @@ const colMigrations = [
   `ALTER TABLE sales_order ADD COLUMN IF NOT EXISTS prev_stage TEXT`,
   // Store the boat catalog id on a build so its configuration can be re-edited later.
   `ALTER TABLE order_build ADD COLUMN IF NOT EXISTS boat_id TEXT`,
+  // Public dealer-locator fields on dealership customers (address + geocode). Populated by the office.
+  `ALTER TABLE customer ADD COLUMN IF NOT EXISTS address TEXT`,
+  `ALTER TABLE customer ADD COLUMN IF NOT EXISTS city TEXT`,
+  `ALTER TABLE customer ADD COLUMN IF NOT EXISTS state TEXT`,
+  `ALTER TABLE customer ADD COLUMN IF NOT EXISTS zip TEXT`,
+  `ALTER TABLE customer ADD COLUMN IF NOT EXISTS lat NUMERIC(9,6)`,
+  `ALTER TABLE customer ADD COLUMN IF NOT EXISTS lng NUMERIC(9,6)`,
 ];
 
 export async function ensureSchema() {

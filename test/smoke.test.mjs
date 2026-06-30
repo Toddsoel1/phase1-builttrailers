@@ -15,7 +15,7 @@ const BASE = `http://localhost:${PORT}`;
 // real external service regardless of what's in .env.
 const HERMETIC = { PORT: String(PORT), ACCOUNTING_MODE: 'simulated', SMS_ENABLED: '0',
   QBO_CLIENT_ID: '', QBO_CLIENT_SECRET: '', JWT_SECRET: 'test-secret-smoke',
-  LOGIN_RATE_MAX: '100000', PORTAL_RATE_MAX: '100000' };
+  LOGIN_RATE_MAX: '100000', PORTAL_RATE_MAX: '100000', DEALER_FEED_TOKEN: 'test-feed-token' };
 
 let server, dbDir, token, orderId, modelId;
 
@@ -336,6 +336,19 @@ test('orders: edit details, reject + restore, and re-configure a boat build', as
   assert.equal(cancelled.stage, 'Cancelled');
   assert.equal(cancelled.cancelReason, 'test reject');
   assert.equal((await json(await api('/api/orders/' + oid + '/uncancel', { method: 'POST' }))).stage, 'Quote', 'restored to Quote');
+});
+
+test('public dealer feed: token-gated, returns only public-safe fields', async () => {
+  assert.equal((await fetch(BASE + '/api/public/dealers')).status, 401, 'no token rejected');
+  assert.equal((await fetch(BASE + '/api/public/dealers', { headers: { Authorization: 'Bearer nope' } })).status, 401, 'wrong token rejected');
+  const r = await fetch(BASE + '/api/public/dealers', { headers: { Authorization: 'Bearer test-feed-token' } });
+  assert.equal(r.status, 200, 'correct token accepted');
+  const body = await r.json();
+  assert.ok(Array.isArray(body.dealers) && body.dealers.length >= 1, 'returns { dealers: [...] }');
+  const d = body.dealers[0];
+  for (const f of ['name', 'address', 'city', 'state', 'zip', 'phone', 'lat', 'lng', 'status']) assert.ok(f in d, 'includes ' + f);
+  assert.equal(d.status, 'active');
+  for (const f of ['contact', 'rep_id', 'rep', 'id', 'is_test', 'kind']) assert.ok(!(f in d), 'no internal field ' + f);
 });
 
 test('boat builder admin: office price edit flows into the catalog + pricing; boat remap; gated', async () => {
