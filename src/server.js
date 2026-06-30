@@ -14,6 +14,7 @@ import rateLimit from 'express-rate-limit';
 import { createHmac, timingSafeEqual } from 'crypto';
 import { initDb, dbKind, q, all, one } from './db.js';
 import { ensureSchema } from '../db/migrate.js';
+import { ensureDealers } from './dealerseed.js';
 import { log, captureError, initObservability, requestId, uptimeSeconds } from './observability.js';
 import { authMiddleware, requireTier, signToken, checkPassword, hashPassword } from './auth.js';
 import { modelRollup, modelsSummary, inventoryValuation } from './cost.js';
@@ -1852,6 +1853,9 @@ await ensureSchema();
   // Boat Trailer Builder catalog (Nautique boats + options) — idempotent, never overwrites
   // office-edited prices. After ensureSchema so its tables + the part table exist.
   await boatbuilder.ensureBoatCatalog().catch(e => log('warn', 'boatCatalog', { error: e.message }));
+  // Built Trailers' real dealer network -> customer table for the public locator. One-time
+  // (app_config flag) so later office edits to a dealer aren't overwritten on the next reboot.
+  await ensureDealers().catch(e => log('warn', 'dealerSeed', { error: e.message }));
   // Migrate existing app_user.title into user_title junction (idempotent)
   await q(`INSERT INTO user_title(user_id,role_name)
     SELECT u.id, u.title FROM app_user u JOIN role r ON r.name=u.title
