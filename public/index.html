@@ -33,6 +33,8 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Ar
 .brand{padding:18px;border-bottom:1px solid var(--line)}.brand h1{font-size:16px}.brand .t{color:var(--accent)}.brand small{color:var(--muted);font-size:11px}
 .nav{padding:10px 8px;flex:1;overflow-y:auto;min-height:0}.nav button{width:100%;text-align:left;background:none;border:none;color:var(--muted);padding:10px 12px;border-radius:8px;font-size:13.5px;margin-bottom:2px}
 .nav button:hover{background:var(--panel2);color:var(--txt)}.nav button.active{background:linear-gradient(90deg,rgba(255,122,24,.18),transparent);color:var(--txt);font-weight:600;box-shadow:inset 3px 0 0 var(--accent)}
+.nav button.navhdr{padding:11px 12px 3px;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.7px;color:#7e8b99;margin-top:5px;display:flex;justify-content:space-between;align-items:center}
+.nav button.navhdr:hover{background:none;color:#cbd5e1}.navchev{font-size:8px;opacity:.55}
 .who{padding:12px;border-top:1px solid var(--line);font-size:12px}.who b{display:block;margin:3px 0}
 .pill{display:inline-block;font-size:10px;padding:2px 7px;border-radius:20px;font-weight:700;text-transform:uppercase}
 .pill.admin{background:rgba(255,122,24,.2);color:#ffb347}.pill.editor{background:rgba(90,169,255,.2);color:var(--blue)}.pill.viewer{background:rgba(139,154,168,.2);color:var(--muted)}
@@ -182,10 +184,37 @@ function navVisible(n){
   if(n[0]==='testdata') return isAdmin();
   return canSee(n[0]);
 }
+// Nav grouped into collapsible sections so the long list isn't overwhelming. Each group only shows
+// if the user can see at least one item in it; collapsed state persists per browser.
+const NAV_LABEL = Object.fromEntries(NAV);
+const NAV_GROUPS = [
+  ['', ['dashboard']],
+  ['Production', ['orders','daily','trailers','printcenter']],
+  ['Sales', ['neworder','boatadmin','customers']],
+  ['Inventory', ['parts','boms','inventory','predict','pos']],
+  ['Finance', ['accounting','forecast']],
+  ['People', ['team','timeoff','outcomes','wins']],
+  ['Updates', ['notify','support']],
+  ['Admin', ['users','testdata']],
+];
 function renderNav(){
-  $('nav').innerHTML=NAV.filter(navVisible).map(n=>`<button class="${page===n[0]?'active':''}" onclick="go('${n[0]}')">${n[1]}</button>`).join('');
+  const collapsed=JSON.parse(localStorage.getItem('navCollapsed')||'{}');
+  let html='';
+  for(const [label,keys] of NAV_GROUPS){
+    const vis=keys.filter(k=>navVisible([k]));
+    if(!vis.length) continue;
+    const items=vis.map(k=>`<button class="${page===k?'active':''}" onclick="go('${k}')">${NAV_LABEL[k]}</button>`).join('');
+    if(!label){ html+=items; continue; }
+    const col=!!collapsed[label];
+    html+=`<div class="navgroup"><button class="navhdr" onclick="toggleNavGroup('${label}')">${label}<span class="navchev">${col?'▸':'▾'}</span></button>${col?'':items}</div>`;
+  }
+  $('nav').innerHTML=html;
   $('whoName').textContent=ME.name;
   $('whoPill').innerHTML=`<span class="pill ${ME.role}">${(ME.titles||[ME.title]).filter(Boolean).join(', ')||ME.role}</span>`;
+}
+function toggleNavGroup(label){
+  const c=JSON.parse(localStorage.getItem('navCollapsed')||'{}');
+  c[label]=!c[label]; localStorage.setItem('navCollapsed',JSON.stringify(c)); renderNav();
 }
 function go(p){page=p;render();}
 async function render(){
