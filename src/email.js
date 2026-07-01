@@ -49,6 +49,22 @@ export async function sendPasswordReset({ email, ownerName, resetUrl }) {
   return sendEmail({ to: email, subject, html, text });
 }
 
+// Dealer-facing notification (order status, claim resolved, registration verified) — the email
+// twin of the in-portal notification, so dealers who never enable push still hear about it.
+const DEALER_PORTAL = () => process.env.DEALER_PORTAL_URL || 'https://dealership.builttrailers.app';
+const KIND_SUBJECT = { order: 'Order update', claim: 'Warranty claim update', registration: 'Registration update' };
+export async function sendDealerNotification({ email, kind, body }) {
+  const url = DEALER_PORTAL();
+  const subject = `Built Trailers — ${KIND_SUBJECT[kind] || 'Update'}`;
+  const html = `<div style="font-family:Arial,Helvetica,sans-serif;color:#1a2230;max-width:560px">
+    <h2 style="margin:0 0 8px">${escapeHtml(KIND_SUBJECT[kind] || 'Update')}</h2>
+    <p style="font-size:15px">${escapeHtml(body)}</p>
+    <p style="margin:18px 0"><a href="${url}" style="display:inline-block;background:#e8631a;color:#fff;padding:11px 20px;border-radius:8px;text-decoration:none;font-weight:bold">Open the dealer portal</a></p>
+    <p style="color:#6b7785;font-size:12px;margin-top:18px">Built Trailers</p></div>`;
+  const text = `${body}  Dealer portal: ${url}`;
+  return sendEmail({ to: email, subject, html, text });
+}
+
 // Self-service password reset link for a dealer account (link expires in 1 hour).
 export async function sendDealerPasswordReset({ email, name, resetUrl }) {
   const subject = 'Reset your Built Trailers dealer portal password';
@@ -59,6 +75,39 @@ export async function sendDealerPasswordReset({ email, name, resetUrl }) {
     <p style="color:#6b7785;font-size:13px">This link expires in 1 hour. If you didn&#39;t request this, you can ignore this email — your password won&#39;t change.</p>
     <p style="color:#6b7785;font-size:12px;margin-top:18px">Built Trailers</p></div>`;
   const text = `Reset your Built Trailers dealer portal password: ${resetUrl}  (expires in 1 hour; ignore this email if you didn't request it).`;
+  return sendEmail({ to: email, subject, html, text });
+}
+
+// ~30 days before warranty expiry (one-shot per registration, tracked in expiry_reminder_sent).
+export async function sendWarrantyExpiryReminder({ email, ownerName, vin, model, expiresOn }) {
+  const url = BASE();
+  // The DB driver may return DATE as a JS Date — normalize either shape to YYYY-MM-DD.
+  const when = expiresOn instanceof Date ? expiresOn.toISOString().slice(0, 10) : String(expiresOn).slice(0, 10);
+  const subject = `Your Built Trailers warranty ends ${when}`;
+  const html = `<div style="font-family:Arial,Helvetica,sans-serif;color:#1a2230;max-width:560px">
+    <h2 style="margin:0 0 8px">Warranty expires soon</h2>
+    <p>Hi${ownerName ? ' ' + escapeHtml(ownerName) : ''}, the warranty on your trailer${model ? ` (${escapeHtml(model)})` : ''} — VIN <b>${escapeHtml(vin || '')}</b> — ends on <b>${escapeHtml(when)}</b>.</p>
+    <ul style="line-height:1.7">
+      <li>🛠️ Noticed anything wrong? <b>File a warranty claim before it expires.</b></li>
+      <li>📅 Log any maintenance you've done — it keeps your records (and coverage) clean.</li>
+    </ul>
+    <p style="margin:18px 0"><a href="${url}" style="display:inline-block;background:#e8631a;color:#fff;padding:11px 20px;border-radius:8px;text-decoration:none;font-weight:bold">Open my owner account</a></p>
+    <p style="color:#6b7785;font-size:12px;margin-top:18px">Built Trailers</p></div>`;
+  const text = `The warranty on your trailer (VIN ${vin || ''}) ends on ${when}. File any claims and log maintenance before then: ${url}`;
+  return sendEmail({ to: email, subject, html, text });
+}
+
+// Periodic (~every 6 months in-warranty) service nudge; skipped when maintenance was logged recently.
+export async function sendMaintenanceReminder({ email, ownerName, vin, model }) {
+  const url = BASE();
+  const subject = 'Trailer service time — log your maintenance';
+  const html = `<div style="font-family:Arial,Helvetica,sans-serif;color:#1a2230;max-width:560px">
+    <h2 style="margin:0 0 8px">Time for routine maintenance</h2>
+    <p>Hi${ownerName ? ' ' + escapeHtml(ownerName) : ''}, it's been a while since maintenance was logged for your trailer${model ? ` (${escapeHtml(model)})` : ''} — VIN <b>${escapeHtml(vin || '')}</b>.</p>
+    <p>Routine service — bearings, brakes, lights, torque checks — keeps your trailer safe <b>and keeps your warranty valid</b>. The full schedule is in your owner account under Documents.</p>
+    <p style="margin:18px 0"><a href="${url}" style="display:inline-block;background:#e8631a;color:#fff;padding:11px 20px;border-radius:8px;text-decoration:none;font-weight:bold">Log maintenance now</a></p>
+    <p style="color:#6b7785;font-size:12px;margin-top:18px">Built Trailers</p></div>`;
+  const text = `Time for routine maintenance on your trailer (VIN ${vin || ''}). Log it to keep your warranty valid: ${url}`;
   return sendEmail({ to: email, subject, html, text });
 }
 

@@ -333,6 +333,88 @@ test('VIN: print center + correction are restricted to OM/GM/Admin', async () =>
   assert.equal((await fetch(BASE + `/api/trailers/${vinUnitId}/vin`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + sales }, body: JSON.stringify({ vin: 'BLTHACKVIN0000001' }) })).status, 403, 'sales cannot change a VIN');
 });
 
+test('staff users: email is stored, returned, and editable', async () => {
+  const r = await api('/api/users', { method: 'POST', body: JSON.stringify({ name: 'Email Test User', titles: ['Sales'], email: 'emailtest@builttrailers.app' }) });
+  assert.equal(r.status, 200);
+  const { id } = await r.json();
+  let u = (await json(await api('/api/users'))).find(x => x.id === id);
+  assert.equal(u.email, 'emailtest@builttrailers.app');
+  await api('/api/users/' + id, { method: 'PATCH', body: JSON.stringify({ email: 'changed@builttrailers.app' }) });
+  u = (await json(await api('/api/users'))).find(x => x.id === id);
+  assert.equal(u.email, 'changed@builttrailers.app');
+});
+
+test('global search: finds orders, VINs, customers, and parts; gated by auth', async () => {
+  assert.equal((await fetch(BASE + '/api/search?q=BLT')).status, 401, 'unauthenticated rejected');
+  const short = await json(await api('/api/search?q=B'));
+  assert.equal(short.units.length, 0, 'under 2 chars returns nothing');
+  const byVin = await json(await api('/api/search?q=BLTTESTVIN0000099'));
+  assert.equal(byVin.units.length, 1, 'VIN found');
+  assert.ok(byVin.units[0].orderId, 'VIN result carries its order');
+  const anyOrder = (await json(await api('/api/orders'))).orders[0];
+  const byOrder = await json(await api('/api/search?q=' + encodeURIComponent(anyOrder.id)));
+  assert.ok(byOrder.orders.some(o => o.id === anyOrder.id), 'order found by exact id');
+  const byCust = await json(await api('/api/search?q=ProShop')); // boot-seeded dealer network
+  assert.ok(byCust.customers.length >= 1, 'customer name matches');
+  const byPart = await json(await api('/api/search?q=BUY-'));
+  assert.ok(byPart.parts.length >= 1, 'parts match');
+});
+
+test('shop floor: station page + PIN-gated stage advance (full flow)', async () => {
+  // The VIN-corrected unit from the print tests — find its unit + order via search (dogfood).
+  const s = await json(await api('/api/search?q=BLTTESTVIN0000099'));
+  const unit = s.units[0];
+  assert.ok(unit?.id && unit?.orderId, 'unit + order resolved');
+
+  // Read-only scan before any PIN exists
+  let page = await (await fetch(BASE + '/u/' + unit.id)).text();
+  assert.match(page, /BLTTESTVIN0000099/, 'station page shows the VIN');
+  assert.match(page, /station view/i, 'station layout rendered');
+  assert.match(page, /aren't enabled/i, 'no PIN -> floor updates disabled hint');
+
+  // Advance attempts before a PIN is set -> 503
+  const noPin = await fetch(BASE + '/u/' + unit.id + '/advance', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pin: '1234' }) });
+  assert.equal(noPin.status, 503, 'unconfigured floor updates are off');
+
+  // PIN admin: sales cannot set it; bad format rejected; admin sets it
+  const sr = await api('/api/auth/login', { method: 'POST', body: JSON.stringify({ username: 'aruiz', password: 'built2026' }) });
+  const sales = (await sr.json()).token;
+  assert.equal((await fetch(BASE + '/api/admin/shop-pin', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + sales }, body: JSON.stringify({ pin: '4321' }) })).status, 403, 'sales cannot set the PIN');
+  assert.equal((await api('/api/admin/shop-pin', { method: 'POST', body: JSON.stringify({ pin: 'abc' }) })).status, 400, 'non-digit PIN rejected');
+  assert.equal((await api('/api/admin/shop-pin', { method: 'POST', body: JSON.stringify({ pin: '7788' }) })).status, 200);
+  assert.equal((await json(await api('/api/admin/shop-pin'))).set, true, 'status reports PIN set');
+
+  // Page now offers the action; wrong PIN 401; right PIN advances Finish -> Ready
+  page = await (await fetch(BASE + '/u/' + unit.id)).text();
+  assert.match(page, /Mark Finish complete/i, 'action button rendered for the current stage');
+  const bad = await fetch(BASE + '/u/' + unit.id + '/advance', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pin: '0000', worker: 'JT' }) });
+  assert.equal(bad.status, 401, 'wrong PIN rejected');
+  const ok = await fetch(BASE + '/u/' + unit.id + '/advance', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pin: '7788', worker: 'JT' }) });
+  assert.equal(ok.status, 200);
+  assert.equal((await ok.json()).stage, 'Ready');
+  assert.equal((await json(await api('/api/orders/' + unit.orderId))).stage, 'Ready', 'order really moved (same path as desktop)');
+
+  // Ready is past the floor's stages -> further advances are office-only
+  const past = await fetch(BASE + '/u/' + unit.id + '/advance', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pin: '7788' }) });
+  assert.equal(past.status, 400, 'non-floor stage rejected');
+
+  // Clearing the PIN turns floor updates back off
+  await api('/api/admin/shop-pin', { method: 'POST', body: JSON.stringify({ pin: '' }) });
+  assert.equal((await json(await api('/api/admin/shop-pin'))).set, false);
+});
+
+test('owner reminders: admin-only run endpoint, dry-run shape, unconfigured-email skip', async () => {
+  const sr = await api('/api/auth/login', { method: 'POST', body: JSON.stringify({ username: 'aruiz', password: 'built2026' }) });
+  const sales = (await sr.json()).token;
+  assert.equal((await fetch(BASE + '/api/admin/reminders/run', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + sales }, body: '{}' })).status, 403, 'sales cannot run reminders');
+  const dry = await json(await api('/api/admin/reminders/run', { method: 'POST', body: JSON.stringify({ dryRun: true }) }));
+  assert.equal(dry.dryRun, true);
+  assert.equal(typeof dry.expiryEligible, 'number');
+  assert.ok(Array.isArray(dry.expiry) && Array.isArray(dry.maintenance), 'dry run lists who would be emailed');
+  const real = await json(await api('/api/admin/reminders/run', { method: 'POST', body: '{}' }));
+  assert.equal(real.skipped, 'email not configured', 'real run without RESEND_API_KEY skips safely');
+});
+
 test('owner: full registration (phone + full address) succeeds and is visible to staff', async () => {
   const r = await oapi('/api/owner/register', { method: 'POST', body: JSON.stringify({
     email: 'fulladdr@x.test', password: 'ownerpass1', name: 'Fully Addressed',

@@ -44,6 +44,8 @@ import * as storage from './storage.js';
 import * as push from './push.js';
 import * as testdata from './testdata.js';
 import { geocodeAddress } from './geocode.js';
+import { emailConfigured } from './email.js';
+import { runReminders } from './reminders.js';
 
 // Crash fast if JWT_SECRET is unset in production — predictable fallback is a critical vuln
 if (!process.env.JWT_SECRET) {
@@ -222,18 +224,90 @@ app.get('/terms',   (_req, res) => res.sendFile(path.join(__dir, '..', 'public',
 // ---- Public warranty registration portal (no staff login; rate-limited) ----
 app.get('/register', (_req, res) => res.sendFile(path.join(__dir, '..', 'public', 'register.html')));
 // Where a traveler's QR resolves — a minimal public unit page (VIN looked up live).
+// The traveler QR's target: a phone-friendly shop-floor station page. Anyone scanning sees the
+// unit read-only (VIN, model, config, progress); with the shop PIN (set by an admin in Print
+// Center) a worker can mark the current stage complete right from the floor — same code path
+// as the desktop Production Flow, so VINs, print queues, SMS, and dealer emails all still fire.
+const FLOOR_STAGES = ['Scheduled', 'Build', 'Paint/Powder Coat', 'Finish'];
 app.get('/u/:id', portalLimiter, async (req, res) => {
-  const u = await trailers.publicUnit(req.params.id).catch(() => null);
+  const u = await trailers.stationUnit(req.params.id).catch(() => null);
   if (!u) return res.status(404).type('html').send('<p style="font-family:system-ui;margin:40px">Trailer unit not found.</p>');
   const e = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
-  res.type('html').send(`<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>BUILT Trailers unit</title>
-<div style="font-family:-apple-system,system-ui,sans-serif;max-width:420px;margin:36px auto;padding:0 20px;color:#1a2230">
+  const pinSet = !!(await one(`SELECT value FROM app_config WHERE key='shop_pin'`, []).catch(() => null));
+  const stage = u.order?.stage || null;
+  const canAdvance = pinSet && stage && FLOOR_STAGES.includes(stage);
+  const next = stage ? STAGES[STAGES.indexOf(stage) + 1] : null;
+  const prodStages = STAGES.slice(STAGES.indexOf('Scheduled')); // Scheduled..Ready — the floor's world
+  const chips = stage ? prodStages.map(s => {
+    const done = STAGES.indexOf(s) < STAGES.indexOf(stage);
+    const curr = s === stage;
+    return `<span style="display:inline-block;margin:2px 4px 2px 0;padding:4px 10px;border-radius:14px;font-size:12px;font-weight:600;
+      ${curr ? 'background:#ff7a18;color:#1a1206' : done ? 'background:#e8f6ee;color:#1a7f4b' : 'background:#eef1f4;color:#6b7785'}">${done ? '✓ ' : ''}${e(s)}</span>`;
+  }).join('') : '';
+  const boatRows = u.boat ? (u.boat.options || []).map(o =>
+    `<div style="display:flex;justify-content:space-between;gap:10px;padding:6px 0;border-bottom:1px solid #f0f2f5;font-size:14px">
+       <span style="color:#6b7785">${e(o.group)}</span><b style="text-align:right">${e(o.choice)}</b></div>`).join('') : '';
+  const actionCard = !u.order ? '' : canAdvance ? `
+  <div style="background:#fff;border:1px solid #e2e7ec;border-radius:14px;padding:18px;margin-top:16px">
+    <b style="font-size:15px">${stage === 'Scheduled' ? '▶ Start the build' : `✓ Mark ${e(stage)} complete`}</b>
+    <p style="color:#6b7785;font-size:13px;margin:4px 0 10px">Moves order ${e(u.order.id)} to <b>${e(next)}</b>. Use the shop PIN from the office.</p>
+    <input id="wName" placeholder="Your name / initials" style="width:100%;border:1px solid #e2e7ec;border-radius:9px;padding:12px;font-size:16px;margin-bottom:8px">
+    <input id="wPin" type="password" inputmode="numeric" placeholder="Shop PIN" style="width:100%;border:1px solid #e2e7ec;border-radius:9px;padding:12px;font-size:16px">
+    <button onclick="adv()" style="width:100%;margin-top:10px;background:#ff7a18;color:#1a1206;border:none;padding:14px;border-radius:9px;font-weight:700;font-size:16px">${stage === 'Scheduled' ? '▶ Start Build' : `Mark ${e(stage)} complete`}</button>
+    <div id="msg" style="display:none;margin-top:10px;padding:11px 13px;border-radius:9px;font-size:14px"></div>
+  </div>
+  <script>
+    var $=function(i){return document.getElementById(i)};
+    $('wName').value=localStorage.getItem('shopWorker')||''; $('wPin').value=localStorage.getItem('shopPin')||'';
+    function say(ok,t){var m=$('msg');m.style.display='block';m.style.background=ok?'#e8f6ee':'#fdecea';m.style.color=ok?'#1a7f4b':'#c0392b';m.textContent=t;}
+    async function adv(){
+      localStorage.setItem('shopWorker',$('wName').value.trim()); localStorage.setItem('shopPin',$('wPin').value);
+      try{
+        var r=await fetch(location.pathname+'/advance',{method:'POST',headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({pin:$('wPin').value,worker:$('wName').value.trim()})});
+        var d=await r.json().catch(function(){return{}});
+        if(!r.ok){ if(r.status===401)localStorage.removeItem('shopPin'); return say(false,d.error||('Error '+r.status)); }
+        say(true,'Done — now "'+d.stage+'". Reloading…'); setTimeout(function(){location.reload()},1200);
+      }catch(err){ say(false,'Network error — try again.'); }
+    }
+  </script>` : (stage && FLOOR_STAGES.includes(stage) ? `
+  <p style="color:#6b7785;font-size:13px;margin-top:14px">🔒 Shop-floor updates aren't enabled yet — ask the office to set a shop PIN (Print Center).</p>` : stage === 'Ready' ? `
+  <p style="color:#1a7f4b;font-weight:600;margin-top:14px">✅ Production complete.</p>` : `
+  <p style="color:#6b7785;font-size:13px;margin-top:14px">Waiting to be scheduled — the office advances this stage.</p>`);
+  res.set('Cache-Control', 'no-store').type('html').send(`<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>BUILT Trailers unit</title>
+<body style="margin:0;background:#f4f6f8">
+<div style="font-family:-apple-system,system-ui,sans-serif;max-width:440px;margin:0 auto;padding:24px 20px 40px;color:#1a2230">
   <h2 style="margin:0">BUILT <span style="color:#ff7a18">TRAILERS</span></h2>
-  <p style="color:#6b7785;margin:2px 0 16px">Trailer unit</p>
-  <div style="font-family:ui-monospace,Menlo,monospace;font-size:24px;font-weight:700;letter-spacing:1.5px">${e(u.vin) || '(VIN pending)'}</div>
-  <p style="font-size:16px">${e(u.model)}${u.type ? ' · ' + e(u.type) : ''}</p>
-  <p style="color:#6b7785">Status: ${e(u.status)}</p>
-</div>`);
+  <p style="color:#6b7785;margin:2px 0 16px">Build traveler — station view</p>
+  <div style="background:#fff;border:1px solid #e2e7ec;border-radius:14px;padding:18px">
+    <div style="font-family:ui-monospace,Menlo,monospace;font-size:22px;font-weight:700;letter-spacing:1.2px">${e(u.vin) || '(VIN pending)'}</div>
+    <p style="font-size:16px;margin:6px 0 2px">${e(u.model)}${u.type ? ' · ' + e(u.type) : ''}</p>
+    ${u.order ? `<p style="color:#6b7785;font-size:13px;margin:2px 0 10px">Order ${e(u.order.id)} · qty ${e(u.order.qty)}${u.order.due ? ' · due ' + e(String(u.order.due).slice(0, 10)) : ''}</p>${chips}` : `<p style="color:#6b7785">Status: ${e(u.status)}</p>`}
+  </div>
+  ${u.boat ? `<div style="background:#fff;border:1px solid #e2e7ec;border-radius:14px;padding:18px;margin-top:16px">
+    <b style="font-size:15px">🚤 ${e(u.boat.model || 'Boat build')}${u.boat.year ? ' · ' + e(u.boat.year) : ''}${u.boat.length ? ' · ' + e(u.boat.length) + "'" : ''}</b>
+    <div style="margin-top:6px">${boatRows || '<p style="color:#6b7785;font-size:13px">No options recorded.</p>'}</div>
+  </div>` : ''}
+  ${actionCard}
+</div></body>`);
+});
+// PIN-gated stage advance from the station page. loginLimiter throttles PIN guessing.
+app.post('/u/:id/advance', loginLimiter, async (req, res) => {
+  try {
+    const { pin, worker } = req.body || {};
+    const pinHash = (await one(`SELECT value FROM app_config WHERE key='shop_pin'`, []).catch(() => null))?.value;
+    if (!pinHash) return res.status(503).json({ error: 'Shop-floor updates are not enabled. Ask the office to set a shop PIN.' });
+    if (!pin || !checkPassword(String(pin), pinHash)) return res.status(401).json({ error: 'Wrong PIN.' });
+    const unit = await one('SELECT order_id FROM trailer WHERE id=$1', [req.params.id]);
+    if (!unit?.order_id) return res.status(404).json({ error: 'Unit not found or not on an order.' });
+    const cur = await one('SELECT * FROM sales_order WHERE id=$1', [unit.order_id]);
+    if (!cur) return res.status(404).json({ error: 'Order not found.' });
+    if (!FLOOR_STAGES.includes(cur.stage))
+      return res.status(400).json({ error: `Order is "${cur.stage}" — that stage is handled by the office, not the floor.` });
+    const next = STAGES[STAGES.indexOf(cur.stage) + 1];
+    await applyOrderStage(unit.order_id, cur, next, null, `shop floor${worker ? ': ' + String(worker).slice(0, 40) : ''}`);
+    res.json({ ok: true, stage: next });
+  } catch (e) { res.status(400).json({ error: e.message }); }
 });
 app.get('/api/public/trailer/:vin', portalLimiter, async (req, res) => {
   try { res.json(await portal.publicTrailerLookup(req.params.vin)); }
@@ -571,7 +645,7 @@ async function maxTier(roleNames) {
   return best;
 }
 app.get('/api/users', authMiddleware, async (_req, res) => {
-  const users = await all('SELECT id,name,username,title,role,manager_id,phone,sms_consent,sms_consent_at,active FROM app_user ORDER BY active DESC,id', []);
+  const users = await all('SELECT id,name,username,title,role,manager_id,phone,email,sms_consent,sms_consent_at,active FROM app_user ORDER BY active DESC,id', []);
   for (const u of users) {
     const rows = await all('SELECT role_name FROM user_title WHERE user_id=$1', [u.id]);
     u.titles = rows.map(r => r.role_name);
@@ -579,7 +653,7 @@ app.get('/api/users', authMiddleware, async (_req, res) => {
   res.json(users);
 });
 app.post('/api/users', authMiddleware, requireTier('admin'), async (req, res) => {
-  const { name, title, titles, password, phone, smsConsent } = req.body || {};
+  const { name, title, titles, password, phone, email, smsConsent } = req.body || {};
   if (!name) return res.status(400).json({ error: 'name required' });
   // Accept a list of job titles; fall back to the single `title` for older clients.
   const roleList = (Array.isArray(titles) ? titles : (title ? [title] : [])).filter(Boolean);
@@ -591,8 +665,8 @@ app.post('/api/users', authMiddleware, requireTier('admin'), async (req, res) =>
   const priorOptin = normalizedPhone ? await sms.checkOptin(normalizedPhone) : null;
   const effectiveConsent = !!(smsConsent || priorOptin);
   const consentAt = effectiveConsent ? new Date().toISOString() : null;
-  await q('INSERT INTO app_user(id,name,username,password_hash,title,role,manager_id,phone,sms_consent,sms_consent_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)',
-    [id, name, base, hashPassword(password || 'built2026'), primary, tier, req.user.id, normalizedPhone || null, effectiveConsent, consentAt]);
+  await q('INSERT INTO app_user(id,name,username,password_hash,title,role,manager_id,phone,email,sms_consent,sms_consent_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)',
+    [id, name, base, hashPassword(password || 'built2026'), primary, tier, req.user.id, normalizedPhone || null, (email || '').trim() || null, effectiveConsent, consentAt]);
   // Sync the title junction so the new user's permissions (union of sections) take effect immediately.
   for (const rn of roleList) await q('INSERT INTO user_title(user_id,role_name) VALUES($1,$2) ON CONFLICT DO NOTHING', [id, rn]);
   await audit(req, 'user.create', `${name} (${roleList.join(', ') || 'no title'})${effectiveConsent ? ' [sms-consent]' : ''}`);
@@ -606,7 +680,7 @@ app.post('/api/users/me/password', authMiddleware, async (req, res) => {
   res.json({ ok: true });
 });
 app.patch('/api/users/:id', authMiddleware, requireTier('admin'), async (req, res) => {
-  const { title, titles, role, manager_id, password, username, phone, smsConsent } = req.body || {};
+  const { title, titles, role, manager_id, password, username, phone, email, smsConsent } = req.body || {};
   const cur = await one('SELECT * FROM app_user WHERE id=$1', [req.params.id]);
   if (!cur) return res.status(404).json({ error: 'not found' });
   let newTitle = title ?? cur.title;
@@ -623,11 +697,12 @@ app.patch('/api/users/:id', authMiddleware, requireTier('admin'), async (req, re
   }
   const consentAt = (smsConsent === true && !cur.sms_consent) ? new Date().toISOString() : cur.sms_consent_at;
   const { name } = req.body || {};
-  await q('UPDATE app_user SET name=$1,title=$2,role=$3,manager_id=$4,username=$5,phone=$6,sms_consent=$7,sms_consent_at=$8 WHERE id=$9',
+  await q('UPDATE app_user SET name=$1,title=$2,role=$3,manager_id=$4,username=$5,phone=$6,email=$7,sms_consent=$8,sms_consent_at=$9 WHERE id=$10',
     [name ?? cur.name, newTitle, tier,
      manager_id !== undefined ? (manager_id || null) : cur.manager_id,
      username ?? cur.username,
      phone !== undefined ? (phone || null) : cur.phone,
+     email !== undefined ? (String(email).trim() || null) : cur.email,
      smsConsent !== undefined ? !!smsConsent : cur.sms_consent,
      consentAt, req.params.id]);
   if (password) await q('UPDATE app_user SET password_hash=$1 WHERE id=$2', [hashPassword(password), req.params.id]);
@@ -941,6 +1016,30 @@ app.post('/api/trailer-types', authMiddleware, requireSales, async (req, res) =>
   res.json({ ok: true });
 });
 
+// ---- global search (Cmd+K) — jump to an order, VIN, customer, part, or model ----
+app.get('/api/search', authMiddleware, async (req, res) => {
+  const raw = String(req.query.q || '').trim();
+  if (raw.length < 2) return res.json({ orders: [], units: [], customers: [], parts: [], models: [] });
+  const like = '%' + raw.replace(/[\\%_]/g, '\\$&') + '%';
+  const [orders, units, customers, parts, models] = await Promise.all([
+    all(`SELECT o.id, o.stage, c.name AS customer, m.name AS model FROM sales_order o
+           LEFT JOIN customer c ON c.id=o.customer_id LEFT JOIN model m ON m.id=o.model_id
+          WHERE o.id ILIKE $1 OR c.name ILIKE $1 ORDER BY o.created_at DESC NULLS LAST, o.id DESC LIMIT 5`, [like]),
+    all(`SELECT t.id, t.vin, t.order_id, m.name AS model FROM trailer t LEFT JOIN model m ON m.id=t.model_id
+          WHERE t.vin ILIKE $1 ORDER BY t.vin LIMIT 5`, [like]),
+    all(`SELECT id, name, kind FROM customer WHERE name ILIKE $1 OR contact ILIKE $1 ORDER BY name LIMIT 5`, [like]),
+    all(`SELECT id, name FROM part WHERE id ILIKE $1 OR name ILIKE $1 ORDER BY id LIMIT 5`, [like]),
+    all(`SELECT id, name FROM model WHERE id ILIKE $1 OR name ILIKE $1 ORDER BY id LIMIT 5`, [like]),
+  ]);
+  res.json({
+    orders: orders.map(o => ({ id: o.id, stage: o.stage, customer: o.customer, model: o.model })),
+    units: units.map(u => ({ id: u.id, vin: u.vin, orderId: u.order_id, model: u.model })),
+    customers: customers.map(c => ({ id: c.id, name: c.name, kind: c.kind })),
+    parts: parts.map(p => ({ id: p.id, name: p.name })),
+    models: models.map(m => ({ id: m.id, name: m.name })),
+  });
+});
+
 // ---- customers / dealers (Phase 2) ----
 app.get('/api/customers', authMiddleware, async (_req, res) => res.json(await customersWithTypes()));
 app.post('/api/customers', authMiddleware, requireSales, async (req, res) => {
@@ -1066,16 +1165,23 @@ app.post('/api/orders/production-order', authMiddleware, requireProductionPlanne
   await audit(req, 'order.reorder', `${n} orders resequenced`);
   res.json({ ok: true, count: n });
 });
+// One code path for every stage change — the desktop Production Flow AND the shop-floor
+// station page — so VIN assignment, print queues, customer SMS, and dealer notifications
+// can never diverge between the two.
+async function applyOrderStage(orderId, curOrder, stage, actorUser, actorLabel) {
+  await q('UPDATE sales_order SET stage=$1 WHERE id=$2', [stage, orderId]);
+  await trailers.afterStageChange(orderId, curOrder.stage, stage, actorUser); // VINs at Build, print queues at Paint
+  await q('INSERT INTO audit_log(user_id,action,detail) VALUES ($1,$2,$3)',
+    [actorUser?.id || null, 'order.stage', `${orderId} -> ${stage}${actorLabel ? ` (${actorLabel})` : ''}`]).catch(() => {});
+  await sms.notifyOrderStage(orderId, stage, actorUser?.id || null); // Phase 6: text the customer
+  await dealernotify.notifyDealer(curOrder.customer_id, 'order', `Order ${orderId} is now "${stage}".`, orderId);
+}
 app.patch('/api/orders/:id/stage', authMiddleware, requireTier('editor'), async (req, res) => {
   const stage = req.body?.stage;
   if (!STAGES.includes(stage)) return res.status(400).json({ error: 'invalid stage' });
   const cur = await one('SELECT * FROM sales_order WHERE id=$1', [req.params.id]);
   if (!cur) return res.status(404).json({ error: 'not found' });
-  await q('UPDATE sales_order SET stage=$1 WHERE id=$2', [stage, req.params.id]);
-  await trailers.afterStageChange(req.params.id, cur.stage, stage, req.user); // VINs at Build, print queues at Paint
-  await audit(req, 'order.stage', `${req.params.id} -> ${stage}`);
-  await sms.notifyOrderStage(req.params.id, stage, req.user.id); // Phase 6: text the customer
-  await dealernotify.notifyDealer(cur.customer_id, 'order', `Order ${req.params.id} is now "${stage}".`, req.params.id);
+  await applyOrderStage(req.params.id, cur, stage, req.user);
   res.json({ ok: true });
 });
 // Reject / cancel an order (a dealer quote we won't accept, or any non-invoiced order). Soft: keeps
@@ -1394,6 +1500,31 @@ app.post('/api/accounting/trailer-costs/push', authMiddleware, requireSection('a
   const okN = results.filter(r => r.ok).length;
   await audit(req, 'qbo.push_costs', `${okN}/${results.length} trailer costs pushed to QuickBooks${includeLabor ? '' : ' (material only)'}`);
   res.json({ ok: true, pushed: okN, total: results.length, includeLabor, results });
+});
+// Shop-floor PIN: lets a worker mark stages complete from a traveler's QR page (see /u/:id).
+// Stored bcrypt-hashed in app_config; clearing the PIN disables floor updates entirely.
+app.get('/api/admin/shop-pin', authMiddleware, requireTier('admin'), async (_req, res) =>
+  res.json({ set: !!(await one(`SELECT value FROM app_config WHERE key='shop_pin'`, []).catch(() => null)) }));
+app.post('/api/admin/shop-pin', authMiddleware, requireTier('admin'), async (req, res) => {
+  const pin = String(req.body?.pin ?? '').trim();
+  if (pin === '') {
+    await q(`DELETE FROM app_config WHERE key='shop_pin'`);
+    await audit(req, 'shoppin.clear', 'shop-floor updates disabled');
+    return res.json({ ok: true, set: false });
+  }
+  if (!/^\d{4,8}$/.test(pin)) return res.status(400).json({ error: 'PIN must be 4–8 digits.' });
+  await q(`INSERT INTO app_config(key,value) VALUES('shop_pin',$1) ON CONFLICT(key) DO UPDATE SET value=$1`, [hashPassword(pin)]);
+  await audit(req, 'shoppin.set', 'shop-floor PIN updated');
+  res.json({ ok: true, set: true });
+});
+// Run (or preview with {dryRun:true}) the owner reminder emails on demand — the same
+// runReminders() the daily scheduler calls, so office staff can check who's eligible.
+app.post('/api/admin/reminders/run', authMiddleware, requireTier('admin'), async (req, res) => {
+  try {
+    const r = await runReminders({ dryRun: !!req.body?.dryRun });
+    if (!req.body?.dryRun) await audit(req, 'reminders.manual', `expiry ${r.expirySent ?? 0}, maintenance ${r.maintenanceSent ?? 0}`);
+    res.json(r);
+  } catch (e) { res.status(400).json({ error: e.message }); }
 });
 app.post('/api/qbo/pull', authMiddleware, requireTier('admin'), async (req, res) => {
   if (!qboConfigured()) return res.status(400).json({ error: 'QuickBooks not configured' });
@@ -1975,6 +2106,29 @@ if (kind === 'postgres' && process.env.BRIEFING_DISABLED !== 'true') {
 }
 if (kind === 'postgres' && process.env.VERIFY_PROMPT_DISABLED !== 'true') {
   setInterval(maybeRunVerifyPrompt, 30 * 60 * 1000);      // weekly job, checked every 30 min
+}
+
+// ---- Owner reminder emails (warranty expiry + maintenance nudges) ----
+// Daily at REMINDER_HOUR (BRIEFING_TZ), same idempotent claim-the-day pattern as the briefing.
+// Skips (without claiming the day) until RESEND_API_KEY is set, so the backlog sends once email
+// goes live. Run on demand / preview with POST /api/admin/reminders/run {dryRun:true}.
+const REMINDER_HOUR = Number(process.env.REMINDER_HOUR || 9);
+async function maybeRunReminders() {
+  try {
+    const p = partsIn(BRIEFING_TZ);
+    if (Number(p.hour) < REMINDER_HOUR) return;
+    if (!emailConfigured()) return;                        // don't claim the day — retry once email is on
+    const today = `${p.year}-${p.month}-${p.day}`;
+    const last = await one(`SELECT value FROM app_config WHERE key='reminders_last_run'`, []).catch(() => null);
+    if (last && last.value === today) return;
+    await q(`INSERT INTO app_config(key,value) VALUES('reminders_last_run',$1) ON CONFLICT(key) DO UPDATE SET value=$1`, [today]);
+    const r = await runReminders();
+    console.log(`Owner reminders (${today}): expiry ${r.expirySent}/${r.expiryEligible}, maintenance ${r.maintenanceSent}/${r.maintenanceEligible}.`);
+  } catch (e) { console.warn('reminder scheduler:', e.message); }
+}
+if (kind === 'postgres' && process.env.REMINDERS_DISABLED !== 'true') {
+  setInterval(maybeRunReminders, 15 * 60 * 1000);         // daily job, checked every 15 min
+  setTimeout(maybeRunReminders, 25 * 1000);               // and once shortly after boot
 }
 
 app.listen(PORT, () => console.log(`Built Trailers Phase 1 API on :${PORT} (db: ${kind})`));

@@ -163,4 +163,25 @@ export async function publicUnit(id) {
   return t ? { vin: t.vin, model: t.model, type: t.type, status: t.status } : null;
 }
 
+// Everything the shop-floor station page (the traveler QR's target) needs: the unit, its
+// order's current stage, and the boat build config. Deliberately price-free — dealer money
+// never renders on the floor.
+export async function stationUnit(id) {
+  const t = await one(`SELECT t.id, t.vin, t.status, t.order_id, m.name AS model, m.category AS type
+                         FROM trailer t LEFT JOIN model m ON m.id=t.model_id WHERE t.id=$1`, [id]);
+  if (!t) return null;
+  let order = null, boat = null;
+  if (t.order_id) {
+    const o = await one('SELECT id, stage, qty, due FROM sales_order WHERE id=$1', [t.order_id]);
+    if (o) order = { id: o.id, stage: o.stage, qty: o.qty, due: o.due };
+    const b = await one('SELECT boat_model, boat_year, boat_length FROM order_build WHERE order_id=$1', [t.order_id]);
+    if (b) {
+      const opts = await all('SELECT group_name, choice_name FROM order_build_option WHERE order_id=$1 ORDER BY id', [t.order_id]);
+      boat = { model: b.boat_model, year: b.boat_year, length: b.boat_length == null ? null : Number(b.boat_length),
+               options: opts.map(x => ({ group: x.group_name, choice: x.choice_name })) };
+    }
+  }
+  return { unitId: t.id, vin: t.vin, model: t.model, type: t.type, status: t.status, order, boat };
+}
+
 export { vinConfig, setVinConfig };

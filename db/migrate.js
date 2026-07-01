@@ -155,6 +155,12 @@ const colMigrations = [
   `ALTER TABLE dealer_user ADD COLUMN IF NOT EXISTS reset_expires TIMESTAMPTZ`,
   // Tracks the matching QuickBooks Vendor Id once a local vendor is pushed to (or pulled from) QBO.
   `ALTER TABLE vendor ADD COLUMN IF NOT EXISTS qbo_id TEXT`,
+  // Staff email (dealer_user/owner_user already use email as their login; staff log in by
+  // username, so email is contact info — used for notifications as email features land).
+  `ALTER TABLE app_user ADD COLUMN IF NOT EXISTS email TEXT`,
+  // One-shot reminder bookkeeping so the daily owner-reminder job never double-sends.
+  `ALTER TABLE warranty_registration ADD COLUMN IF NOT EXISTS expiry_reminder_sent TIMESTAMPTZ`,
+  `ALTER TABLE warranty_registration ADD COLUMN IF NOT EXISTS maintenance_reminder_sent TIMESTAMPTZ`,
 ];
 
 export async function ensureSchema() {
