@@ -1090,6 +1090,46 @@ app.patch('/api/customers/:id', authMiddleware, requireSales, async (req, res) =
   await audit(req, 'customer.update', `${req.params.id}${active !== undefined ? (active ? ' [active]' : ' [inactive]') : ''}`);
   res.json({ ok: true, geocoded: la != null && ln != null });
 });
+// Merge a duplicate customer into a survivor (admin only, irreversible). Repoints every table
+// that references the duplicate, backfills any fields the survivor is missing, records the merge
+// in customer_merge (so a QuickBooks pull can't resurrect the duplicate), then deletes it.
+app.post('/api/customers/:id/merge', authMiddleware, requireTier('admin'), async (req, res) => {
+  const dupId = req.params.id, intoId = req.body?.into;
+  if (!intoId) return res.status(400).json({ error: 'Choose the customer to merge into.' });
+  if (intoId === dupId) return res.status(400).json({ error: 'Pick two different customers.' });
+  const dup = await one('SELECT * FROM customer WHERE id=$1', [dupId]);
+  const into = await one('SELECT * FROM customer WHERE id=$1', [intoId]);
+  if (!dup || !into) return res.status(404).json({ error: 'Customer not found.' });
+  const counts = {};
+  const repoint = async (label, sql, params) => { const r = await q(sql, params); counts[label] = r.rowCount ?? r.affectedRows ?? 0; };
+  await repoint('orders', 'UPDATE sales_order SET customer_id=$1 WHERE customer_id=$2', [intoId, dupId]);
+  await repoint('trailers', 'UPDATE trailer SET customer_id=$1 WHERE customer_id=$2', [intoId, dupId]);
+  await repoint('dealerLogins', 'UPDATE dealer_user SET customer_id=$1 WHERE customer_id=$2', [intoId, dupId]);
+  await repoint('invoiceBatches', 'UPDATE invoice_batch SET customer_id=$1, customer_name=$2 WHERE customer_id=$3', [intoId, into.name, dupId]);
+  await repoint('notifications', 'UPDATE dealer_notification SET customer_id=$1 WHERE customer_id=$2', [intoId, dupId]);
+  await repoint('pushSubs', `UPDATE push_subscription SET owner_id=$1 WHERE owner_type='dealer' AND owner_id=$2`, [intoId, dupId]);
+  // Allowed trailer types: union of both (PK (customer_id,type) — copy-ignore, then drop the dup's).
+  await q(`INSERT INTO customer_allowed_type(customer_id,type)
+             SELECT $1, type FROM customer_allowed_type WHERE customer_id=$2
+             ON CONFLICT DO NOTHING`, [intoId, dupId]);
+  await q('DELETE FROM customer_allowed_type WHERE customer_id=$1', [dupId]);
+  // Backfill anything the survivor is missing from the duplicate (never overwrite).
+  await q(`UPDATE customer SET
+             contact=COALESCE(contact,$2), phone=COALESCE(phone,$3), rep_id=COALESCE(rep_id,$4),
+             address=COALESCE(address,$5), city=COALESCE(city,$6), state=COALESCE(state,$7), zip=COALESCE(zip,$8),
+             lat=COALESCE(lat,$9), lng=COALESCE(lng,$10),
+             sms_consent=(sms_consent OR $11), sms_consent_at=COALESCE(sms_consent_at,$12)
+           WHERE id=$1`,
+    [intoId, dup.contact, dup.phone, dup.rep_id, dup.address, dup.city, dup.state, dup.zip,
+     dup.lat, dup.lng, !!dup.sms_consent, dup.sms_consent_at]);
+  // Remember the merge (and re-aim any older merges that pointed at the duplicate), then delete.
+  await q(`INSERT INTO customer_merge(old_id,new_id,merged_by) VALUES ($1,$2,$3)
+             ON CONFLICT(old_id) DO UPDATE SET new_id=$2, merged_at=now(), merged_by=$3`, [dupId, intoId, req.user.id]);
+  await q('UPDATE customer_merge SET new_id=$1 WHERE new_id=$2', [intoId, dupId]);
+  await q('DELETE FROM customer WHERE id=$1', [dupId]);
+  await audit(req, 'customer.merge', `${dupId} (${dup.name}) -> ${intoId} (${into.name}) ${JSON.stringify(counts)}`);
+  res.json({ ok: true, into: intoId, moved: counts });
+});
 // Dealer portal logins tied to this dealership + a staff-assisted reset — for when a dealer is
 // locked out and can't (or didn't) use the dealer portal's own email self-service.
 app.get('/api/customers/:id/dealer-accounts', authMiddleware, requireSales, async (req, res) => res.json(await dealer.accountsForCustomer(req.params.id)));

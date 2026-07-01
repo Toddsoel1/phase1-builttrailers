@@ -434,6 +434,69 @@ test('owner: full registration (phone + full address) succeeds and is visible to
   assert.equal(mine.zip, '83501');
 });
 
+test('margin report: approved sale price rolls up by model, dealer, and month', async () => {
+  const unit = (await json(await api('/api/search?q=BLTTESTVIN0000099'))).units[0];
+  const approve = await api('/api/warranty/registrations/' + unit.id + '/review',
+    { method: 'POST', body: JSON.stringify({ decision: 'approve', salePrice: 15000, accessories: 'Bimini top, spare tire' }) });
+  assert.equal(approve.status, 200);
+  const m = await json(await api('/api/warranty/margins'));
+  assert.ok(m.byModel.length >= 1 && m.byModel.some(x => x.n >= 1 && x.avgSale > 0), 'by-model rollup has the sale');
+  assert.ok(Array.isArray(m.byDealer) && m.byDealer.length >= 1, 'by-dealer rollup present');
+  assert.ok(m.byDealer.every(d => typeof d.avgMargin === 'number' && typeof d.totalMargin === 'number'), 'dealer rows carry margin figures');
+  const thisMonth = new Date().toISOString().slice(0, 7);
+  assert.ok(m.byMonth.some(x => x.month === thisMonth && x.n >= 1), 'monthly trend includes this month');
+});
+
+test('warranty report: claim costs roll up by model (with claim rate) and by part', async () => {
+  const unit = (await json(await api('/api/search?q=BLTTESTVIN0000099'))).units[0];
+  const open = await api('/api/warranty/claims', { method: 'POST', body: JSON.stringify({
+    trailerId: unit.id, issue: 'jack stand cracked', laborCost: 100, shippingCost: 25,
+    parts: [{ partId: 'BUY-JCK-001', qty: 2 }] }) });
+  assert.equal(open.status, 200);
+  const s = await json(await api('/api/warranty/summary'));
+  assert.ok(s.totalClaims >= 1 && s.totalCost > 0, 'totals include the claim');
+  const mdl = s.byModel.find(x => x.claims >= 1);
+  assert.ok(mdl, 'by-model rollup has the claim');
+  assert.ok(mdl.unitsBuilt >= 1 && mdl.claimRatePct != null && mdl.claimRatePct > 0, 'claim rate computed from units built');
+  assert.ok(typeof mdl.avgCost === 'number' && mdl.avgCost > 0, 'avg cost per claim computed');
+  const part = (s.byPart || []).find(p => p.partId === 'BUY-JCK-001');
+  assert.ok(part, 'failed part appears in the by-part rollup');
+  assert.equal(part.qty, 2, 'quantity replaced tallied');
+  assert.ok(part.cost > 0, 'part cost priced from Parts Master');
+  assert.equal(part.claims, 1, 'distinct claims counted');
+});
+
+test('customer merge: repoints orders + backfills details + deletes the duplicate; gated', async () => {
+  // Two customers — the duplicate holds an order, an authorized type, and an address.
+  const dup = await json(await api('/api/customers', { method: 'POST', body: JSON.stringify({ name: 'Merge Dup Co', kind: 'Dealership', address: '1 Dup St', city: 'Provo', state: 'UT', zip: '84601' }) }));
+  const survivor = await json(await api('/api/customers', { method: 'POST', body: JSON.stringify({ name: 'Merge Survivor Co', kind: 'Dealership' }) }));
+  const model = (await json(await api('/api/models')))[0];
+  await api('/api/customers/' + dup.id + '/types', { method: 'PATCH', body: JSON.stringify({ type: model.category, on: true }) });
+  const order = await json(await api('/api/orders', { method: 'POST', body: JSON.stringify({ customerId: dup.id, modelId: model.id, qty: 1 }) }));
+  assert.ok(order.id, 'order created for the duplicate');
+
+  // Gates: sales can't merge; self-merge and missing target rejected.
+  const sr = await api('/api/auth/login', { method: 'POST', body: JSON.stringify({ username: 'aruiz', password: 'built2026' }) });
+  const sales = (await sr.json()).token;
+  assert.equal((await fetch(BASE + '/api/customers/' + dup.id + '/merge', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + sales }, body: JSON.stringify({ into: survivor.id }) })).status, 403, 'sales cannot merge');
+  assert.equal((await api('/api/customers/' + dup.id + '/merge', { method: 'POST', body: JSON.stringify({ into: dup.id }) })).status, 400, 'self-merge rejected');
+  assert.equal((await api('/api/customers/' + dup.id + '/merge', { method: 'POST', body: '{}' })).status, 400, 'missing target rejected');
+
+  // The merge itself.
+  const r = await api('/api/customers/' + dup.id + '/merge', { method: 'POST', body: JSON.stringify({ into: survivor.id }) });
+  assert.equal(r.status, 200);
+  assert.equal((await r.json()).moved.orders, 1, 'one order repointed');
+
+  const customers = await json(await api('/api/customers'));
+  assert.ok(!customers.find(c => c.id === dup.id), 'duplicate deleted');
+  const kept = customers.find(c => c.id === survivor.id);
+  assert.equal(kept.address, '1 Dup St', 'missing details backfilled from the duplicate');
+  assert.ok(kept.allowed.includes(model.category), 'authorized trailer types carried over');
+  const movedOrder = await json(await api('/api/orders/' + order.id));
+  assert.equal(movedOrder.customer, 'Merge Survivor Co', 'order now belongs to the survivor');
+  assert.equal((await api('/api/customers/' + dup.id + '/merge', { method: 'POST', body: JSON.stringify({ into: survivor.id }) })).status, 404, 'merged-away customer is gone');
+});
+
 test('traveler: build sheet returns unit data + a QR, and /u/:id resolves the unit', async () => {
   const tr = await api(`/api/trailers/${vinUnitId}/traveler`);
   assert.equal(tr.status, 200);

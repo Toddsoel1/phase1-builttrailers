@@ -1626,7 +1626,7 @@ async function viewCustomers(){
      <td style="font-size:12px">${c.smsConsent?'<span style="color:#4caf50">✓ Consented</span>':'<span class="muted">—</span>'}</td>
      <td class="muted" style="font-size:12px">${esc(c.rep||'—')}</td>
      <td>${types.map((t,i)=>{const on=c.allowed.includes(t);return `<span class="chip" onclick="${canSell()?`toggleType('${c.id}',${i},${!on})`:''}" style="cursor:${canSell()?'pointer':'default'};border-color:${on?'var(--accent)':'var(--line)'};color:${on?'#ffb347':'var(--muted)'}">${on?'✓ ':''}${esc(t)}</span>`;}).join('')}</td>
-     ${canSell()?`<td style="white-space:nowrap">${c.kind==='Dealership'?`<button class="btn sm sec" onclick="editAddress('${c.id}')">📍 Address</button> <button class="btn sm sec" onclick="viewDealerAccounts('${c.id}','${esc(c.name)}')">🔑 Logins</button> `:''}${off?`<button class="btn sm" onclick="setCustomerActive('${c.id}',true)">Reactivate</button>`:`<button class="btn sm sec" onclick="setCustomerActive('${c.id}',false)">Inactivate</button>`}</td>`:''}
+     ${canSell()?`<td style="white-space:nowrap">${c.kind==='Dealership'?`<button class="btn sm sec" onclick="editAddress('${c.id}')">📍 Address</button> <button class="btn sm sec" onclick="viewDealerAccounts('${c.id}','${esc(c.name)}')">🔑 Logins</button> `:''}${isAdmin()?`<button class="btn sm sec" onclick="mergeCustomer('${c.id}')" title="Fold this duplicate into another customer">⇄ Merge</button> `:''}${off?`<button class="btn sm" onclick="setCustomerActive('${c.id}',true)">Reactivate</button>`:`<button class="btn sm sec" onclick="setCustomerActive('${c.id}',false)">Inactivate</button>`}</td>`:''}
    </tr>`;};
   $('content').innerHTML=`<div class="card"><h3>Customers &amp; dealers — authorized trailer types</h3>
    <table><thead><tr><th>Account</th><th>Type</th><th>Phone</th><th>SMS</th><th>Rep</th><th>Authorized trailer types</th>${canSell()?'<th></th>':''}</tr></thead><tbody>
@@ -1658,6 +1658,29 @@ async function saveAddress(id){
   if(lat!==''||lng!==''){ body.lat=lat||null; body.lng=lng||null; } // explicit coords override geocoding
   try{ const r=await api('/api/customers/'+id,{method:'PATCH',body:JSON.stringify(body)});
     closeModal(); toast(r.geocoded?'Saved — placed on the dealer map':'Saved, but no coordinates yet — add them manually or check the address'); viewCustomers(); }
+  catch(e){ toast(e.message); }
+}
+async function mergeCustomer(dupId){
+  const custs=await api('/api/customers');
+  const dup=custs.find(c=>c.id===dupId); if(!dup)return toast('Customer not found');
+  const others=custs.filter(c=>c.id!==dupId).sort((a,b)=>a.name.localeCompare(b.name));
+  modal('Merge duplicate — '+esc(dup.name),`
+    <p class="muted" style="font-size:12.5px;line-height:1.5">Everything on <b>${esc(dup.name)}</b> — orders, trailers &amp; warranty history, dealer portal logins, invoice batches, notifications, authorized trailer types — moves to the customer you pick, then <b>${esc(dup.name)}</b> is deleted. Details the survivor is missing (phone, address, map pin…) are copied over. <b>This cannot be undone.</b></p>
+    <div class="field"><label>Merge into</label><select id="mcInto" class="inp">
+      <option value="">— choose the customer to keep —</option>
+      ${others.map(c=>`<option value="${esc(c.id)}">${esc(c.name)} — ${esc(c.kind||'')}${c.active===false?' (inactive)':''}</option>`).join('')}
+    </select></div>
+    <div class="row" style="gap:8px;margin-top:10px">
+      <button class="btn" style="background:#c0392b;color:#fff" onclick="doMergeCustomer('${dupId}')">Merge &amp; delete duplicate</button>
+      <button class="btn sec" onclick="closeModal()">Cancel</button>
+    </div>`);
+}
+async function doMergeCustomer(dupId){
+  const into=$('mcInto').value; if(!into)return toast('Choose the customer to keep');
+  const sel=$('mcInto'); const intoName=sel.options[sel.selectedIndex].text;
+  if(!confirm('Merge into '+intoName+'? This cannot be undone.'))return;
+  try{ const r=await api('/api/customers/'+dupId+'/merge',{method:'POST',body:JSON.stringify({into})});
+    closeModal(); const m=r.moved||{}; toast(`Merged — ${m.orders||0} order(s), ${m.trailers||0} trailer(s), ${m.dealerLogins||0} login(s) moved`); viewCustomers(); }
   catch(e){ toast(e.message); }
 }
 async function viewDealerAccounts(customerId,name){
@@ -2406,12 +2429,32 @@ async function trailersMarginsTab(){
         <td class="center">${x.n}</td></tr>`).join('')}
     </tbody></table>`:'<p class="muted">No sale prices captured yet. Enter "Sold for" when verifying registrations to build this report.</p>'}
   </div>`;
+  const dealers=r.byDealer||[],months=r.byMonth||[];
+  const dealerCard=`<div class="card" style="margin-bottom:16px">
+    <h3>🏬 Dealer margins by dealership <span class="muted" style="text-transform:none;letter-spacing:0">— who marks our trailers up the most, across their model mix</span></h3>
+    ${dealers.length?`<table><thead><tr><th>Dealer</th><th class="center">Sales</th><th class="right">Avg sold for</th><th class="right">Avg markup</th><th class="right">Total markup</th></tr></thead><tbody>
+      ${dealers.map(d=>`<tr><td><b>${esc(d.dealer)}</b></td><td class="center">${d.n}</td>
+        <td class="right">${money(d.avgSale)}</td>
+        <td class="right" style="color:${d.avgMargin>=0?'var(--green)':'var(--red)'}">${money(d.avgMargin)}</td>
+        <td class="right">${money(d.totalMargin)}</td></tr>`).join('')}
+    </tbody></table>`:'<p class="muted">No sale prices captured yet.</p>'}
+  </div>`;
+  const maxAbs=Math.max(1,...months.map(x=>Math.abs(Number(x.totalMargin)||0)));
+  const trendCard=`<div class="card" style="margin-bottom:16px">
+    <h3>📈 Margin over time <span class="muted" style="text-transform:none;letter-spacing:0">— by sale month</span></h3>
+    ${months.length?`<table><thead><tr><th>Month</th><th class="center">Sales</th><th class="right">Avg sold for</th><th class="right">Avg markup</th><th class="right">Total markup</th><th style="width:32%"></th></tr></thead><tbody>
+      ${months.map(x=>`<tr><td><b>${esc(x.month)}</b></td><td class="center">${x.n}</td>
+        <td class="right">${money(x.avgSale)}</td><td class="right">${money(x.avgMargin)}</td>
+        <td class="right" style="color:${x.totalMargin>=0?'var(--green)':'var(--red)'}">${money(x.totalMargin)}</td>
+        <td><div style="height:10px;border-radius:5px;width:${Math.round(Math.abs(x.totalMargin)/maxAbs*100)}%;min-width:2px;background:${x.totalMargin>=0?'var(--green)':'var(--red)'};opacity:.75"></div></td></tr>`).join('')}
+    </tbody></table>`:'<p class="muted">No sale prices captured yet.</p>'}
+  </div>`;
   const accCard=`<div class="card"><h3>🧰 Accessories on buyers' orders <span class="muted" style="text-transform:none;letter-spacing:0">— what dealers are adding, to spot what we should offer</span></h3>
     ${acc.length?`<table><thead><tr><th>Accessory</th><th class="right">Times added</th></tr></thead><tbody>
       ${acc.map(a=>`<tr><td>${esc(a.name)}</td><td class="right">${a.count}</td></tr>`).join('')}
     </tbody></table>`:'<p class="muted">No accessories captured yet — enter them when verifying registrations.</p>'}
   </div>`;
-  return modelCard+accCard;
+  return modelCard+dealerCard+trendCard+accCard;
 }
 async function reviewReg(trailerId,decision,fromModal){
   const sp=$('sp_'+trailerId), acc=$('acc_'+trailerId);
@@ -2477,6 +2520,20 @@ async function trailersClaimsTab(){
     ${kpi('Warranty cost',money(sum.totalCost),'parts + labor + shipping')}
     ${kpi('Costliest model',sum.byModel[0]?esc(sum.byModel[0].model):'—',sum.byModel[0]?money(sum.byModel[0].cost):'')}
     ${kpi('Costliest dealer',sum.byDealer[0]?esc(sum.byDealer[0].dealer):'—',sum.byDealer[0]?money(sum.byDealer[0].cost):'')}
+  </div>
+  <div class="card" style="margin-bottom:16px"><h3>💸 Cost & claim rate by model <span class="muted" style="text-transform:none;letter-spacing:0">— which trailer generates the warranty spend</span></h3>
+    ${sum.byModel.length?`<table><thead><tr><th>Model</th><th class="center">Claims</th><th class="center">Units built</th><th class="center">Claim rate</th><th class="right">Total cost</th><th class="right">Avg / claim</th></tr></thead><tbody>
+    ${sum.byModel.map(x=>`<tr><td><b>${esc(x.model)}</b></td><td class="center">${x.claims}</td>
+      <td class="center">${x.unitsBuilt||'—'}</td>
+      <td class="center">${x.claimRatePct!=null?`<span class="badge ${x.claimRatePct>=20?'b-below':x.claimRatePct>=8?'b-low':'b-ok'}">${x.claimRatePct.toFixed(0)}%</span>`:'—'}</td>
+      <td class="right">${money(x.cost)}</td><td class="right muted">${money(x.avgCost)}</td></tr>`).join('')}
+    </tbody></table>`:'<p class="muted">No claims yet.</p>'}
+  </div>
+  <div class="card" style="margin-bottom:16px"><h3>🔩 Failures by part <span class="muted" style="text-transform:none;letter-spacing:0">— the components behind the claims: engineering & vendor feedback</span></h3>
+    ${(sum.byPart||[]).length?`<table><thead><tr><th>Part</th><th class="center">Claims</th><th class="center">Qty replaced</th><th class="right">Parts cost</th></tr></thead><tbody>
+    ${sum.byPart.map(p=>`<tr><td><b>${esc(p.name||p.partId||'—')}</b>${p.partId?`<br><span class="muted" style="font-size:11px">${esc(p.partId)}</span>`:''}</td>
+      <td class="center">${p.claims}</td><td class="center">${p.qty}</td><td class="right">${money(p.cost)}</td></tr>`).join('')}
+    </tbody></table>`:'<p class="muted">No parts recorded on claims yet — add the failed parts when opening or resolving a claim to build this report.</p>'}
   </div>
   <div class="card"><h3>Warranty Claims</h3>
     ${claims.length?`<table><thead><tr><th>Claim</th><th>VIN</th><th>Model</th><th>Dealer</th><th>Issue</th><th class="center">Status</th><th class="right">Cost</th><th></th></tr></thead><tbody>

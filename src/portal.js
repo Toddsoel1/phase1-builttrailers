@@ -222,12 +222,36 @@ export async function marginReport() {
   for (const row of accRows)
     for (const a of String(row.accessories).split(/[,\n;]+/).map(s => s.trim()).filter(Boolean))
       accCount[a.toLowerCase()] = (accCount[a.toLowerCase()] || 0) + 1;
+  // By dealer: who marks our trailers up the most (avg over their model mix).
+  const byDealer = await all(`SELECT COALESCE(c.name, r.selling_dealer, '—') AS dealer,
+                                     COUNT(r.sale_price)::int AS n,
+                                     AVG(r.sale_price) AS avg_sale, AVG(r.sale_price - m.price) AS avg_margin,
+                                     SUM(r.sale_price - m.price) AS total_margin
+                                FROM warranty_registration r
+                                JOIN trailer t ON t.id=r.trailer_id JOIN model m ON m.id=t.model_id
+                                LEFT JOIN customer c ON c.id=t.customer_id
+                               WHERE r.sale_price IS NOT NULL
+                               GROUP BY COALESCE(c.name, r.selling_dealer, '—')
+                               ORDER BY total_margin DESC NULLS LAST`, []).catch(() => []);
+  // Over time: monthly trend (sale date; falls back to when it was registered).
+  const byMonth = await all(`SELECT to_char(COALESCE(r.sale_date, r.registered_at::date), 'YYYY-MM') AS month,
+                                    COUNT(r.sale_price)::int AS n,
+                                    AVG(r.sale_price) AS avg_sale, AVG(r.sale_price - m.price) AS avg_margin,
+                                    SUM(r.sale_price - m.price) AS total_margin
+                               FROM warranty_registration r
+                               JOIN trailer t ON t.id=r.trailer_id JOIN model m ON m.id=t.model_id
+                              WHERE r.sale_price IS NOT NULL
+                              GROUP BY 1 ORDER BY 1`, []).catch(() => []);
   return {
     byModel: byModel.map(r => {
       const our = Number(r.our_price) || 0, avg = Number(r.avg_sale) || 0;
       return { model: r.model, ourPrice: our, n: r.n, avgSale: avg, minSale: Number(r.min_sale) || 0, maxSale: Number(r.max_sale) || 0,
         dealerMargin: avg - our, dealerMarginPct: our > 0 ? (avg - our) / avg : null };
     }),
+    byDealer: byDealer.map(r => ({ dealer: r.dealer, n: r.n, avgSale: Number(r.avg_sale) || 0,
+      avgMargin: Number(r.avg_margin) || 0, totalMargin: Number(r.total_margin) || 0 })),
+    byMonth: byMonth.map(r => ({ month: r.month, n: r.n, avgSale: Number(r.avg_sale) || 0,
+      avgMargin: Number(r.avg_margin) || 0, totalMargin: Number(r.total_margin) || 0 })),
     accessories: Object.entries(accCount).map(([name, count]) => ({ name, count })).sort((a, b) => b.count - a.count),
   };
 }

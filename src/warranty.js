@@ -166,24 +166,49 @@ export async function claimsList() {
   return out;
 }
 
-// Warranty cost rollups: totals + by model + by dealer.
+// Warranty cost rollups: totals + by model (with claim rate per units built) + by dealer +
+// by part — the quality feedback loop: which model, and which component, generates the cost.
 export async function summary() {
-  const claims = await all('SELECT * FROM warranty_claim', []);
+  // Every claim with its full cost (labor + shipping + parts) and its trailer's model/dealer.
+  const claims = await all(`
+    SELECT wc.id, wc.status,
+           (wc.labor_cost + wc.shipping_cost
+            + COALESCE((SELECT SUM(qty * unit_cost) FROM warranty_claim_part WHERE claim_id = wc.id), 0)) AS cost,
+           COALESCE(m.name, '—') AS model, COALESCE(cu.name, '—') AS dealer
+      FROM warranty_claim wc
+      LEFT JOIN trailer t ON t.id = wc.trailer_id
+      LEFT JOIN model m ON m.id = t.model_id
+      LEFT JOIN customer cu ON cu.id = t.customer_id`, []);
+  // Units built per model — the denominator for a claim RATE (claims per trailer shipped).
+  const unitRows = await all(`SELECT COALESCE(m.name, '—') AS model, COUNT(*)::int AS units
+                                FROM trailer t LEFT JOIN model m ON m.id=t.model_id
+                               WHERE t.vin IS NOT NULL GROUP BY COALESCE(m.name, '—')`, []).catch(() => []);
+  const unitsByModel = Object.fromEntries(unitRows.map(r => [r.model, Number(r.units)]));
   let totalCost = 0, openClaims = 0;
   const byModel = {}, byDealer = {};
   for (const c of claims) {
-    const { partsCost } = await claimParts(c.id);
-    const cost = partsCost + Number(c.labor_cost) + Number(c.shipping_cost);
+    const cost = Number(c.cost) || 0;
     totalCost += cost;
     if (c.status === 'Open') openClaims++;
-    const t = await one(`SELECT m.name AS model, cu.name AS dealer FROM trailer t
-                           LEFT JOIN model m ON m.id=t.model_id LEFT JOIN customer cu ON cu.id=t.customer_id WHERE t.id=$1`, [c.trailer_id]);
-    if (t) { byModel[t.model || '—'] = (byModel[t.model || '—'] || 0) + cost; byDealer[t.dealer || '—'] = (byDealer[t.dealer || '—'] || 0) + cost; }
+    (byModel[c.model] = byModel[c.model] || { model: c.model, claims: 0, cost: 0 }).claims++;
+    byModel[c.model].cost += cost;
+    byDealer[c.dealer] = (byDealer[c.dealer] || 0) + cost;
   }
+  // Which parts fail: frequency (distinct claims), quantity consumed, and dollars.
+  const byPart = (await all(`
+    SELECT COALESCE(part_id, part_name, '—') AS key, MAX(COALESCE(part_name, part_id)) AS name, MAX(part_id) AS part_id,
+           COUNT(DISTINCT claim_id)::int AS claims, SUM(qty)::int AS qty, COALESCE(SUM(qty * unit_cost), 0) AS cost
+      FROM warranty_claim_part GROUP BY COALESCE(part_id, part_name, '—') ORDER BY cost DESC`, []).catch(() => []))
+    .map(r => ({ partId: r.part_id, name: r.name, claims: r.claims, qty: Number(r.qty) || 0, cost: Number(r.cost) || 0 }));
   return {
     totalClaims: claims.length, openClaims, totalCost,
-    byModel: Object.entries(byModel).map(([model, cost]) => ({ model, cost })).sort((a, b) => b.cost - a.cost),
+    byModel: Object.values(byModel).map(x => {
+      const units = unitsByModel[x.model] || 0;
+      return { model: x.model, claims: x.claims, cost: x.cost, avgCost: x.claims ? x.cost / x.claims : 0,
+               unitsBuilt: units, claimRatePct: units > 0 ? (x.claims / units) * 100 : null };
+    }).sort((a, b) => b.cost - a.cost),
     byDealer: Object.entries(byDealer).map(([dealer, cost]) => ({ dealer, cost })).sort((a, b) => b.cost - a.cost),
+    byPart,
   };
 }
 

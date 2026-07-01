@@ -161,6 +161,9 @@ const colMigrations = [
   // One-shot reminder bookkeeping so the daily owner-reminder job never double-sends.
   `ALTER TABLE warranty_registration ADD COLUMN IF NOT EXISTS expiry_reminder_sent TIMESTAMPTZ`,
   `ALTER TABLE warranty_registration ADD COLUMN IF NOT EXISTS maintenance_reminder_sent TIMESTAMPTZ`,
+  // Customer-merge map: which duplicate ids were folded into which survivor. Consulted by the
+  // QuickBooks customer pull so a merged-away 'qbo_*' customer can never be resurrected.
+  `CREATE TABLE IF NOT EXISTS customer_merge (old_id TEXT PRIMARY KEY, new_id TEXT NOT NULL, merged_at TIMESTAMPTZ NOT NULL DEFAULT now(), merged_by TEXT)`,
 ];
 
 export async function ensureSchema() {

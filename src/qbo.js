@@ -396,18 +396,32 @@ async function paginate(entity, where = '') {
   return rows;
 }
 
+// A customer id that was merged away resolves to its survivor (one hop — merges re-point
+// old mappings, see the merge endpoint). Everything else resolves to itself.
+export async function resolveMergedCustomer(id) {
+  const m = await one('SELECT new_id FROM customer_merge WHERE old_id=$1', [id]).catch(() => null);
+  return m ? m.new_id : id;
+}
+
 export async function syncCustomersFromQBO() {
   const custs = await paginate('Customer');
   let created = 0, updated = 0;
   for (const c of custs) {
     if (c.Job) continue; // skip sub-customers (jobs)
-    const id = 'qbo_' + c.Id;
+    // Follow the merge map so a duplicate that was merged away updates its survivor
+    // instead of being re-created on the next pull.
+    const id = await resolveMergedCustomer('qbo_' + c.Id);
     const name = c.DisplayName || c.CompanyName || c.FullyQualifiedName || 'Unknown';
     const contact = c.PrimaryEmailAddr?.Address || null;
     const phone = c.PrimaryPhone?.FreeFormNumber || null;
     const exists = await one('SELECT id FROM customer WHERE id=$1', [id]);
     if (exists) {
-      await q('UPDATE customer SET name=$1,contact=$2,phone=$3 WHERE id=$4', [name, contact, phone, id]);
+      if (id !== 'qbo_' + c.Id) {
+        // Merged survivor: keep its curated name/details (they feed the dealer locator) — only fill gaps.
+        await q('UPDATE customer SET contact=COALESCE(contact,$1), phone=COALESCE(phone,$2) WHERE id=$3', [contact, phone, id]);
+      } else {
+        await q('UPDATE customer SET name=$1,contact=$2,phone=$3 WHERE id=$4', [name, contact, phone, id]);
+      }
       updated++;
     } else {
       await q('INSERT INTO customer(id,name,kind,contact,phone) VALUES ($1,$2,$3,$4,$5)',
