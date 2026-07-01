@@ -76,8 +76,25 @@ footer a{color:var(--accent)}
       <label class="req">Email</label><input id="lEmail" type="email" autocomplete="username">
       <label class="req">Password</label><input id="lPass" type="password" autocomplete="current-password">
       <button class="btn" onclick="login()">Log In</button>
+      <div style="margin-top:12px"><button class="btn ghost" onclick="showAuth('forgot')">Forgot your password?</button></div>
       <button class="btn sec installBtn" style="display:none;width:100%;margin-top:10px" onclick="promptInstall()">📲 Install app on your phone</button>
       <div id="lMsg" class="msg"></div>
+    </div>
+    <div id="paneForgot" class="card hidden">
+      <h2>Reset your password</h2>
+      <p class="lead">Enter your account email and we'll send you a reset link.</p>
+      <label class="req">Email</label><input id="fEmail" type="email" autocomplete="username">
+      <button class="btn" onclick="doForgot()">Send reset link</button>
+      <div style="margin-top:12px"><button class="btn ghost" onclick="showAuth('login')">← Back to log in</button></div>
+      <div id="fMsg" class="msg"></div>
+    </div>
+    <div id="paneReset" class="card hidden">
+      <h2>Choose a new password</h2>
+      <p class="lead">Enter a new password for your account.</p>
+      <label class="req">New password</label><input id="rsPass" type="password" autocomplete="new-password" placeholder="At least 6 characters">
+      <label class="req">Confirm new password</label><input id="rsPass2" type="password" autocomplete="new-password">
+      <button class="btn" onclick="doReset()">Set new password</button>
+      <div id="rsMsg" class="msg"></div>
     </div>
     <div id="paneSignup" class="card hidden">
       <h2>Create a dealer account</h2>
@@ -121,7 +138,9 @@ footer a{color:var(--accent)}
     </div>
     <div id="paneInvoices" class="card hidden"><h2>Invoices &amp; balance</h2><div id="invBody"><p class="lead">Loading…</p></div></div>
     <div id="paneDocs" class="card hidden"><h2>Documents</h2><p class="lead">Owner's manuals, spec sheets, and warranty terms.</p><div id="docsBody"><p class="lead">Loading…</p></div></div>
-    <div id="paneTeam" class="card hidden"><h2>Your team</h2><p class="lead">Everyone with a login under your dealership. Colleagues can create their own account at this portal — Built Trailers approves them under your dealership.</p><div id="teamBody"><p class="lead">Loading…</p></div></div>
+    <div id="paneTeam" class="card hidden"><h2>Your team</h2><p class="lead">Everyone with a login under your dealership. Colleagues can create their own account at this portal — Built Trailers approves them under your dealership.</p>
+      <button class="btn sec" style="width:auto;margin-bottom:14px" onclick="changeMyPassword()">🔑 Change your password</button>
+      <div id="teamBody"><p class="lead">Loading…</p></div></div>
     <div id="paneNotif" class="card hidden">
       <h2>Updates</h2>
       <p class="lead">Order status changes, registration approvals, and claim resolutions appear here.</p>
@@ -203,7 +222,7 @@ async function api(path,opts={}){
   if(r.status===401){logout();throw new Error(d.error||'Session expired');}
   if(!r.ok) throw new Error(d.error||('Error '+r.status)); return d;
 }
-function showAuth(t){$('paneLogin').classList.toggle('hidden',t!=='login');$('paneSignup').classList.toggle('hidden',t!=='signup');$('tabLogin').classList.toggle('active',t==='login');$('tabSignup').classList.toggle('active',t==='signup');}
+function showAuth(t){['login','signup','forgot','reset'].forEach(p=>$('pane'+p[0].toUpperCase()+p.slice(1)).classList.toggle('hidden',p!==t));$('tabLogin').classList.toggle('active',t==='login');$('tabSignup').classList.toggle('active',t==='signup');}
 function showDash(t){for(const k of ['orders','build','reg','mine','claims','invoices','docs','team','notif']){const pe=$('pane'+k[0].toUpperCase()+k.slice(1)),tb=$('tab'+k[0].toUpperCase()+k.slice(1));if(pe)pe.classList.toggle('hidden',k!==t);if(tb)tb.classList.toggle('active',k===t);}({orders:loadOrders,build:loadBuild,mine:loadMine,claims:loadClaims,notif:loadNotifs,invoices:loadInvoices,docs:loadDocs,team:loadTeam}[t]||(()=>{}))();}
 async function loadInvoices(){
   try{const r=await api('/api/dealer/invoices');
@@ -246,6 +265,22 @@ async function approveMember(id){try{await api('/api/dealer/team/'+id+'/approve'
 async function rejectMember(id){try{await api('/api/dealer/team/'+id+'/reject',{method:'POST'});loadTeam();}catch(e){alert(e.message);}}
 async function changeRole(id){try{await api('/api/dealer/team/'+id+'/role',{method:'POST',body:JSON.stringify({role:$('mr_'+id).value})});}catch(e){alert(e.message);loadTeam();}}
 async function deactivateMember(id){if(!confirm('Remove this login from your dealership?'))return;try{await api('/api/dealer/team/'+id+'/role',{method:'POST',body:JSON.stringify({role:'inactive'})});loadTeam();}catch(e){alert(e.message);}}
+function changeMyPassword(){
+  dmodal('Change your password',`
+    <label class="req">Current password</label><input id="cpCur" type="password" autocomplete="current-password">
+    <label class="req">New password</label><input id="cpNew" type="password" autocomplete="new-password" placeholder="At least 6 characters">
+    <label class="req">Confirm new password</label><input id="cpNew2" type="password" autocomplete="new-password">
+    <button class="btn" onclick="saveMyPassword()">Save</button>
+    <button class="btn sec" style="width:100%;margin-top:8px" onclick="dclose()">Cancel</button>
+    <div id="cpMsg" class="msg"></div>`);
+}
+async function saveMyPassword(){
+  const cur=$('cpCur').value,pw=$('cpNew').value,pw2=$('cpNew2').value;
+  if(pw!==pw2){setMsg('cpMsg','err','Passwords do not match.');return;}
+  try{ await api('/api/dealer/change-password',{method:'POST',body:JSON.stringify({currentPassword:cur,newPassword:pw})});
+    setMsg('cpMsg','ok','✓ Password updated.'); setTimeout(dclose,1200); }
+  catch(e){ setMsg('cpMsg','err',e.message); }
+}
 async function refreshNotifBadge(){try{const n=await api('/api/dealer/notifications');const b=$('notifBadge');if(b)b.textContent=n.unread?' '+n.unread:'';if(b)b.style.cssText=n.unread?'background:#ff7a18;color:#1a1206;border-radius:10px;padding:0 6px;font-size:11px;margin-left:3px':'';}catch(e){}}
 async function loadNotifs(){
   try{const n=await api('/api/dealer/notifications');
@@ -270,6 +305,18 @@ async function login(){
   try{ const d=await api('/api/dealer/login',{method:'POST',body:JSON.stringify({email,password})});
     DTOKEN=d.token;localStorage.setItem('dealerToken',DTOKEN);DEALER=d.dealer;enterDash();
   }catch(e){setMsg('lMsg','err',e.message);}
+}
+async function doForgot(){
+  try{ await api('/api/dealer/forgot',{method:'POST',body:JSON.stringify({email:$('fEmail').value.trim()})});
+    setMsg('fMsg','ok','If an account exists for that email, a reset link is on its way. Check your inbox.'); }
+  catch{ setMsg('fMsg','ok','If an account exists for that email, a reset link is on its way.'); }
+}
+async function doReset(){
+  if($('rsPass').value!==$('rsPass2').value) return setMsg('rsMsg','err','Passwords do not match.');
+  const token=new URLSearchParams(location.search).get('token');
+  try{ await api('/api/dealer/reset',{method:'POST',body:JSON.stringify({token,password:$('rsPass').value})});
+    setMsg('rsMsg','ok','Password updated — you can now log in.'); setTimeout(()=>{location.href='/dealer';},1500); }
+  catch(e){ setMsg('rsMsg','err',e.message); }
 }
 function logout(){DTOKEN=null;DEALER=null;localStorage.removeItem('dealerToken');$('dash').classList.add('hidden');$('auth').classList.remove('hidden');$('who').innerHTML='';}
 const ROLE_TABS={admin:['orders','build','reg','mine','claims','invoices','docs','team','notif'],sales:['orders','build','invoices','docs','team','notif'],service:['claims','docs','team','notif'],warranty:['reg','mine','claims','docs','team','notif']};
@@ -510,7 +557,11 @@ function dismissPushNudge(){const n=$('pushNudge');if(n)n.classList.add('hidden'
 async function enablePushFromNudge(){const n=$('pushNudge');if(n)n.classList.add('hidden');await enablePush('/api/dealer/push/subscribe');}
 
 // auto-resume session
-(async()=>{ if(DTOKEN){ try{ DEALER=await api('/api/dealer/me'); enterDash(); }catch(e){ logout(); } } })();
+(async()=>{
+  const resetToken=new URLSearchParams(location.search).get('token');
+  if(resetToken){ showAuth('reset'); return; }
+  if(DTOKEN){ try{ DEALER=await api('/api/dealer/me'); enterDash(); }catch(e){ logout(); } }
+})();
 // ---- Install to phone (PWA) ----  (service worker is already registered above)
 let deferredInstallPrompt=null;
 function isStandalone(){return window.matchMedia('(display-mode: standalone)').matches||window.navigator.standalone===true;}

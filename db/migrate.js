@@ -145,6 +145,9 @@ const colMigrations = [
   `ALTER TABLE dealer_user ADD COLUMN IF NOT EXISTS city TEXT`,
   `ALTER TABLE dealer_user ADD COLUMN IF NOT EXISTS state TEXT`,
   `ALTER TABLE dealer_user ADD COLUMN IF NOT EXISTS zip TEXT`,
+  // Self-service email password reset for dealers (mirrors owner_user's reset_token/reset_expires).
+  `ALTER TABLE dealer_user ADD COLUMN IF NOT EXISTS reset_token TEXT`,
+  `ALTER TABLE dealer_user ADD COLUMN IF NOT EXISTS reset_expires TIMESTAMPTZ`,
 ];
 
 export async function ensureSchema() {

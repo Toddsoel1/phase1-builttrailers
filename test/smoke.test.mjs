@@ -358,6 +358,55 @@ test('dealer signup now requires a dealership address', async () => {
   assert.match((await r.json()).error, /address/i);
 });
 
+test('dealer: forgot-password always returns ok (no account enumeration)', async () => {
+  const known = await fetch(BASE + '/api/dealer/forgot', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: 'noaddr@x.test' }) });
+  const unknown = await fetch(BASE + '/api/dealer/forgot', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: 'nobody@nowhere.test' }) });
+  assert.equal(known.status, 200); assert.equal(unknown.status, 200);
+  assert.equal((await known.json()).ok, true); assert.equal((await unknown.json()).ok, true);
+});
+
+test('dealer: reset with an invalid token is rejected', async () => {
+  const r = await fetch(BASE + '/api/dealer/reset', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token: 'bogus-token', password: 'newpass12' }) });
+  assert.equal(r.status, 400);
+});
+
+test('dealer: logged-in change-password rejects wrong current password, then works', async () => {
+  const cust = await json(await api('/api/customers', { method: 'POST', body: JSON.stringify({ name: 'CP Test Dealership', kind: 'Dealership' }) }));
+  await fetch(BASE + '/api/dealer/signup', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email: 'cptest@x.test', password: 'origPw1', name: 'CP Test', dealershipName: 'CP Test Dealership', address: '1 Main St', city: 'Provo', state: 'UT', zip: '84601' }) });
+  const pending = await json(await api('/api/dealers/pending'));
+  const signup = pending.find(d => d.email === 'cptest@x.test');
+  await api('/api/dealers/' + signup.id + '/approve', { method: 'POST', body: JSON.stringify({ customerId: cust.id }) });
+  const login = await json(await fetch(BASE + '/api/dealer/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: 'cptest@x.test', password: 'origPw1' }) }));
+  const dHeaders = { 'Content-Type': 'application/json', Authorization: 'Bearer ' + login.token };
+  const wrong = await fetch(BASE + '/api/dealer/change-password', { method: 'POST', headers: dHeaders, body: JSON.stringify({ currentPassword: 'nope', newPassword: 'newPw123' }) });
+  assert.equal(wrong.status, 400, 'wrong current password rejected');
+  const ok = await fetch(BASE + '/api/dealer/change-password', { method: 'POST', headers: dHeaders, body: JSON.stringify({ currentPassword: 'origPw1', newPassword: 'newPw123' }) });
+  assert.equal(ok.status, 200);
+  const oldLogin = await fetch(BASE + '/api/dealer/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: 'cptest@x.test', password: 'origPw1' }) });
+  assert.equal(oldLogin.status, 401, 'old password no longer works');
+  const newLogin = await fetch(BASE + '/api/dealer/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: 'cptest@x.test', password: 'newPw123' }) });
+  assert.equal(newLogin.status, 200, 'new password works');
+});
+
+test('staff: reset a dealer login\'s password from Customers & Dealers (admin-assist)', async () => {
+  const cust = await json(await api('/api/customers', { method: 'POST', body: JSON.stringify({ name: 'Admin Reset Dealership', kind: 'Dealership' }) }));
+  await fetch(BASE + '/api/dealer/signup', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email: 'adminreset@x.test', password: 'origPw1', name: 'AR Test', dealershipName: 'Admin Reset Dealership', address: '1 Main St', city: 'Provo', state: 'UT', zip: '84601' }) });
+  const pending = await json(await api('/api/dealers/pending'));
+  const signup = pending.find(d => d.email === 'adminreset@x.test');
+  await api('/api/dealers/' + signup.id + '/approve', { method: 'POST', body: JSON.stringify({ customerId: cust.id }) });
+  const accts = await json(await api('/api/customers/' + cust.id + '/dealer-accounts'));
+  assert.equal(accts.length, 1, 'one login for this dealership');
+  assert.equal(accts[0].email, 'adminreset@x.test');
+  const reset = await api('/api/dealer-accounts/' + accts[0].id + '/reset-password', { method: 'POST', body: JSON.stringify({ password: 'staffSetPw1' }) });
+  assert.equal(reset.status, 200);
+  const oldLogin = await fetch(BASE + '/api/dealer/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: 'adminreset@x.test', password: 'origPw1' }) });
+  assert.equal(oldLogin.status, 401, 'old password no longer works');
+  const newLogin = await fetch(BASE + '/api/dealer/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: 'adminreset@x.test', password: 'staffSetPw1' }) });
+  assert.equal(newLogin.status, 200, 'staff-set password works');
+});
+
 test('boat builder admin: office price edit flows into the catalog + pricing; boat remap; gated', async () => {
   await api('/api/boat-admin/price', { method: 'POST', body: JSON.stringify({ choiceId: 'wheel_prem', dealerPrice: 800 }) });
   const cat = await json(await api('/api/boat-catalog'));

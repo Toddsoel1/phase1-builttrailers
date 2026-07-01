@@ -1531,7 +1531,7 @@ async function viewCustomers(){
      <td style="font-size:12px">${c.smsConsent?'<span style="color:#4caf50">✓ Consented</span>':'<span class="muted">—</span>'}</td>
      <td class="muted" style="font-size:12px">${esc(c.rep||'—')}</td>
      <td>${types.map((t,i)=>{const on=c.allowed.includes(t);return `<span class="chip" onclick="${canSell()?`toggleType('${c.id}',${i},${!on})`:''}" style="cursor:${canSell()?'pointer':'default'};border-color:${on?'var(--accent)':'var(--line)'};color:${on?'#ffb347':'var(--muted)'}">${on?'✓ ':''}${esc(t)}</span>`;}).join('')}</td>
-     ${canSell()?`<td style="white-space:nowrap">${c.kind==='Dealership'?`<button class="btn sm sec" onclick="editAddress('${c.id}')">📍 Address</button> `:''}${off?`<button class="btn sm" onclick="setCustomerActive('${c.id}',true)">Reactivate</button>`:`<button class="btn sm sec" onclick="setCustomerActive('${c.id}',false)">Inactivate</button>`}</td>`:''}
+     ${canSell()?`<td style="white-space:nowrap">${c.kind==='Dealership'?`<button class="btn sm sec" onclick="editAddress('${c.id}')">📍 Address</button> <button class="btn sm sec" onclick="viewDealerAccounts('${c.id}','${esc(c.name)}')">🔑 Logins</button> `:''}${off?`<button class="btn sm" onclick="setCustomerActive('${c.id}',true)">Reactivate</button>`:`<button class="btn sm sec" onclick="setCustomerActive('${c.id}',false)">Inactivate</button>`}</td>`:''}
    </tr>`;};
   $('content').innerHTML=`<div class="card"><h3>Customers &amp; dealers — authorized trailer types</h3>
    <table><thead><tr><th>Account</th><th>Type</th><th>Phone</th><th>SMS</th><th>Rep</th><th>Authorized trailer types</th>${canSell()?'<th></th>':''}</tr></thead><tbody>
@@ -1563,6 +1563,34 @@ async function saveAddress(id){
   if(lat!==''||lng!==''){ body.lat=lat||null; body.lng=lng||null; } // explicit coords override geocoding
   try{ const r=await api('/api/customers/'+id,{method:'PATCH',body:JSON.stringify(body)});
     closeModal(); toast(r.geocoded?'Saved — placed on the dealer map':'Saved, but no coordinates yet — add them manually or check the address'); viewCustomers(); }
+  catch(e){ toast(e.message); }
+}
+async function viewDealerAccounts(customerId,name){
+  let accts; try{ accts=await api('/api/customers/'+customerId+'/dealer-accounts'); }catch(e){ return toast(e.message); }
+  const statusBadge=s=>s==='active'?'<span class="badge b-ok">Active</span>':s==='pending'?'<span class="badge b-low">Pending</span>':`<span class="badge b-below">${esc(s)}</span>`;
+  modal('Dealer logins — '+esc(name), (accts.length?`
+    <table><thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Status</th><th></th></tr></thead><tbody>
+    ${accts.map(a=>`<tr><td>${esc(a.name||'')}</td><td style="font-size:12px">${esc(a.email)}</td><td>${esc(a.role)}</td><td>${statusBadge(a.status)}</td>
+      <td><button class="btn sm sec" onclick="resetDealerPassword('${a.id}','${esc(a.email)}')">Reset password</button></td></tr>`).join('')}
+    </tbody></table>`:`<p class="muted">No logins yet for this dealership.</p>`)
+    +`<p class="muted" style="font-size:11px;margin-top:10px">Colleagues sign up themselves at the dealer portal; approve new signups from Trailers &amp; VINs.</p>`);
+}
+function resetDealerPassword(id,email){
+  closeModal(); // drill-down from the logins list — modal() reuses one fixed #modalBg, so close first
+  modal('Reset password — '+esc(email),`
+    <p class="muted" style="font-size:12px">Sets a new password immediately. Share it with the dealer directly — they aren't notified automatically.</p>
+    <div class="field"><label>New password</label><input id="dpPw" type="password" class="inp" placeholder="Min 6 characters" autocomplete="new-password"></div>
+    <div class="field"><label>Confirm password</label><input id="dpPw2" type="password" class="inp" placeholder="Repeat password" autocomplete="new-password"></div>
+    <div class="row" style="gap:8px;margin-top:8px">
+      <button class="btn" onclick="saveDealerPassword('${id}')">Save</button>
+      <button class="btn sec" onclick="closeModal()">Cancel</button>
+    </div>`);
+}
+async function saveDealerPassword(id){
+  const pw=($('dpPw').value||'').trim(),pw2=($('dpPw2').value||'').trim();
+  if(pw.length<6)return toast('Password must be at least 6 characters');
+  if(pw!==pw2)return toast('Passwords do not match');
+  try{ await api('/api/dealer-accounts/'+id+'/reset-password',{method:'POST',body:JSON.stringify({password:pw})}); closeModal(); toast('Password updated'); }
   catch(e){ toast(e.message); }
 }
 async function addDealer(){

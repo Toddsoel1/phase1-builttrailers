@@ -288,6 +288,15 @@ app.post('/api/dealer/signup', portalLimiter, async (req, res) => {
 app.post('/api/dealer/login', loginLimiter, async (req, res) => {
   try { res.json(await dealer.login(req.body || {})); } catch (e) { res.status(401).json({ error: e.message }); }
 });
+app.post('/api/dealer/forgot', loginLimiter, async (req, res) => {
+  try { res.json(await dealer.requestReset(req.body?.email, process.env.DEALER_PORTAL_URL)); } catch { res.json({ ok: true }); }
+});
+app.post('/api/dealer/reset', loginLimiter, async (req, res) => {
+  try { res.json(await dealer.resetPassword(req.body?.token, req.body?.password)); } catch (e) { res.status(400).json({ error: e.message }); }
+});
+app.post('/api/dealer/change-password', dealer.dealerAuth, async (req, res) => {
+  try { res.json(await dealer.changePassword(req.dealer, req.body?.currentPassword, req.body?.newPassword)); } catch (e) { res.status(400).json({ error: e.message }); }
+});
 app.get('/api/dealer/me', dealer.dealerAuth, async (req, res) => res.json(await dealer.me(req.dealer)));
 // Warranty role (+admin): register & view registrations
 app.post('/api/dealer/register', dealer.dealerAuth, dealer.dealerRole('warranty'), async (req, res) => {
@@ -977,6 +986,13 @@ app.patch('/api/customers/:id', authMiddleware, requireSales, async (req, res) =
      contact !== undefined ? (contact || null) : cur.contact, normalizedPhone, addr, ci, st, zp, la, ln, req.params.id]);
   await audit(req, 'customer.update', `${req.params.id}${active !== undefined ? (active ? ' [active]' : ' [inactive]') : ''}`);
   res.json({ ok: true, geocoded: la != null && ln != null });
+});
+// Dealer portal logins tied to this dealership + a staff-assisted reset — for when a dealer is
+// locked out and can't (or didn't) use the dealer portal's own email self-service.
+app.get('/api/customers/:id/dealer-accounts', authMiddleware, requireSales, async (req, res) => res.json(await dealer.accountsForCustomer(req.params.id)));
+app.post('/api/dealer-accounts/:id/reset-password', authMiddleware, requireSales, async (req, res) => {
+  try { res.json(await dealer.adminResetPassword(req.params.id, req.body?.password)); await audit(req, 'dealer.password', req.params.id); }
+  catch (e) { res.status(400).json({ error: e.message }); }
 });
 
 // ---- orders / fulfillment (Phase 2) ----

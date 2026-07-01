@@ -49,4 +49,17 @@ export async function sendPasswordReset({ email, ownerName, resetUrl }) {
   return sendEmail({ to: email, subject, html, text });
 }
 
+// Self-service password reset link for a dealer account (link expires in 1 hour).
+export async function sendDealerPasswordReset({ email, name, resetUrl }) {
+  const subject = 'Reset your Built Trailers dealer portal password';
+  const html = `<div style="font-family:Arial,Helvetica,sans-serif;color:#1a2230;max-width:560px">
+    <h2 style="margin:0 0 8px">Password reset</h2>
+    <p>Hi${name ? ' ' + escapeHtml(name) : ''}, we received a request to reset the password for your Built Trailers dealer portal account.</p>
+    <p style="margin:18px 0"><a href="${escapeHtml(resetUrl)}" style="display:inline-block;background:#e8631a;color:#fff;padding:11px 20px;border-radius:8px;text-decoration:none;font-weight:bold">Reset my password</a></p>
+    <p style="color:#6b7785;font-size:13px">This link expires in 1 hour. If you didn&#39;t request this, you can ignore this email — your password won&#39;t change.</p>
+    <p style="color:#6b7785;font-size:12px;margin-top:18px">Built Trailers</p></div>`;
+  const text = `Reset your Built Trailers dealer portal password: ${resetUrl}  (expires in 1 hour; ignore this email if you didn't request it).`;
+  return sendEmail({ to: email, subject, html, text });
+}
+
 function escapeHtml(s) { return String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }

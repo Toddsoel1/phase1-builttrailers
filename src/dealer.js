@@ -3,10 +3,14 @@
 // approve and link them to their dealer (customer) record, then log in to
 // register the trailers they sold (their dealership auto-fills) and track claims.
 // Dealer tokens carry kind:'dealer' and are rejected by the staff authMiddleware.
+import crypto from 'crypto';
 import jwt from 'jsonwebtoken';
 import { all, one, q } from './db.js';
 import { hashPassword, checkPassword, JWT_SECRET } from './auth.js';
 import { submitRegistration } from './portal.js';
+import { sendDealerPasswordReset } from './email.js';
+
+const DEFAULT_PORTAL = process.env.DEALER_PORTAL_URL || 'https://dealership.builttrailers.app';
 
 function signDealerToken(d) {
   return jwt.sign({ id: d.id, kind: 'dealer', email: d.email }, JWT_SECRET, { expiresIn: '12h' });
@@ -45,6 +49,35 @@ export async function login({ email, password }) {
   if (d.status === 'pending') throw new Error('Your account is still pending approval by Built Trailers.');
   if (d.status === 'rejected') throw new Error('This account was not approved. Please contact Built Trailers.');
   return { token: signDealerToken(d), dealer: await context(d) };
+}
+
+// Self-service password reset. Always resolves ok so the response never reveals whether an
+// account exists for that email (mirrors owner.js requestReset/resetPassword exactly).
+export async function requestReset(email, baseUrl) {
+  const d = await one('SELECT * FROM dealer_user WHERE lower(email)=lower($1)', [email || '']);
+  if (d) {
+    const token = crypto.randomBytes(32).toString('hex');
+    await q("UPDATE dealer_user SET reset_token=$1, reset_expires=now() + interval '1 hour' WHERE id=$2", [token, d.id]);
+    const url = `${baseUrl || DEFAULT_PORTAL}/dealer?token=${token}`;
+    try { await sendDealerPasswordReset({ email: d.email, name: d.name, resetUrl: url }); } catch { /* email layer logs */ }
+  }
+  return { ok: true };
+}
+
+export async function resetPassword(token, newPassword) {
+  if (!token || !newPassword) throw new Error('A reset token and new password are required.');
+  if (String(newPassword).length < 6) throw new Error('Password must be at least 6 characters.');
+  const d = await one('SELECT * FROM dealer_user WHERE reset_token=$1 AND reset_expires > now()', [token]);
+  if (!d) throw new Error('This reset link is invalid or has expired. Please request a new one.');
+  await q('UPDATE dealer_user SET password_hash=$1, reset_token=NULL, reset_expires=NULL WHERE id=$2', [hashPassword(newPassword), d.id]);
+  return { ok: true };
+}
+
+export async function changePassword(d, currentPassword, newPassword) {
+  if (!checkPassword(currentPassword || '', d.password_hash)) throw new Error('Current password is incorrect.');
+  if (String(newPassword || '').length < 6) throw new Error('New password must be at least 6 characters.');
+  await q('UPDATE dealer_user SET password_hash=$1, reset_token=NULL, reset_expires=NULL WHERE id=$2', [hashPassword(newPassword), d.id]);
+  return { ok: true };
 }
 
 // Resolve the dealer's display name + linked dealer record + role.
@@ -204,4 +237,19 @@ export async function rejectDealer(id) {
 export async function pendingDealerCount() {
   const r = await one(`SELECT COUNT(*)::int AS n FROM dealer_user WHERE status='pending'`, []).catch(() => null);
   return r ? Number(r.n) : 0;
+}
+// All dealer_user logins tied to a dealership (customer) record, for staff (Customers & Dealers
+// screen) — the dealer's own team() is self-service and requires a dealer session; this is the
+// staff-side equivalent so Built Trailers can see + help with accounts without one.
+export async function accountsForCustomer(customerId) {
+  return (await all(`SELECT id,name,email,status,role,created_at FROM dealer_user WHERE customer_id=$1 ORDER BY created_at`, [customerId]))
+    .map(u => ({ id: u.id, name: u.name, email: u.email, status: u.status, role: u.role || 'admin', createdAt: u.created_at }));
+}
+// Staff-assisted password reset (a dealer forgot their password and can't/didn't use email
+// self-service) — sets a new password directly, mirroring the admin path for staff (app_user).
+export async function adminResetPassword(dealerId, newPassword) {
+  if (String(newPassword || '').length < 6) throw new Error('Password must be at least 6 characters.');
+  if (!await one('SELECT id FROM dealer_user WHERE id=$1', [dealerId])) throw new Error('Account not found.');
+  await q('UPDATE dealer_user SET password_hash=$1, reset_token=NULL, reset_expires=NULL WHERE id=$2', [hashPassword(newPassword), dealerId]);
+  return { ok: true };
 }
