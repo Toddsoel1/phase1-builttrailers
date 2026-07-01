@@ -294,7 +294,9 @@ async function ensureCustomer(name) {
   const created = await call('POST', `customer?minorversion=${MINOR}`, { DisplayName: name });
   return created.Customer.Id;
 }
-async function ensureVendor(name) {
+// find-or-create by DisplayName, returning the QBO Vendor Id. Exported so a newly-approved
+// local vendor can be pushed the moment it goes active (see accounting.js pushVendorToQBO).
+export async function ensureVendor(name) {
   const safe = name.replace(/'/g, "\\'");
   const found = (await query(`select Id from Vendor where DisplayName = '${safe}'`)).Vendor;
   if (found && found[0]) return found[0].Id;
@@ -420,11 +422,39 @@ export async function syncCustomersFromQBO() {
 async function ensureVendorLocal(qbVendorRef) {
   if (!qbVendorRef?.name) return null;
   const existing = await one('SELECT id FROM vendor WHERE lower(name)=lower($1)', [qbVendorRef.name]);
-  if (existing) return existing.id;
+  if (existing) {
+    if (qbVendorRef.value) await q('UPDATE vendor SET qbo_id=$1 WHERE id=$2 AND qbo_id IS NULL', [String(qbVendorRef.value), existing.id]);
+    return existing.id;
+  }
   const vid = 'qbo_v_' + qbVendorRef.value;
-  await q('INSERT INTO vendor(id,name,lead_days) VALUES ($1,$2,0) ON CONFLICT DO NOTHING',
-    [vid, qbVendorRef.name]);
+  await q('INSERT INTO vendor(id,name,lead_days,qbo_id) VALUES ($1,$2,0,$3) ON CONFLICT DO NOTHING',
+    [vid, qbVendorRef.name, qbVendorRef.value ? String(qbVendorRef.value) : null]);
   return vid;
+}
+
+// Pull sync: the full QuickBooks vendor list -> local `vendor` table (mirrors
+// syncCustomersFromQBO). Matched by qbo_id first, then by name, so a vendor created locally
+// and already pushed to QBO (see accounting.js pushVendorToQBO) reconciles instead of duplicating.
+export async function syncVendorsFromQBO() {
+  const vendors = await paginate('Vendor');
+  let created = 0, updated = 0;
+  for (const v of vendors) {
+    if (v.Active === false) continue; // skip inactive QB vendors
+    const name = v.DisplayName || v.CompanyName || 'Unknown';
+    const existing = await one('SELECT id FROM vendor WHERE qbo_id=$1', [String(v.Id)])
+                  || await one('SELECT id FROM vendor WHERE lower(name)=lower($1)', [name]);
+    if (existing) {
+      await q('UPDATE vendor SET name=$1, qbo_id=$2 WHERE id=$3', [name, String(v.Id), existing.id]);
+      updated++;
+    } else {
+      const id = 'qbo_v_' + v.Id;
+      await q(`INSERT INTO vendor(id,name,lead_days,status,qbo_id) VALUES ($1,$2,0,'active',$3) ON CONFLICT DO NOTHING`,
+        [id, name, String(v.Id)]);
+      created++;
+    }
+  }
+  await setConfig('qbo_vendors_synced_at', new Date().toISOString());
+  return { created, updated };
 }
 
 export async function previewItemsFromQBO() {

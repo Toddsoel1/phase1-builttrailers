@@ -374,12 +374,7 @@ const HELP={
   pos:{title:'🧾 Purchase Orders',body:`
     <p>Full lifecycle for ordering parts from vendors: Draft → Pending Approval → Approved → Received.</p>
     <h4 style="color:var(--accent);margin:14px 0 6px">Creating a PO</h4>
-    <ol>
-      <li>Click <strong>+ New PO</strong></li>
-      <li>Select vendor (must be approved — new vendors need their own approval first)</li>
-      <li>Add line items: part + quantity + unit price</li>
-      <li>Click <strong>Submit</strong></li>
-    </ol>
+    <p>A PO orders one part at a time, from that part's assigned vendor — click <strong>Create PO</strong> next to a part on the Predict (MRP) page, or <strong>Create PO from selection</strong> to do several at once.</p>
     <h4 style="color:var(--accent);margin:14px 0 6px">Approval workflow</h4>
     <p>If the PO total exceeds a configured dollar threshold, it routes to the assigned approver(s) in sequence.</p>
     <ul>
@@ -394,12 +389,12 @@ const HELP={
       <li>On-hand inventory for each line item increments automatically</li>
       <li>A vendor bill posts to QuickBooks</li>
     </ol>
-    <h4 style="color:var(--accent);margin:14px 0 6px">New vendor approval</h4>
-    <p>First-time vendors require a separate approval before any PO can be placed. The vendor approval request works the same way as a PO approval — configure the approver in the approval rules settings.</p>
+    <h4 style="color:var(--accent);margin:14px 0 6px">Assigning a vendor to a part</h4>
+    <p>In Parts Master, click a part's vendor (or "— assign —") to pick from the vendor list — which syncs from QuickBooks — or add a brand-new one right there (admin only). First-time vendors need approval before a PO can be placed against them; once approved, they're automatically created in QuickBooks too, ready to bill against.</p>
     <h4 style="color:var(--accent);margin:14px 0 6px">Common issues</h4>
     <ul>
       <li><em>PO stuck at "Pending Approval"</em> → the specific assigned approver must act; check who is assigned in approval rules</li>
-      <li><em>Can't select vendor</em> → the vendor may need approval first</li>
+      <li><em>Vendor missing from the list</em> → run <strong>⬇ Vendors</strong> under Accounting → Pull from QuickBooks, or add it as a new vendor from Parts Master</li>
     </ul>`},
   boms:{title:'🧩 BOMs & Cost',body:`
     <p>Bill of Materials for each trailer model — the parts and labor that make up every unit's cost.</p>
@@ -465,6 +460,7 @@ const HELP={
     <ul>
       <li><strong>⬇ Customers</strong> — imports QB customers into Customers &amp; Dealers</li>
       <li><strong>⬇ Parts (Items)</strong> — imports QB items into Parts Master</li>
+      <li><strong>⬇ Vendors</strong> — imports QB vendors, ready to assign to parts in Parts Master</li>
       <li><strong>⬇ Orders (Invoices)</strong> — imports QB invoices as shipped orders</li>
     </ul>
     <h4 style="color:var(--accent);margin:14px 0 6px">Connecting QuickBooks</h4>
@@ -714,7 +710,7 @@ async function viewParts(){
    ${parts.map(p=>`<tr>
      <td><b>${esc(p.id)}</b><br><span class="muted" style="font-size:11px">${esc(p.name)}</span></td>
      <td>${p.type==='M'?'<span class="badge b-mfg">MAKE</span>':'<span class="badge b-buy">BUY</span>'}</td>
-     <td style="font-size:12px">${esc(p.vendor||'')}</td>
+     <td style="font-size:12px">${canEdit()?`<a class="lnk" onclick="editPartVendor('${p.id}','${p.vendorId||''}')">${esc(p.vendor||'— assign —')}</a>`:esc(p.vendor||'')}${p.vendorStatus==='pending'?' <span class="badge b-low" style="font-size:9px">pending</span>':''}</td>
      <td class="right">${p.onHand}</td><td class="right">${p.reorder}</td>
      <td class="right">${canEdit()?`<a class="lnk" onclick="editCost('${p.id}',${p.cost})">${money2(p.cost)}</a>`:money2(p.cost)}</td>
      <td class="right">${money(p.extValue)}</td>
@@ -733,6 +729,55 @@ async function viewParts(){
 }
 async function inactivatePart(id){ try{await api('/api/parts/'+id,{method:'PATCH',body:JSON.stringify({active:false})});toast('Part inactivated');viewParts();}catch(e){toast(e.message);} }
 async function reactivatePart(){ const sel=$('reactivateSel'); const id=sel?sel.value:''; if(!id)return; try{await api('/api/parts/'+id,{method:'PATCH',body:JSON.stringify({active:true})});toast('Part reactivated');viewParts();}catch(e){toast(e.message);} }
+async function editPartVendor(partId,currentVendorId){
+  let vendors; try{ vendors=await api('/api/vendors'); }catch(e){ return toast(e.message); }
+  const opts=vendors.map(v=>`<option value="${esc(v.id)}"${v.id===currentVendorId?' selected':''}>${esc(v.name)}${v.status==='pending'?' (pending approval)':v.status==='rejected'?' (rejected)':''}</option>`).join('');
+  modal('Assign vendor',`
+    <p class="muted" style="font-size:12px">Vendors sync from QuickBooks — search or pick from the list below.</p>
+    <div class="field"><label>Vendor</label>
+      <select id="pvSel" class="inp">
+        <option value="">— none —</option>
+        ${opts}
+      </select>
+    </div>
+    <div id="pvNewBox" style="display:none;margin-top:10px;padding:10px;border:1px solid var(--line);border-radius:8px">
+      <div class="field"><label>New vendor name *</label><input id="pvNewName" class="inp" placeholder="Acme Trailer Supply"></div>
+      <div class="row">
+        <div class="field"><label>Lead time (days)</label><input id="pvNewLead" class="inp" type="number" min="0" value="7"></div>
+        <div class="field"><label>Terms</label><input id="pvNewTerms" class="inp" placeholder="Net 30"></div>
+      </div>
+    </div>
+    ${isAdmin()?`<p style="margin-top:10px"><a class="lnk" id="pvToggleLink" onclick="togglePvNew()">+ Add a new vendor</a></p>`:''}
+    <div class="row" style="gap:8px;margin-top:12px">
+      <button class="btn" id="pvSaveBtn" onclick="saveEditPartVendor('${partId}')">Save</button>
+      <button class="btn sec" onclick="closeModal()">Cancel</button>
+    </div>
+    <div id="pvMsg" class="msg"></div>`);
+}
+function togglePvNew(){
+  const box=$('pvNewBox'), showing=box.style.display!=='none';
+  box.style.display=showing?'none':'block';
+  $('pvSel').closest('.field').style.display=showing?'':'none';
+  $('pvToggleLink').textContent=showing?'+ Add a new vendor':'← choose an existing vendor instead';
+  $('pvSaveBtn').textContent=showing?'Save':'Create & assign';
+}
+async function saveEditPartVendor(partId){
+  const addingNew=$('pvNewBox').style.display!=='none';
+  try{
+    let vendorId;
+    if(addingNew){
+      const name=($('pvNewName').value||'').trim(); if(!name)return toast('Vendor name is required');
+      const leadDays=Number($('pvNewLead').value)||0, terms=($('pvNewTerms').value||'').trim()||undefined;
+      const v=await api('/api/vendors',{method:'POST',body:JSON.stringify({name,leadDays,terms})});
+      vendorId=v.id;
+      toast(v.status==='pending'?'Vendor created — pending approval, then syncs to QuickBooks':'Vendor created and synced to QuickBooks');
+    } else {
+      vendorId=$('pvSel').value;
+    }
+    await api('/api/parts/'+partId,{method:'PATCH',body:JSON.stringify({vendorId:vendorId||null})});
+    closeModal(); viewParts();
+  }catch(e){ toast(e.message); }
+}
 function addMakePart(){
   modal('Add Make Part',`
     <p class="muted" style="font-size:12px;margin-bottom:12px">Make parts are produced in-house from raw materials + labor. They live in this app only — <b>never</b> pushed to QuickBooks — and you set their cost here.</p>
@@ -1856,8 +1901,9 @@ async function viewAccounting(){
      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">
        <button class="btn" onclick="pullFromQB(['customers'])">⬇ Customers</button>
        <button class="btn" onclick="pullFromQB(['items'])">⬇ Parts (Items)</button>
+       <button class="btn" onclick="pullFromQB(['vendors'])">⬇ Vendors</button>
        <button class="btn" onclick="pullFromQB(['invoices'])">⬇ Orders (Invoices)</button>
-       <button class="btn sec" onclick="pullFromQB(['customers','items','invoices'])">⬇ Pull All</button>
+       <button class="btn sec" onclick="pullFromQB(['customers','items','vendors','invoices'])">⬇ Pull All</button>
      </div>
      <div id="pullOut" style="margin-top:12px"></div>
    </div>

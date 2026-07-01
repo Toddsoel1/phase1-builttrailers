@@ -132,6 +132,62 @@ test('create an app-only Make part', async () => {
   assert.ok(p && p.type === 'M', 'Make part created with type M');
 });
 
+test('assign a vendor to a part — validated, reflected on GET, and unassignable', async () => {
+  const v = await json(await api('/api/vendors', { method: 'POST', body: JSON.stringify({ name: 'Part Vendor Test Co', leadDays: 3 }) }));
+  const part = await json(await api('/api/parts', { method: 'POST', body: JSON.stringify({ name: 'Smoke Vendor-Assign Bracket', cost: 4.5 }) }));
+  const patch = await api('/api/parts/' + part.id, { method: 'PATCH', body: JSON.stringify({ vendorId: v.id }) });
+  assert.equal(patch.status, 200);
+  const p = (await json(await api('/api/parts'))).find(x => x.id === part.id);
+  assert.equal(p.vendorId, v.id, 'vendorId reflected');
+  assert.equal(p.vendor, 'Part Vendor Test Co', 'vendor name joined');
+  assert.equal(p.vendorStatus, 'pending', 'new vendor requires approval per seeded rules');
+
+  const bad = await api('/api/parts/' + part.id, { method: 'PATCH', body: JSON.stringify({ vendorId: 'nope-does-not-exist' }) });
+  assert.equal(bad.status, 400, 'unknown vendor id rejected');
+
+  await api('/api/parts/' + part.id, { method: 'PATCH', body: JSON.stringify({ vendorId: null }) });
+  const p2 = (await json(await api('/api/parts'))).find(x => x.id === part.id);
+  assert.equal(p2.vendorId, null, 'unassigned');
+});
+
+test('vendor approval: two-step chain, then active + safe QBO push (no-op without QBO creds)', async () => {
+  const create = await api('/api/vendors', { method: 'POST', body: JSON.stringify({ name: 'Smoke Test Vendor Co', leadDays: 5, terms: 'Net 30' }) });
+  assert.equal(create.status, 200);
+  const { id: vendorId, status } = await create.json();
+  assert.equal(status, 'pending', 'new vendor requires approval per seeded rules');
+
+  const users = await json(await api('/api/users'));
+  const u3 = users.find(u => u.id === 'u3'), u1 = users.find(u => u.id === 'u1');
+  const loginAs = async username => json(await fetch(BASE + '/api/auth/login', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username, password: 'built2026' }) }));
+  const hdrs = tok => ({ 'Content-Type': 'application/json', Authorization: 'Bearer ' + tok });
+  const asU3 = hdrs((await loginAs(u3.username)).token), asU1 = hdrs((await loginAs(u1.username)).token);
+
+  // Step 1: Office Manager (seq 1) approves — still pending afterward (seq 2 remains)
+  const req1 = (await json(await fetch(BASE + '/api/approvals/pending', { headers: asU3 }))).find(r => r.ref_id === vendorId);
+  assert.ok(req1, 'seq-1 approver has the request');
+  const dec1 = await json(await fetch(BASE + '/api/approvals/' + req1.token + '/decide', { method: 'POST', headers: asU3, body: JSON.stringify({ decision: 'approved' }) }));
+  assert.equal(dec1.outcome, 'approved_next_seq');
+  assert.equal((await json(await api('/api/vendors'))).find(v => v.id === vendorId).status, 'pending', 'still pending after step 1');
+
+  // Step 2: GM (seq 2) approves — fully approved -> active. The QBO push is best-effort and
+  // mode-gated (accountingMode() is 'simulated' with no QBO creds in HERMETIC), so it must not
+  // throw or block the decision; qbo_id stays null since nothing was actually pushed.
+  const req2 = (await json(await fetch(BASE + '/api/approvals/pending', { headers: asU1 }))).find(r => r.ref_id === vendorId);
+  assert.ok(req2, 'seq-2 approver has the request');
+  const dec2 = await json(await fetch(BASE + '/api/approvals/' + req2.token + '/decide', { method: 'POST', headers: asU1, body: JSON.stringify({ decision: 'approved' }) }));
+  assert.equal(dec2.outcome, 'fully_approved');
+  const finalVendor = (await json(await api('/api/vendors'))).find(v => v.id === vendorId);
+  assert.equal(finalVendor.status, 'active', 'active after full approval');
+  assert.equal(finalVendor.qbo_id, null, 'no QBO push attempted in simulated mode');
+});
+
+test('qbo pull: vendors requires QuickBooks configured', async () => {
+  const r = await api('/api/qbo/pull', { method: 'POST', body: JSON.stringify({ what: ['vendors'] }) });
+  assert.equal(r.status, 400);
+  assert.match((await r.json()).error, /not configured/i);
+});
+
 test('role access sections can be saved (regression: the onclick Save bug)', async () => {
   assert.ok((await json(await api('/api/roles'))).some(r => r.name === 'Sales'), 'Sales role exists');
   const sections = ['orders', 'parts'];

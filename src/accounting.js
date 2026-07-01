@@ -5,7 +5,7 @@
 // set ACCOUNTING_MODE=quickbooks and provide QBO credentials — the marked hook below is
 // where the real QuickBooks Online API calls plug in.
 import { q, all, one } from './db.js';
-import { qboConfigured as qboReady, createInvoice as qboInvoice, createBill as qboBill, createJournalEntry as qboJournal, QBOFeatureError } from './qbo.js';
+import { qboConfigured as qboReady, createInvoice as qboInvoice, createBill as qboBill, createJournalEntry as qboJournal, ensureVendor as qboEnsureVendor, QBOFeatureError } from './qbo.js';
 
 export function accountingMode() {
   return process.env.ACCOUNTING_MODE === 'quickbooks' ? 'quickbooks' : 'simulated';
@@ -49,6 +49,13 @@ export const postCOGS = (ref, amount, userId) => record('cogs', ref, 'COGS', amo
 // Cycle-count adjustment — the net value of the variance, posted to QuickBooks as a journal
 // entry (Inventory Asset vs an adjustment account) when an approver signs off.
 export const postInventoryAdjustment = (ref, amount, userId) => record('inventory-adjust', ref, 'Inventory Adjustment', amount, userId);
+
+// Push a newly-approved vendor to QuickBooks (find-or-create by name) so it's ready to use on
+// a bill the moment it's usable in the app. No-ops in simulated mode. Returns the QBO Vendor Id.
+export async function pushVendorToQBO(name) {
+  if (accountingMode() !== 'quickbooks' || !qboReady()) return null;
+  return qboEnsureVendor(name);
+}
 
 export async function ledger() {
   return (await all('SELECT * FROM accounting_event ORDER BY id DESC LIMIT 200', []))

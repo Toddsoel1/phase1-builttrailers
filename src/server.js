@@ -22,7 +22,7 @@ import { STAGES, canSell, canReorderProduction, trailerTypes, customersWithTypes
 import { logWork, dailyReport, wipReport, consumptionByWorkstation, workstations } from './wip.js';
 import { mrp, poList, createPO, receivePO } from './mrp.js';
 import { accountingMode, qboConfigured, ledger, totals, sync, scanInvoice, invoiceList } from './accounting.js';
-import { getAuthUrl, exchangeCode, syncCustomersFromQBO, syncItemsFromQBO, syncInvoicesFromQBO, previewItemsFromQBO, QBOAuthError, QBOFeatureError, qboErrorLog, getRefreshTokenInfo, disconnectQBO, getRealmInfo, getQBItems, updateItemCost } from './qbo.js';
+import { getAuthUrl, exchangeCode, syncCustomersFromQBO, syncItemsFromQBO, syncInvoicesFromQBO, syncVendorsFromQBO, previewItemsFromQBO, QBOAuthError, QBOFeatureError, qboErrorLog, getRefreshTokenInfo, disconnectQBO, getRealmInfo, getQBItems, updateItemCost } from './qbo.js';
 import * as people from './people.js';
 import { forecast, workingCapital, scenario } from './forecast.js';
 import * as sms from './sms.js';
@@ -664,10 +664,10 @@ app.patch('/api/users/:id/reactivate', authMiddleware, requireTier('admin'), asy
 
 // ---- parts master ----
 app.get('/api/parts', authMiddleware, async (_req, res) => {
-  const rows = await all(`SELECT p.*, v.name AS vendor_name, v.lead_days
+  const rows = await all(`SELECT p.*, v.name AS vendor_name, v.status AS vendor_status, v.lead_days
                             FROM part p LEFT JOIN vendor v ON v.id=p.vendor_id ORDER BY p.type DESC, p.id`, []);
   res.json(rows.map(p => ({
-    id: p.id, name: p.name, type: p.type, vendor: p.vendor_name, leadDays: p.lead_days,
+    id: p.id, name: p.name, type: p.type, vendor: p.vendor_name, vendorId: p.vendor_id, vendorStatus: p.vendor_status, leadDays: p.lead_days,
     uom: p.uom, spec: p.spec, cost: Number(p.cost), onHand: p.on_hand, reorder: p.reorder,
     cushion: p.cushion, lot: p.lot, active: p.active !== false, extValue: Number(p.cost) * p.on_hand,
     status: p.on_hand < p.reorder ? 'below' : (p.on_hand < p.reorder + p.cushion ? 'low' : 'ok')
@@ -692,13 +692,17 @@ app.post('/api/parts', authMiddleware, requireTier('editor'), async (req, res) =
 app.patch('/api/parts/:id', authMiddleware, requireTier('editor'), async (req, res) => {
   const cur = await one('SELECT * FROM part WHERE id=$1', [req.params.id]);
   if (!cur) return res.status(404).json({ error: 'not found' });
-  const { cost, reorder, cushion, lot, active } = req.body || {};
-  await q('UPDATE part SET cost=$1, reorder=$2, cushion=$3, lot=$4, active=$5 WHERE id=$6',
+  const { cost, reorder, cushion, lot, active, vendorId } = req.body || {};
+  if (vendorId !== undefined && vendorId && !await one('SELECT id FROM vendor WHERE id=$1', [vendorId]))
+    return res.status(400).json({ error: 'Vendor not found' });
+  const newVendorId = vendorId !== undefined ? (vendorId || null) : cur.vendor_id;
+  await q('UPDATE part SET cost=$1, reorder=$2, cushion=$3, lot=$4, active=$5, vendor_id=$6 WHERE id=$7',
     [cost ?? cur.cost, reorder ?? cur.reorder, cushion ?? cur.cushion, lot ?? cur.lot,
-     active !== undefined ? !!active : (cur.active !== false), req.params.id]);
+     active !== undefined ? !!active : (cur.active !== false), newVendorId, req.params.id]);
   if (cost != null && Number(cost) !== Number(cur.cost))
     await audit(req, 'part.cost', `${req.params.id}: ${cur.cost} -> ${cost}`);
   if (active !== undefined) await audit(req, 'part.active', `${req.params.id} ${active ? 'active' : 'inactive'}`);
+  if (vendorId !== undefined && newVendorId !== cur.vendor_id) await audit(req, 'part.vendor', `${req.params.id} -> ${newVendorId || '(none)'}`);
   res.json({ ok: true });
 });
 app.post('/api/parts/:id/receive', authMiddleware, requireTier('editor'), async (req, res) => {
@@ -1393,13 +1397,14 @@ app.post('/api/accounting/trailer-costs/push', authMiddleware, requireSection('a
 });
 app.post('/api/qbo/pull', authMiddleware, requireTier('admin'), async (req, res) => {
   if (!qboConfigured()) return res.status(400).json({ error: 'QuickBooks not configured' });
-  const what   = req.body?.what   || ['customers', 'items', 'invoices'];
+  const what   = req.body?.what   || ['customers', 'items', 'invoices', 'vendors'];
   const itemIds = req.body?.itemIds || null;
   const results = {};
   try {
     if (what.includes('customers')) results.customers = await syncCustomersFromQBO();
     if (what.includes('items'))     results.items     = await syncItemsFromQBO(itemIds);
     if (what.includes('invoices'))  results.invoices  = await syncInvoicesFromQBO();
+    if (what.includes('vendors'))   results.vendors   = await syncVendorsFromQBO();
     await audit(req, 'qbo.pull', JSON.stringify(results));
     res.json({ ok: true, results });
   } catch (e) {

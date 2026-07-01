@@ -148,6 +148,8 @@ const colMigrations = [
   // Self-service email password reset for dealers (mirrors owner_user's reset_token/reset_expires).
   `ALTER TABLE dealer_user ADD COLUMN IF NOT EXISTS reset_token TEXT`,
   `ALTER TABLE dealer_user ADD COLUMN IF NOT EXISTS reset_expires TIMESTAMPTZ`,
+  // Tracks the matching QuickBooks Vendor Id once a local vendor is pushed to (or pulled from) QBO.
+  `ALTER TABLE vendor ADD COLUMN IF NOT EXISTS qbo_id TEXT`,
 ];
 
 export async function ensureSchema() {

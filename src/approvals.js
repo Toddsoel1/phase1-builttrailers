@@ -2,6 +2,17 @@ import crypto from 'crypto';
 import { q, all, one } from './db.js';
 import * as sms from './sms.js';
 import { sendPush } from './push.js';
+import { pushVendorToQBO } from './accounting.js';
+
+// A vendor just went active (either no approval rule matched, or the last approver signed off) —
+// push it to QuickBooks so it's ready to use on a bill. Best-effort: the vendor is already active
+// locally either way, and a later "Pull from QuickBooks -> Vendors" reconciles by name if this fails.
+async function syncApprovedVendorToQBO(vendorId, name) {
+  try {
+    const qboId = await pushVendorToQBO(name);
+    if (qboId) await q('UPDATE vendor SET qbo_id=$1 WHERE id=$2', [String(qboId), vendorId]);
+  } catch (e) { console.warn('vendor QBO push:', e.message); }
+}
 
 function genToken() { return crypto.randomBytes(24).toString('hex'); }
 
@@ -122,7 +133,11 @@ export async function processDecision(token, decision, note, decidedById) {
 
   // Fully approved
   if (req.type === 'po')     await q("UPDATE purchase_order SET status='Open' WHERE id=$1 AND status='Pending Approval'", [req.ref_id]);
-  if (req.type === 'vendor') await q("UPDATE vendor SET status='active' WHERE id=$1 AND status='pending'", [req.ref_id]);
+  if (req.type === 'vendor') {
+    await q("UPDATE vendor SET status='active' WHERE id=$1 AND status='pending'", [req.ref_id]);
+    const v = await one('SELECT name FROM vendor WHERE id=$1', [req.ref_id]);
+    if (v) await syncApprovedVendorToQBO(req.ref_id, v.name);
+  }
   return { outcome: 'fully_approved', type: req.type, refId: req.ref_id };
 }
 
@@ -168,6 +183,8 @@ export async function createVendor({ name, leadDays, terms }, requestedById) {
     [id, name, leadDays || 0, terms || null, status]);
   if (rules.length) {
     await requestApprovals('vendor', id, null, `New vendor: ${name}`, requestedById);
+  } else {
+    await syncApprovedVendorToQBO(id, name); // no approval rule configured -> active immediately
   }
   return { id, status };
 }
