@@ -226,6 +226,32 @@ test('owner: duplicate email is rejected', async () => {
   assert.equal(r.status, 400);
 });
 
+test('owner: registering a trailer requires a phone number', async () => {
+  const r = await oapi('/api/owner/register', { method: 'POST', body: JSON.stringify({
+    email: 'phonevalidation@x.test', password: 'ownerpass1', name: 'No Phone',
+    vin: 'BLTNOPHONE0000001', ownerName: 'No Phone', saleDate: '2026-06-01',
+    warrantyAddress: '1 Main St', city: 'Provo', state: 'UT', zip: '84601' }) });
+  assert.equal(r.status, 400);
+  assert.match((await r.json()).error, /phone/i);
+});
+
+test('owner: registering a trailer requires a full address (street, city, state, zip)', async () => {
+  const base = { email: 'addrvalidation@x.test', password: 'ownerpass1', name: 'No Addr',
+    vin: 'BLTNOADDR0000001', ownerName: 'No Addr', saleDate: '2026-06-01', phone: '555-123-4567' };
+  for (const missing of ['warrantyAddress', 'city', 'state', 'zip']) {
+    const body = { ...base, warrantyAddress: '1 Main St', city: 'Provo', state: 'UT', zip: '84601' };
+    delete body[missing];
+    const r = await oapi('/api/owner/register', { method: 'POST', body: JSON.stringify(body) });
+    assert.equal(r.status, 400, `missing ${missing} rejected`);
+    assert.match((await r.json()).error, /address/i);
+  }
+});
+
+test('owner: account-only registration (no vin) does not require phone/address', async () => {
+  const r = await oapi('/api/owner/register', { method: 'POST', body: JSON.stringify({ email: 'noviown@x.test', password: 'ownerpass1', name: 'No VIN Owner' }) });
+  assert.equal(r.status, 200, 'account-only call has nothing to register, so nothing to require');
+});
+
 test('owner: login works and rejects a bad password', async () => {
   const ok = await oapi('/api/owner/login', { method: 'POST', body: JSON.stringify({ email: 'owner@example.com', password: 'ownerpass1' }) });
   assert.equal(ok.status, 200);
@@ -305,6 +331,25 @@ test('VIN: print center + correction are restricted to OM/GM/Admin', async () =>
   const h = { headers: { Authorization: 'Bearer ' + sales } };
   assert.equal((await fetch(BASE + '/api/print-queue', h)).status, 403, 'sales cannot open the print center');
   assert.equal((await fetch(BASE + `/api/trailers/${vinUnitId}/vin`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + sales }, body: JSON.stringify({ vin: 'BLTHACKVIN0000001' }) })).status, 403, 'sales cannot change a VIN');
+});
+
+test('owner: full registration (phone + full address) succeeds and is visible to staff', async () => {
+  const r = await oapi('/api/owner/register', { method: 'POST', body: JSON.stringify({
+    email: 'fulladdr@x.test', password: 'ownerpass1', name: 'Fully Addressed',
+    vin: 'BLTTESTVIN0000099', ownerName: 'Fully Addressed', saleDate: new Date().toISOString().slice(0, 10),
+    phone: '555-987-6543', warrantyAddress: '742 Evergreen Terrace', city: 'Springfield', state: 'ID', zip: '83501' }) });
+  assert.equal(r.status, 200);
+  const reg = (await r.json()).registration;
+  assert.equal(reg.status, 'pending', 'unverified owner submission awaits staff review');
+
+  const pending = await json(await api('/api/warranty/registrations/pending'));
+  const mine = pending.find(p => p.vin === 'BLTTESTVIN0000099');
+  assert.ok(mine, 'staff can see the new registration');
+  assert.equal(mine.phone, '555-987-6543');
+  assert.equal(mine.address, '742 Evergreen Terrace');
+  assert.equal(mine.city, 'Springfield');
+  assert.equal(mine.state, 'ID');
+  assert.equal(mine.zip, '83501');
 });
 
 test('traveler: build sheet returns unit data + a QR, and /u/:id resolves the unit', async () => {

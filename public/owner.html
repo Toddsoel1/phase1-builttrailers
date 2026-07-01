@@ -97,9 +97,14 @@ footer a{color:var(--accent)}
       <label class="req">Owner full name</label><input id="rOwner" placeholder="First and last name">
       <div class="row">
         <div><label class="req">Date of purchase</label><input id="rSale" type="date"></div>
-        <div><label>Phone</label><input id="rPhone" type="tel" placeholder="(optional)"></div>
+        <div><label class="req">Phone</label><input id="rPhone" type="tel"></div>
       </div>
-      <label>Warranty / mailing address</label><input id="rAddr" placeholder="(optional)">
+      <label class="req">Warranty / mailing address</label><input id="rAddr" placeholder="123 Main St">
+      <div class="row">
+        <div><label class="req">City</label><input id="rCity"></div>
+        <div style="max-width:84px"><label class="req">State</label><input id="rState" maxlength="2" placeholder="UT" style="text-transform:uppercase"></div>
+        <div style="max-width:120px"><label class="req">ZIP</label><input id="rZip" inputmode="numeric"></div>
+      </div>
       <label class="req">Email (your login)</label><input id="rEmail" type="email" autocomplete="username">
       <div class="row">
         <div><label class="req">Password</label><input id="rPass" type="password" autocomplete="new-password" placeholder="At least 8 characters"></div>
@@ -208,8 +213,12 @@ async function doLogin(){
 }
 async function doRegister(){
   if($('rPass').value!==$('rPass2').value) return showMsg('rMsg','err','Passwords do not match.');
+  const phone=$('rPhone').value.trim(),warrantyAddress=$('rAddr').value.trim(),
+    city=$('rCity').value.trim(),state=$('rState').value.trim(),zip=$('rZip').value.trim();
+  if(!phone) return showMsg('rMsg','err','A phone number is required.');
+  if(!warrantyAddress||!city||!state||!zip) return showMsg('rMsg','err','Your full address — street, city, state, and ZIP — is required.');
   const body={vin:$('rVin').value.trim(),ownerName:$('rOwner').value.trim(),name:$('rOwner').value.trim(),
-    saleDate:$('rSale').value,phone:$('rPhone').value.trim()||undefined,warrantyAddress:$('rAddr').value.trim()||undefined,
+    saleDate:$('rSale').value,phone,warrantyAddress,city,state,zip,
     email:$('rEmail').value.trim(),password:$('rPass').value};
   try{ const d=await api('/api/owner/register',{method:'POST',body:JSON.stringify(body)}); setSession(d); }
   catch(e){ showMsg('rMsg','err',e.message); }

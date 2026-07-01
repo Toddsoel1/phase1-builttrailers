@@ -85,7 +85,7 @@ export async function getDocumentPath(id) {
 export async function deleteDocument(id) { await q(`DELETE FROM document WHERE id=$1`, [id]); return { ok: true }; }
 
 export async function submitRegistration(data) {
-  const { vin, ownerName, saleDate, warrantyAddress, email, phone, sellingDealer,
+  const { vin, ownerName, saleDate, warrantyAddress, city, state, zip, email, phone, sellingDealer,
           smsOptIn, emailOptIn, proofOfSale, source, termMonths, dealerCustomerId, attachments } = data || {};
   if (!vin) throw new Error('VIN is required.');
   if (!ownerName) throw new Error('Owner full name is required.');
@@ -114,20 +114,20 @@ export async function submitRegistration(data) {
   const status = (w15 === true && (vinMatchesDealer || dateConfirmed)) ? 'verified' : 'pending';
 
   await q(`INSERT INTO warranty_registration
-      (trailer_id, owner_name, owner_contact, registered_at, term_months, email, phone, warranty_address,
+      (trailer_id, owner_name, owner_contact, registered_at, term_months, email, phone, warranty_address, city, state, zip,
        sale_date, selling_dealer, sms_opt_in, email_opt_in, proof_of_sale, verification_status, within_15_days, source, submitted_by,
        sale_price, accessories, ocr_sale_date)
-      VALUES ($1,$2,$3,now(),$4,$5,$6,$7,$8,$9,$10,$11,$12,$16,$13,$14,$15,$17,$18,$19)
+      VALUES ($1,$2,$3,now(),$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22)
       ON CONFLICT(trailer_id) DO UPDATE SET owner_name=$2, owner_contact=$3, term_months=$4, email=$5, phone=$6,
-        warranty_address=$7, sale_date=$8, selling_dealer=$9, sms_opt_in=$10, email_opt_in=$11,
-        proof_of_sale=COALESCE($12, warranty_registration.proof_of_sale), verification_status=$16,
-        within_15_days=$13, source=$14, submitted_by=$15,
-        sale_price=COALESCE($17, warranty_registration.sale_price),
-        accessories=COALESCE($18, warranty_registration.accessories),
-        ocr_sale_date=COALESCE($19, warranty_registration.ocr_sale_date)`,
+        warranty_address=$7, city=$8, state=$9, zip=$10, sale_date=$11, selling_dealer=$12, sms_opt_in=$13, email_opt_in=$14,
+        proof_of_sale=COALESCE($15, warranty_registration.proof_of_sale), verification_status=$16,
+        within_15_days=$17, source=$18, submitted_by=$19,
+        sale_price=COALESCE($20, warranty_registration.sale_price),
+        accessories=COALESCE($21, warranty_registration.accessories),
+        ocr_sale_date=COALESCE($22, warranty_registration.ocr_sale_date)`,
     [t.id, ownerName, phone || email || null, Number(termMonths) || 12, email || null, phone || null, warrantyAddress || null,
-     saleDate, sellingDealer || null, !!smsOptIn, !!emailOptIn, proofPath, w15, source || 'owner', ownerName, status,
-     ocr?.salePrice ?? null, ocr?.accessories ?? null, ocr?.saleDate ?? null]);
+     city || null, state || null, zip || null, saleDate, sellingDealer || null, !!smsOptIn, !!emailOptIn, proofPath,
+     status, w15, source || 'owner', ownerName, ocr?.salePrice ?? null, ocr?.accessories ?? null, ocr?.saleDate ?? null]);
 
   // NOTE: opt-in delivery of the maintenance schedule / T&Cs / app link is captured here;
   // SMS uses the existing Twilio path, email delivery needs an email provider (flagged).
@@ -160,7 +160,7 @@ export async function submitMaintenance(data) {
 
 // ---- internal staff review ----
 export async function pendingRegistrations() {
-  const rows = await all(`SELECT r.trailer_id, r.owner_name, r.email, r.phone, r.warranty_address, r.sale_date,
+  const rows = await all(`SELECT r.trailer_id, r.owner_name, r.email, r.phone, r.warranty_address, r.city, r.state, r.zip, r.sale_date,
                                  r.selling_dealer, r.sms_opt_in, r.email_opt_in, r.proof_of_sale, r.within_15_days,
                                  r.registered_at, r.source, r.sale_price, r.accessories, r.ocr_sale_date, t.vin, m.name AS model, m.price AS our_price, c.name AS dealer
                             FROM warranty_registration r
@@ -171,7 +171,8 @@ export async function pendingRegistrations() {
                            ORDER BY r.registered_at DESC`, []);
   return rows.map(r => ({
     trailerId: r.trailer_id, vin: r.vin, model: r.model, dealer: r.dealer, ownerName: r.owner_name,
-    email: r.email, phone: r.phone, address: r.warranty_address, saleDate: r.sale_date, sellingDealer: r.selling_dealer,
+    email: r.email, phone: r.phone, address: r.warranty_address, city: r.city, state: r.state, zip: r.zip,
+    saleDate: r.sale_date, sellingDealer: r.selling_dealer,
     smsOptIn: r.sms_opt_in, emailOptIn: r.email_opt_in, proofOfSale: r.proof_of_sale, within15: r.within_15_days,
     registeredAt: r.registered_at, source: r.source,
     // Built Trailers staff only — never exposed to dealer/owner endpoints

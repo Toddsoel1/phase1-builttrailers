@@ -2272,7 +2272,7 @@ async function trailersRegsTab(){
       <td><b style="font-family:ui-monospace,monospace;font-size:11px">${esc(r.vin)}</b><br><span class="muted" style="font-size:11px">${esc(r.model||'')}</span></td>
       <td>${esc(r.ownerName||'')}${r.sellingDealer?`<br><span class="muted" style="font-size:11px">via ${esc(r.sellingDealer)}</span>`:''}</td>
       <td>${r.saleDate?String(r.saleDate).slice(0,10):'—'}${r.dateConfirmed?'<br><span class="badge b-ok" style="font-size:10px">✓ OCR-confirmed</span>':r.ocrSaleDate?`<br><span class="badge b-below" style="font-size:10px" title="Date read off the uploaded document">⚠️ doc says ${String(r.ocrSaleDate).slice(0,10)}</span>`:''}</td>
-      <td style="font-size:12px">${esc(r.email||'')}${r.phone?`<br>${esc(r.phone)}`:''}</td>
+      <td style="font-size:12px">${esc(r.email||'')}${r.phone?`<br>${esc(r.phone)}`:''}${r.address?`<br><span class="muted">${esc(r.address)}${r.city?`, ${esc(r.city)}`:''}${r.state?`, ${esc(r.state)}`:''}${r.zip?` ${esc(r.zip)}`:''}</span>`:''}</td>
       <td>${r.proofOfSale?`<a class="lnk" onclick="viewProof('${encodeURIComponent(r.proofOfSale)}')">View</a>`:'<span class="muted">none</span>'}</td>
       <td>${r.within15===false?'<span class="badge b-below">⚠️ late</span>':r.within15===true?'<span class="badge b-ok">✓</span>':'<span class="muted">—</span>'}</td>
       ${canReview?`<td style="white-space:nowrap"><input id="sp_${esc(r.trailerId)}" type="number" placeholder="$ sold for" value="${r.salePrice!=null?r.salePrice:''}" style="width:90px;padding:5px"> <input id="acc_${esc(r.trailerId)}" placeholder="accessories" value="${esc(r.accessories||'')}" style="width:150px;padding:5px"></td>

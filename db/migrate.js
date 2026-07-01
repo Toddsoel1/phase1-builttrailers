@@ -66,6 +66,11 @@ const colMigrations = [
   `ALTER TABLE warranty_registration ADD COLUMN IF NOT EXISTS accessories TEXT`,
   // Sale date read off the uploaded buyer's order by OCR; used to auto-confirm the registration date.
   `ALTER TABLE warranty_registration ADD COLUMN IF NOT EXISTS ocr_sale_date DATE`,
+  // Full address (warranty_address holds the street) — required on the owner portal, optional
+  // elsewhere (dealer point-of-sale entry keeps its single free-text address field).
+  `ALTER TABLE warranty_registration ADD COLUMN IF NOT EXISTS city TEXT`,
+  `ALTER TABLE warranty_registration ADD COLUMN IF NOT EXISTS state TEXT`,
+  `ALTER TABLE warranty_registration ADD COLUMN IF NOT EXISTS zip TEXT`,
   // Soft-inactivate customers/dealers (app use only) to keep the working list clean.
   `ALTER TABLE customer ADD COLUMN IF NOT EXISTS active BOOLEAN NOT NULL DEFAULT true`,
   // Soft-inactivate parts (app use only — does not touch QuickBooks).

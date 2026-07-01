@@ -40,9 +40,16 @@ export const me = context;
 // trailer to it in one step. Used both by a new owner registering their first trailer and by
 // an owner "claiming" an account for registrations already made under their email.
 export async function register(data) {
-  const { email, password, name, vin } = data || {};
+  const { email, password, name, vin, phone, warrantyAddress, city, state, zip } = data || {};
   if (!email || !password) throw new Error('Email and password are required.');
   if (String(password).length < 8) throw new Error('Password must be at least 8 characters.');
+  // Registering a trailer (the only path this app's registration form actually takes) requires
+  // a phone number and a full mailing address — staff need both to reach the owner and to verify
+  // the sale. An account-only call (no vin) has nothing to register, so nothing to require here.
+  if (vin) {
+    if (!phone) throw new Error('A phone number is required.');
+    if (!warrantyAddress || !city || !state || !zip) throw new Error('A full address — street, city, state, and ZIP — is required.');
+  }
   if (await one('SELECT id FROM owner_user WHERE lower(email)=lower($1)', [email]))
     throw new Error('An account with that email already exists — please log in or reset your password.');
   const id = 'OWN-' + Date.now().toString(36) + crypto.randomBytes(2).toString('hex');
