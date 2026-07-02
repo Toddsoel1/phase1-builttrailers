@@ -153,6 +153,12 @@ const colMigrations = [
   // Self-service email password reset for dealers (mirrors owner_user's reset_token/reset_expires).
   `ALTER TABLE dealer_user ADD COLUMN IF NOT EXISTS reset_token TEXT`,
   `ALTER TABLE dealer_user ADD COLUMN IF NOT EXISTS reset_expires TIMESTAMPTZ`,
+  // Retrofit columns that were added to schema.sql's CREATE TABLE statements after production's
+  // tables already existed — CREATE TABLE IF NOT EXISTS never alters an existing table, so any
+  // database bootstrapped from the original schema is missing them. vendor.status broke
+  // /api/parts (Parts Master) in production the moment a query selected it explicitly.
+  `ALTER TABLE vendor ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'active'`,
+  `ALTER TABLE app_user ADD COLUMN IF NOT EXISTS phone TEXT`,
   // Tracks the matching QuickBooks Vendor Id once a local vendor is pushed to (or pulled from) QBO.
   `ALTER TABLE vendor ADD COLUMN IF NOT EXISTS qbo_id TEXT`,
   // Staff email (dealer_user/owner_user already use email as their login; staff log in by
