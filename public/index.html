@@ -225,8 +225,10 @@ function renderNav(){
     if(!vis.length) continue;
     const items=vis.map(k=>`<button class="${page===k?'active':''}" onclick="go('${k}')">${NAV_LABEL[k]}</button>`).join('');
     if(!label){ html+=items; continue; }
-    const col=!!collapsed[label];
-    html+=`<div class="navgroup"><button class="navhdr" onclick="toggleNavGroup('${label}')">${label}<span class="navchev">${col?'▸':'▾'}</span></button>${col?'':items}</div>`;
+    // A collapsed group can never hide the page you're ON, and shows how many items it holds —
+    // so a collapsed "Admin" reads as "Admin (2) ▸", not as Users & Roles having vanished.
+    const col=!!collapsed[label]&&!keys.includes(page);
+    html+=`<div class="navgroup"><button class="navhdr" onclick="toggleNavGroup('${label}')">${label}${col?` <span style="opacity:.6">(${vis.length})</span>`:''}<span class="navchev">${col?'▸':'▾'}</span></button>${col?'':items}</div>`;
   }
   $('nav').innerHTML=html;
   $('whoName').textContent=ME.name;
@@ -265,7 +267,9 @@ async function runSearch(){
   const q=($('gsInput')?.value||'').trim(),out=$('gsOut');if(!out)return;
   if(q.length<2){out.innerHTML='<p class="muted" style="font-size:12px;margin:4px 2px">Type at least 2 characters.</p>';gsItems=[];return;}
   let r;try{r=await api('/api/search?q='+encodeURIComponent(q));}catch(e){out.innerHTML=`<p class="msg err" style="display:block">${esc(e.message)}</p>`;return;}
+  const screens=NAV.filter(n=>navVisible(n)&&n[1].toLowerCase().includes(q.toLowerCase())).slice(0,3);
   gsItems=[
+    ...screens.map(n=>({icon:'🧭',label:n[1].replace(/^\S+\s/,''),sub:'open screen',act:()=>go(n[0])})),
     ...r.orders.map(o=>({icon:'🔨',label:`${o.id} — ${o.customer||'(no customer)'}`,sub:`${o.model||''} · ${o.stage}`,act:()=>orderDetail(o.id)})),
     ...r.units.map(u=>({icon:'🚛',label:u.vin,sub:`${u.model||''}${u.orderId?' · order '+u.orderId:''}`,act:u.orderId?()=>orderDetail(u.orderId):()=>go('trailers')})),
     ...r.customers.map(c=>({icon:'🏬',label:c.name,sub:c.kind||'',act:()=>go('customers')})),
