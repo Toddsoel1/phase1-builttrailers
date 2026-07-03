@@ -185,7 +185,7 @@ function logout(){TOKEN=null;ME=null;$('app').classList.add('hidden');$('login')
 $('liPass').addEventListener('keydown',e=>{if(e.key==='Enter')login();});
 
 // ---- nav/render ----
-const NAV=[['dashboard','📊 Dashboard'],['orders','🔨 Production Flow'],['daily','📋 Daily Update'],['neworder','➕ New Order'],['customers','🏬 Customers & Dealers'],['parts','📦 Parts Master'],['predict','🤖 Predictive Ordering'],['pos','🧾 Purchase Orders'],['boms','🧩 BOMs & Cost'],['inventory','📈 Inventory Value'],['accounting','💵 Accounting'],['trailers','🚛 Trailers & Warranty'],['printcenter','🖨️ Print Center'],['boatadmin','🚤 Boat Builder'],['testdata','🧪 Test Data'],['team','👷 Team & Payroll'],['timeoff','📅 Schedule & Time Off'],['outcomes','🎯 Goals & Outcomes'],['wins','🎉 Wins'],['forecast','🔮 Forecasting & Planning'],['notify','💬 Notifications'],['support','🆘 Support'],['users','👤 Users & Roles']];
+const NAV=[['dashboard','📊 Dashboard'],['orders','🔨 Production Flow'],['daily','📋 Daily Update'],['performance','📈 Performance'],['neworder','➕ New Order'],['customers','🏬 Customers & Dealers'],['parts','📦 Parts Master'],['predict','🤖 Predictive Ordering'],['pos','🧾 Purchase Orders'],['boms','🧩 BOMs & Cost'],['inventory','📈 Inventory Value'],['accounting','💵 Accounting'],['trailers','🚛 Trailers & Warranty'],['printcenter','🖨️ Print Center'],['boatadmin','🚤 Boat Builder'],['testdata','🧪 Test Data'],['team','👷 Team & Payroll'],['timeoff','📅 Schedule & Time Off'],['outcomes','🎯 Goals & Outcomes'],['wins','🎉 Wins'],['forecast','🔮 Forecasting & Planning'],['notify','💬 Notifications'],['support','🆘 Support'],['users','👤 Users & Roles']];
 function canSee(section){
   if(isAdmin()) return true;
   if(!ME.sections) return true; // null = all sections (admin)
@@ -204,7 +204,7 @@ function navVisible(n){
 const NAV_LABEL = Object.fromEntries(NAV);
 const NAV_GROUPS = [
   ['', ['dashboard']],
-  ['Production', ['orders','daily','trailers','printcenter']],
+  ['Production', ['orders','daily','performance','trailers','printcenter']],
   ['Sales', ['neworder','boatadmin','customers']],
   ['Inventory', ['parts','boms','inventory','predict','pos']],
   ['Finance', ['accounting','forecast']],
@@ -281,7 +281,7 @@ document.addEventListener('keydown',e=>{
 });
 async function render(){
   renderNav();
-  const map={dashboard:viewDash,orders:viewOrders,daily:viewDaily,neworder:viewNewOrder,customers:viewCustomers,parts:viewParts,predict:viewPredict,pos:viewPOs,boms:viewBoms,inventory:viewInv,accounting:viewAccounting,trailers:viewTrailers,printcenter:viewPrintCenter,boatadmin:viewBoatAdmin,testdata:viewTestData,team:viewTeam,timeoff:viewTimeoff,outcomes:viewOutcomes,wins:viewWins,forecast:viewForecast,notify:viewNotify,support:viewSupport,users:viewUsers};
+  const map={dashboard:viewDash,orders:viewOrders,daily:viewDaily,performance:viewPerformance,neworder:viewNewOrder,customers:viewCustomers,parts:viewParts,predict:viewPredict,pos:viewPOs,boms:viewBoms,inventory:viewInv,accounting:viewAccounting,trailers:viewTrailers,printcenter:viewPrintCenter,boatadmin:viewBoatAdmin,testdata:viewTestData,team:viewTeam,timeoff:viewTimeoff,outcomes:viewOutcomes,wins:viewWins,forecast:viewForecast,notify:viewNotify,support:viewSupport,users:viewUsers};
   try{
     await (map[page]||viewDash)();
     const pa=$('pActions');
@@ -1164,6 +1164,59 @@ async function saveWorkLog(){
     else toast('Update logged');
     viewDaily();
   }catch(e){ toast(e.message); }
+}
+// ── Performance — expectations vs actuals + generated areas for improvement ──
+async function viewPerformance(){
+  $('pTitle').textContent='Performance';$('pSub').textContent='The shop measured against explicit expectations — and what to fix to close the gap';$('pActions').innerHTML='';
+  let d; try{ d=await api('/api/performance'); }catch(e){ $('content').innerHTML=`<div class="card"><p class="msg err">${esc(e.message)}</p></div>`; return; }
+  const badge=s=>s==='ok'?'<span class="badge b-ok">on target</span>':s==='warn'?'<span class="badge b-low">close</span>':s==='miss'?'<span class="badge b-below">missed</span>':s==='nodata'?'<span class="badge b-buy">no data yet</span>':'<span class="badge b-buy">tracking</span>';
+  const kpiCards=d.kpis.map(k=>`<div class="card" style="margin:0">
+    <div class="muted" style="font-size:11px;text-transform:uppercase;letter-spacing:.5px">${esc(k.label)}</div>
+    <div style="font-size:24px;font-weight:800;margin:2px 0">${k.value==null?'—':esc(String(k.value))+esc(k.unit||'')}</div>
+    <div style="display:flex;gap:6px;align-items:center;font-size:12px;flex-wrap:wrap">${badge(k.status)}${k.target!=null?`<span class="muted">expectation ${k.dir==='<='?'≤':'≥'} ${k.target}${esc(k.unit||'')}</span>`:''}</div></div>`).join('');
+  const recs=`<div class="card" style="margin-bottom:16px;border-color:var(--accent)"><h3>🎯 Areas for improvement</h3>
+    ${d.recommendations.map(r=>`<div style="display:flex;gap:10px;align-items:flex-start;padding:9px 0;border-bottom:1px solid var(--line)">
+      <span>${r.sev==='miss'?'🔴':r.sev==='warn'?'🟠':'🟢'}</span>
+      <div style="flex:1"><div style="font-size:13.5px">${esc(r.text)}</div>
+        <div style="margin-top:3px"><span class="pill viewer" style="font-size:10px">${esc(r.owner)}</span> <a class="lnk" style="font-size:12px" onclick="go('${esc(r.link)}')">open →</a></div></div>
+    </div>`).join('')}</div>`;
+  const cyc=`<div class="card" style="margin-bottom:16px"><h3>⏱ Stage cycle times <span class="muted" style="text-transform:none;letter-spacing:0">— avg days per stage, trailing 90 days</span></h3>
+    <table><thead><tr><th>Stage</th><th class="center">Completions</th><th class="right">Avg days</th></tr></thead><tbody>
+    ${d.cycles.map(c=>`<tr><td><b>${esc(c.stage)}</b></td><td class="center">${c.n||'—'}</td><td class="right">${c.avgDays!=null?c.avgDays:'—'}</td></tr>`).join('')}
+    </tbody></table>
+    <p class="muted" style="font-size:11px;margin-top:8px">Data accrues from every stage completion (Daily Update, Production Flow, and shop-floor QR scans).</p></div>`;
+  const aging=d.aging.length?`<div class="card" style="margin-bottom:16px"><h3>🧊 Stuck in a stage <span class="badge b-below">${d.aging.length}</span> <span class="muted" style="text-transform:none;letter-spacing:0">— longer than ${d.targets.staleWipDays} days without moving</span></h3>
+    <table><thead><tr><th>Order</th><th>Model</th><th>Stage</th><th class="right">Days there</th><th>Due</th><th></th></tr></thead><tbody>
+    ${d.aging.map(a=>`<tr><td><b>${esc(a.id)}</b></td><td>${esc(a.model||'')}</td><td>${esc(a.stage)}</td>
+      <td class="right" style="color:var(--red)">${a.daysInStage}</td><td class="muted">${a.due?String(a.due).slice(0,10):'—'}</td>
+      <td><button class="btn sm sec" onclick="orderDetail('${esc(a.id)}')">View</button></td></tr>`).join('')}
+    </tbody></table></div>`:'';
+  const rep=d.replenishment; const repRows=[...rep.critBuy,...rep.critMake,...rep.warnBuy,...rep.warnMake];
+  const repCard=`<div class="card" style="margin-bottom:16px"><h3>📦 Replenishment — never run out <span class="muted" style="text-transform:none;letter-spacing:0">— parts vs scheduled + in-production demand</span></h3>
+    ${repRows.length?`<table><thead><tr><th>Part</th><th class="center">Action</th><th class="right">Suggested qty</th><th class="right">Days cover</th><th>Order/build by</th><th>Vendor</th></tr></thead><tbody>
+    ${repRows.map(p=>`<tr><td><b>${esc(p.id)}</b><br><span class="muted" style="font-size:11px">${esc(p.name||'')}</span></td>
+      <td class="center"><span class="badge ${p.action.includes('NOW')?'b-below':'b-low'}">${esc(p.action)}</span></td>
+      <td class="right">${p.suggestQty}</td><td class="right">${p.daysCover!=null?p.daysCover:'—'}</td>
+      <td>${esc(p.orderBy||'')}</td><td style="font-size:12px">${esc(p.vendor||'')}</td></tr>`).join('')}
+    </tbody></table>
+    <button class="btn" style="margin-top:10px" onclick="go('predict')">Open Predictive Ordering → create the POs</button>`
+    :'<p class="muted">Nothing at risk — every part covers the scheduled demand. ✅</p>'}</div>`;
+  const t=d.targets;
+  const targetsCard=isAdmin()?`<div class="card"><h3>⚙️ Expectations <span class="muted" style="text-transform:none;letter-spacing:0">— the bar the shop is measured against (admin)</span></h3>
+    <div class="row" style="display:flex;gap:10px;flex-wrap:wrap">
+      <div class="field" style="min-width:150px"><label>On-time delivery ≥ %</label><input id="ptOnTime" class="inp" type="number" min="0" max="100" value="${t.onTimePct}"></div>
+      <div class="field" style="min-width:150px"><label>Avg build ≤ days</label><input id="ptBuild" class="inp" type="number" min="1" value="${t.maxAvgBuildDays}"></div>
+      <div class="field" style="min-width:150px"><label>Stuck after (days)</label><input id="ptStale" class="inp" type="number" min="1" value="${t.staleWipDays}"></div>
+      <div class="field" style="min-width:150px"><label>Claim rate ≤ %</label><input id="ptClaim" class="inp" type="number" min="0" step="0.5" value="${t.maxClaimRatePct}"></div>
+    </div>
+    <button class="btn" onclick="savePerfTargets()">Save expectations</button>
+    <p class="muted" style="font-size:11px;margin-top:8px">Misses land in the Shop Manager's and GM's Action Inbox automatically; part shortages land in the Shop Specialist's.</p></div>`:'';
+  $('content').innerHTML=`<div class="grid g4" style="margin-bottom:16px">${kpiCards}</div>${recs}${repCard}${cyc}${aging}${targetsCard}`;
+}
+async function savePerfTargets(){
+  const body={onTimePct:$('ptOnTime').value,maxAvgBuildDays:$('ptBuild').value,staleWipDays:$('ptStale').value,maxClaimRatePct:$('ptClaim').value};
+  try{ await api('/api/performance/targets',{method:'POST',body:JSON.stringify(body)}); toast('Expectations saved'); viewPerformance(); }
+  catch(e){ toast(e.message); }
 }
 async function viewUsers(){
   $('pTitle').textContent='Users & Roles';$('pSub').textContent='Accounts, permission tiers and reporting hierarchy';

@@ -46,6 +46,7 @@ import * as testdata from './testdata.js';
 import { geocodeAddress } from './geocode.js';
 import { emailConfigured } from './email.js';
 import { runReminders } from './reminders.js';
+import * as analytics from './analytics.js';
 
 // Crash fast if JWT_SECRET is unset in production — predictable fallback is a critical vuln
 if (!process.env.JWT_SECRET) {
@@ -1027,6 +1028,15 @@ app.post('/api/trailer-types', authMiddleware, requireSales, async (req, res) =>
   res.json({ ok: true });
 });
 
+// ---- performance analytics — expectations (targets) + generated areas for improvement ----
+app.get('/api/performance', authMiddleware, requireSection('performance'), async (_req, res) => {
+  try { res.json(await analytics.scorecard()); } catch (e) { res.status(400).json({ error: e.message }); }
+});
+app.post('/api/performance/targets', authMiddleware, requireTier('admin'), async (req, res) => {
+  try { const targets = await analytics.setTargets(req.body || {}); await audit(req, 'perf.targets', JSON.stringify(targets)); res.json({ ok: true, targets }); }
+  catch (e) { res.status(400).json({ error: e.message }); }
+});
+
 // ---- global search (Cmd+K) — jump to an order, VIN, customer, part, or model ----
 app.get('/api/search', authMiddleware, async (req, res) => {
   const raw = String(req.query.q || '').trim();
@@ -1221,6 +1231,12 @@ app.post('/api/orders/production-order', authMiddleware, requireProductionPlanne
 // can never diverge between the two.
 async function applyOrderStage(orderId, curOrder, stage, actorUser, actorLabel) {
   await q('UPDATE sales_order SET stage=$1 WHERE id=$2', [stage, orderId]);
+  // A FORWARD move means the previous stage just finished — stamp it (same table the daily
+  // update writes), so cycle-time analytics accrue from every stage change, not just Daily Update.
+  if (STAGES.indexOf(stage) > STAGES.indexOf(curOrder.stage))
+    await q(`INSERT INTO order_stage_done(order_id,stage,completed_by,completed_at)
+             VALUES ($1,$2,$3,now()) ON CONFLICT(order_id,stage) DO NOTHING`,
+      [orderId, curOrder.stage, actorUser?.id || null]).catch(() => {});
   await trailers.afterStageChange(orderId, curOrder.stage, stage, actorUser); // VINs at Build, print queues at Paint
   await q('INSERT INTO audit_log(user_id,action,detail) VALUES ($1,$2,$3)',
     [actorUser?.id || null, 'order.stage', `${orderId} -> ${stage}${actorLabel ? ` (${actorLabel})` : ''}`]).catch(() => {});
@@ -2087,6 +2103,10 @@ await ensureSchema();
   await q(`INSERT INTO role_section(role_name, section)
              SELECT DISTINCT role_name, 'trailers' FROM role_section WHERE section='orders'
              ON CONFLICT DO NOTHING`).catch(e => console.warn('trailers section grant:', e.message));
+  // Performance analytics: production-facing roles get the new section automatically.
+  await q(`INSERT INTO role_section(role_name, section)
+             SELECT DISTINCT role_name, 'performance' FROM role_section WHERE section='orders'
+             ON CONFLICT DO NOTHING`).catch(e => console.warn('performance section grant:', e.message));
 console.log('Migrations applied.');
 
 try {

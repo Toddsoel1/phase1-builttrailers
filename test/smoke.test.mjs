@@ -486,6 +486,42 @@ test('warranty report: claim costs roll up by model (with claim rate) and by par
   assert.equal(part.claims, 1, 'distinct claims counted');
 });
 
+test('performance: scorecard has KPIs vs targets, cycle data from real stage moves, and owned recommendations', async () => {
+  const d = await json(await api('/api/performance'));
+  assert.ok(Array.isArray(d.kpis) && d.kpis.length >= 5, 'KPI list present');
+  for (const k of d.kpis) assert.ok(['ok', 'warn', 'miss', 'nodata', 'info'].includes(k.status), 'each KPI scored');
+  assert.equal(d.cycles.length, 4, 'all four production stages tracked');
+  assert.ok(d.completions.completed90 >= 1, 'stage advances in this suite produced completion data');
+  assert.ok(d.recommendations.length >= 1 && d.recommendations.every(r => r.owner && r.text && r.link), 'recommendations are owned and actionable');
+  assert.ok(d.targets.onTimePct > 0, 'targets loaded with defaults');
+  // Gate: Sales (sections reset to orders+parts earlier in the suite, no performance section after replace)
+  const sr = await api('/api/auth/login', { method: 'POST', body: JSON.stringify({ username: 'aruiz', password: 'built2026' }) });
+  const sales = (await sr.json()).token;
+  assert.equal((await fetch(BASE + '/api/performance', { headers: { Authorization: 'Bearer ' + sales } })).status, 403, 'section-gated');
+  // Expectations are editable (admin) and persist
+  assert.equal((await fetch(BASE + '/api/performance/targets', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + sales }, body: JSON.stringify({ onTimePct: 50 }) })).status, 403, 'targets admin-only');
+  await api('/api/performance/targets', { method: 'POST', body: JSON.stringify({ onTimePct: 95, staleWipDays: 3 }) });
+  const after = await json(await api('/api/performance'));
+  assert.equal(after.targets.onTimePct, 95);
+  assert.equal(after.targets.staleWipDays, 3);
+  assert.equal(after.targets.maxClaimRatePct, d.targets.maxClaimRatePct, 'unspecified targets unchanged');
+});
+
+test('replenishment push: Shop Manager inbox gets targeted order/build items from MRP', async () => {
+  // A part below its reorder level with no stock = MRP shortage
+  const part = await json(await api('/api/parts', { method: 'POST', body: JSON.stringify({ name: 'Push Test Gusset', cost: 3, reorder: 5 }) }));
+  const mr = await api('/api/auth/login', { method: 'POST', body: JSON.stringify({ username: 'mchen', password: 'built2026' }) });
+  const shopMgr = (await mr.json()).token; // Maria Chen — Shop Manager title
+  assert.ok(shopMgr, 'shop manager login succeeded');
+  const inbox = await json(await fetch(BASE + '/api/inbox', { headers: { Authorization: 'Bearer ' + shopMgr } }));
+  const repl = inbox.items.find(i => ['order_now', 'build_now', 'replenish_soon'].includes(i.key));
+  assert.ok(repl, 'Shop Manager receives a replenishment push');
+  assert.equal(repl.link, 'predict', 'push links to Predictive Ordering');
+  const perf = inbox.items.find(i => i.key === 'perf_miss');
+  if (perf) assert.equal(perf.link, 'performance', 'performance misses link to the Performance screen');
+  void part;
+});
+
 test('customer merge: repoints orders + backfills details + deletes the duplicate; gated', async () => {
   // Two customers — the duplicate holds an order, an authorized type, and an address.
   const dup = await json(await api('/api/customers', { method: 'POST', body: JSON.stringify({ name: 'Merge Dup Co', kind: 'Dealership', address: '1 Dup St', city: 'Provo', state: 'UT', zip: '84601' }) }));

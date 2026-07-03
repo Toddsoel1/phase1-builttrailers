@@ -6,16 +6,20 @@
 //   link = the in-app page to open (matches a NAV key in index.html)
 import { all, one } from './db.js';
 import { TEST_FILTERS as T } from './testdata.js'; // exclude flagged test data from the inbox
+import { replenishment, scorecard } from './analytics.js';
 
 // Resolve a raw app_user row into the shape actionItemsFor() expects.
-// Admins implicitly have every section (sections = null).
+// Admins implicitly have every section (sections = null). Titles ride along so
+// title-targeted pushes (Shop Specialist replenishment, SM/GM performance) can route.
 export async function resolveUserForInbox(u) {
-  if (u.role === 'admin') return { id: u.id, role: 'admin', sections: null };
+  const titleRows = await all('SELECT role_name FROM user_title WHERE user_id=$1', [u.id]).catch(() => []);
+  const titles = titleRows.length ? titleRows.map(r => r.role_name) : (u.title ? [u.title] : []);
+  if (u.role === 'admin') return { id: u.id, role: 'admin', sections: null, titles };
   const rows = await all(
     `SELECT DISTINCT rs.section
        FROM user_title ut JOIN role_section rs ON rs.role_name = ut.role_name
       WHERE ut.user_id = $1`, [u.id]).catch(() => []);
-  return { id: u.id, role: u.role, sections: rows.map(r => r.section) };
+  return { id: u.id, role: u.role, sections: rows.map(r => r.section), titles };
 }
 
 // Small helper so a missing table (pre-migration) never breaks the inbox.
@@ -25,11 +29,13 @@ async function count(sql, params = []) {
 }
 const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`;
 
-// user = { id, role, sections }  (sections null = admin = sees everything)
+// user = { id, role, sections, titles }  (sections null = admin = sees everything)
 export async function actionItemsFor(user) {
   const items = [];
   const isAdmin = user.role === 'admin';
   const has = s => isAdmin || (Array.isArray(user.sections) && user.sections.includes(s));
+  const titles = Array.isArray(user.titles) ? user.titles : [];
+  const holds = (...names) => names.some(t => titles.includes(t));
 
   // 1. PO / vendor approvals routed specifically to me (personal — not section-gated)
   const myApprovals = await count(
@@ -51,11 +57,39 @@ export async function actionItemsFor(user) {
       label: `${plural(n, 'PO')} ready to receive`, count: n, link: 'pos' });
   }
 
-  // 4. Parts that have dropped below their reorder point
-  if (has('predict') || has('pos')) {
+  // 4. Replenishment — never run out of what the scheduled orders need.
+  //    Shop Specialist / Shop Manager (and admins) get the targeted MRP push with specifics:
+  //    ORDER NOW / BUILD NOW when a part will run out before replenishment can land.
+  if (isAdmin || holds('Shop Specialist', 'Shop Manager', 'Shop Assistant Specialist')) {
+    try {
+      const rep = await replenishment();
+      const name = list => list[0] ? `${list[0].id}${list.length > 1 ? ` +${list.length - 1} more` : ''}` : '';
+      if (rep.critBuy.length) items.push({ key: 'order_now', icon: '🚨',
+        label: `ORDER NOW: ${name(rep.critBuy)} — will run out before a PO can land`, count: rep.critBuy.length, link: 'predict' });
+      if (rep.critMake.length) items.push({ key: 'build_now', icon: '🔨',
+        label: `BUILD NOW: ${name(rep.critMake)} — make-part(s) short for scheduled orders`, count: rep.critMake.length, link: 'predict' });
+      const soon = rep.warnBuy.length + rep.warnMake.length;
+      if (soon) items.push({ key: 'replenish_soon', icon: '🛒',
+        label: `${plural(soon, 'part')} below reorder — order or schedule builds this week`, count: soon, link: 'predict' });
+    } catch { /* MRP unavailable pre-migration — fall through to the generic count below */ }
+  } else if (has('predict') || has('pos')) {
+    // Everyone else with inventory visibility keeps the simple low-stock nudge.
     const n = await count(`SELECT COUNT(*)::int AS n FROM part WHERE on_hand < reorder`);
     if (n) items.push({ key: 'low_stock', icon: '⚠️',
       label: `${plural(n, 'part')} below reorder level`, count: n, link: 'predict' });
+  }
+
+  // 4b. Performance expectations — Shop Manager / General Manager get told when the shop
+  //     is missing the bar (on-time, build time, stuck WIP, claim rate), with the detail
+  //     one click away on the Performance screen.
+  if (isAdmin || holds('Shop Manager', 'General Manager')) {
+    try {
+      const sc = await scorecard();
+      const misses = sc.recommendations.filter(r => r.sev === 'miss');
+      if (misses.length) items.push({ key: 'perf_miss', icon: '📉',
+        label: `${plural(misses.length, 'performance expectation')} missed — ${misses[0].text.split('—')[0].trim()}`,
+        count: misses.length, link: 'performance' });
+    } catch { /* analytics unavailable — skip quietly */ }
   }
 
   // 5. Open orders due within a week (not yet shipped, past the quote stage)
