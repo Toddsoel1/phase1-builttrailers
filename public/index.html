@@ -136,6 +136,20 @@ function esc(s){ const d=document.createElement('div');d.textContent=String(s??'
 // would otherwise close the attribute early. &quot; is HTML-decoded back to " before the JS runs.
 function ja(v){ return JSON.stringify(v).replace(/"/g,'&quot;'); }
 function toast(m){const t=document.createElement('div');t.className='toast';t.textContent=m;$('toast').appendChild(t);setTimeout(()=>t.remove(),3000);}
+// ── 👁 Show/hide on every password field — auto-applied, including modals created later ──
+function pwToggle(inp){
+  if(inp.dataset.pwt)return; inp.dataset.pwt='1';
+  const wrap=document.createElement('div');
+  wrap.style.cssText='position:relative;display:inline-block;vertical-align:middle;width:'+(inp.style.width||'100%');
+  if(inp.style.width)inp.style.width='100%';
+  inp.parentNode.insertBefore(wrap,inp); wrap.appendChild(inp); inp.style.paddingRight='36px';
+  const b=document.createElement('button'); b.type='button'; b.tabIndex=-1; b.textContent='👁'; b.setAttribute('aria-label','Show password');
+  b.style.cssText='position:absolute;right:6px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;font-size:15px;opacity:.55;padding:2px 5px;line-height:1';
+  b.onclick=()=>{const s=inp.type==='password'; inp.type=s?'text':'password'; b.textContent=s?'🙈':'👁'; b.setAttribute('aria-label',s?'Hide password':'Show password'); inp.focus();};
+  wrap.appendChild(b);
+}
+document.querySelectorAll('input[type=password]').forEach(pwToggle);
+new MutationObserver(ms=>{for(const m of ms)for(const n of m.addedNodes){if(n.nodeType!==1)continue;if(n.matches&&n.matches('input[type=password]'))pwToggle(n);if(n.querySelectorAll)n.querySelectorAll('input[type=password]').forEach(pwToggle);}}).observe(document.body,{childList:true,subtree:true});
 async function api(path, opts={}){
   // Accept:json is required — without it, endpoints that content-negotiate (e.g.
   // /api/auth/qbo) fall back to a 302 redirect, which fetch follows cross-origin and

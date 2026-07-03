@@ -253,6 +253,7 @@ app.get('/u/:id', portalLimiter, async (req, res) => {
     <p style="color:#6b7785;font-size:13px;margin:4px 0 10px">Moves order ${e(u.order.id)} to <b>${e(next)}</b>. Use the shop PIN from the office.</p>
     <input id="wName" placeholder="Your name / initials" style="width:100%;border:1px solid #e2e7ec;border-radius:9px;padding:12px;font-size:16px;margin-bottom:8px">
     <input id="wPin" type="password" inputmode="numeric" placeholder="Shop PIN" style="width:100%;border:1px solid #e2e7ec;border-radius:9px;padding:12px;font-size:16px">
+    <label style="display:flex;align-items:center;gap:6px;margin-top:6px;font-size:13px;color:#6b7785"><input type="checkbox" onchange="document.getElementById('wPin').type=this.checked?'text':'password'"> Show PIN</label>
     <button onclick="adv()" style="width:100%;margin-top:10px;background:#ff7a18;color:#1a1206;border:none;padding:14px;border-radius:9px;font-weight:700;font-size:16px">${stage === 'Scheduled' ? '▶ Start Build' : `Mark ${e(stage)} complete`}</button>
     <div id="msg" style="display:none;margin-top:10px;padding:11px 13px;border-radius:9px;font-size:14px"></div>
   </div>
