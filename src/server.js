@@ -501,6 +501,7 @@ app.get('/api/health', async (_req, res) => {
   const build = {
     commit: (process.env.RENDER_GIT_COMMIT || '').slice(0, 7) || 'dev',
     branch: process.env.RENDER_GIT_BRANCH || null,
+    email: emailConfigured(), // true once RESEND_API_KEY is set — lets setup be confirmed with one curl
   };
   try {
     await q('SELECT 1');
