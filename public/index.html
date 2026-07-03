@@ -31,7 +31,10 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Ar
 .app{display:flex;min-height:100vh}
 .sidebar{width:215px;background:var(--panel);border-right:1px solid var(--line);display:flex;flex-direction:column;position:sticky;top:0;height:100vh}
 .brand{padding:18px;border-bottom:1px solid var(--line)}.brand h1{font-size:16px}.brand .t{color:var(--accent)}.brand small{color:var(--muted);font-size:11px}
-.nav{padding:10px 8px;flex:1;overflow-y:auto;min-height:0}.nav button{width:100%;text-align:left;background:none;border:none;color:var(--muted);padding:10px 12px;border-radius:8px;font-size:13.5px;margin-bottom:2px}
+.nav{padding:10px 8px 18px;flex:1;overflow-y:auto;min-height:0;scrollbar-width:thin;scrollbar-color:var(--line) transparent}
+/* Styled (always-visible) scrollbar so nav overflow is discoverable — macOS overlay scrollbars
+   hide until scrolled, which made the bottom Admin group look like it had vanished. */
+.nav::-webkit-scrollbar{width:6px}.nav::-webkit-scrollbar-thumb{background:var(--line);border-radius:3px}.nav::-webkit-scrollbar-track{background:transparent}.nav button{width:100%;text-align:left;background:none;border:none;color:var(--muted);padding:10px 12px;border-radius:8px;font-size:13.5px;margin-bottom:2px}
 .nav button:hover{background:var(--panel2);color:var(--txt)}.nav button.active{background:linear-gradient(90deg,rgba(255,122,24,.18),transparent);color:var(--txt);font-weight:600;box-shadow:inset 3px 0 0 var(--accent)}
 .nav button.navhdr{padding:11px 12px 3px;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.7px;color:#7e8b99;margin-top:5px;display:flex;justify-content:space-between;align-items:center}
 .nav button.navhdr:hover{background:none;color:#cbd5e1}.navchev{font-size:8px;opacity:.55}
@@ -104,9 +107,11 @@ a.lnk{color:var(--blue);cursor:pointer}
     <div class="brand"><h1>BUILT <span class="t">TRAILERS</span></h1><small>Phase 1 · live</small></div>
     <nav class="nav" id="nav"></nav>
     <div class="who"><div class="muted">Signed in as</div><b id="whoName"></b><span id="whoPill"></span>
-      <button class="btn sec sm" id="pushBtn" style="width:100%;margin-top:8px" onclick="enablePush('/api/push/subscribe')">🔔 Enable notifications</button>
-      <button class="btn sec sm" style="width:100%;margin-top:6px" onclick="myEmailModal()">✉️ My email</button>
-      <button class="btn sec sm" style="width:100%;margin-top:6px" onclick="logout()">Log out</button></div>
+      <div style="display:flex;gap:6px;margin-top:8px">
+        <button class="btn sec sm" id="pushBtn" style="flex:1" title="Enable notifications" onclick="enablePush('/api/push/subscribe')">🔔</button>
+        <button class="btn sec sm" style="flex:1" title="My email" onclick="myEmailModal()">✉️</button>
+        <button class="btn sec sm" style="flex:1.6" title="Log out" onclick="logout()">Log out</button>
+      </div></div>
   </aside>
   <main class="main">
     <div class="topbar"><div><h2 id="pTitle">Dashboard</h2><div class="sub" id="pSub"></div></div><div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap"><button class="btn sm sec" onclick="openSearch()" title="Search everything (Cmd+K / Ctrl+K)">🔍 <span class="muted" style="font-size:11px">⌘K</span></button><div id="pActions"></div></div></div>
@@ -3317,7 +3322,7 @@ async function enablePush(subUrl){
     if(perm!=='granted'){toast('Notifications are blocked in your browser.');return;}
     const sub=await reg.pushManager.subscribe({userVisibleOnly:true,applicationServerKey:urlB64ToUint8(vk.publicKey)});
     await api(subUrl,{method:'POST',body:JSON.stringify(sub)});
-    if(btn){btn.textContent='🔔 Notifications on ✓';btn.disabled=true;}
+    if(btn){btn.textContent='🔔✓';btn.title='Notifications on';btn.disabled=true;}
     toast('🔔 Notifications enabled');
   }catch(e){toast(e.message||'Could not enable notifications');}
 }
