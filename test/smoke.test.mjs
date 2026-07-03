@@ -522,6 +522,31 @@ test('replenishment push: Shop Manager inbox gets targeted order/build items fro
   void part;
 });
 
+test('last-admin guard: every admin but me can be demoted, but never the final one', async () => {
+  const me = (await json(await api('/api/auth/me'))).user;
+  const users = await json(await api('/api/users'));
+  const otherAdmins = users.filter(u => u.role === 'admin' && u.active !== false && u.id !== me.id);
+  const saved = otherAdmins.map(u => ({ id: u.id, titles: (u.titles && u.titles.length) ? u.titles : [u.title].filter(Boolean) }));
+  // Demote every other admin (allowed — an admin still remains: me)
+  for (const u of otherAdmins) {
+    const r = await api('/api/users/' + u.id, { method: 'PATCH', body: JSON.stringify({ titles: ['Sales'] }) });
+    assert.equal(r.status, 200, `demoting ${u.id} allowed while another admin remains`);
+  }
+  // Now I'm the last admin — demoting me must be refused
+  const lastR = await api('/api/users/' + me.id, { method: 'PATCH', body: JSON.stringify({ titles: ['Sales'] }) });
+  assert.equal(lastR.status, 400, 'demoting the last admin refused');
+  assert.match((await lastR.json()).error, /last admin/i);
+  const stillMe = (await json(await api('/api/users'))).find(u => u.id === me.id);
+  assert.equal(stillMe.role, 'admin', 'I remain admin');
+  // Restore the demoted admins (titles drive the tier back up)
+  for (const s of saved) {
+    const r = await api('/api/users/' + s.id, { method: 'PATCH', body: JSON.stringify({ titles: s.titles }) });
+    assert.equal(r.status, 200);
+  }
+  const after = await json(await api('/api/users'));
+  for (const s of saved) assert.equal(after.find(u => u.id === s.id).role, 'admin', `${s.id} restored to admin`);
+});
+
 test('customer merge: repoints orders + backfills details + deletes the duplicate; gated', async () => {
   // Two customers — the duplicate holds an order, an authorized type, and an address.
   const dup = await json(await api('/api/customers', { method: 'POST', body: JSON.stringify({ name: 'Merge Dup Co', kind: 'Dealership', address: '1 Dup St', city: 'Provo', state: 'UT', zip: '84601' }) }));

@@ -4,7 +4,7 @@
 // Every statement is idempotent (CREATE/ALTER ... IF NOT EXISTS), so it's safe to re-run.
 import { readFileSync } from 'fs';
 import { fileURLToPath } from 'url';
-import { q } from '../src/db.js';
+import { q, one } from '../src/db.js';
 
 const colMigrations = [
   `ALTER TABLE app_user ADD COLUMN IF NOT EXISTS phone TEXT`,
@@ -171,6 +171,31 @@ const colMigrations = [
   // QuickBooks customer pull so a merged-away 'qbo_*' customer can never be resurrected.
   `CREATE TABLE IF NOT EXISTS customer_merge (old_id TEXT PRIMARY KEY, new_id TEXT NOT NULL, merged_at TIMESTAMPTZ NOT NULL DEFAULT now(), merged_by TEXT)`,
 ];
+
+// Admin lockout self-heal, run at every boot. The tier dropdown on the Users screen saves
+// instantly, and user edits lazily recompute app_user.role from title tiers — so one stray
+// click on "General Manager -> editor" silently demotes the GM on their next profile edit
+// (exactly how the owner lost the Users tab in production). Invariants enforced here:
+//   1. The General Manager title is always admin tier (the app hardcodes GM as privileged).
+//   2. Anyone holding an admin-tier title has role='admin' (promote-only resync — never demotes).
+export async function ensureAdminInvariant() {
+  const gm = await one(`SELECT tier FROM role WHERE name='General Manager'`, []).catch(() => null);
+  if (gm && gm.tier !== 'admin') {
+    await q(`UPDATE role SET tier='admin' WHERE name='General Manager'`);
+    await q(`INSERT INTO audit_log(user_id,action,detail) VALUES (NULL,'role.selfheal',$1)`,
+      [`General Manager tier restored to admin (was ${gm.tier})`]).catch(() => {});
+    console.warn(`admin invariant: 'General Manager' tier was '${gm.tier}' — restored to admin`);
+  }
+  const promoted = await q(`UPDATE app_user SET role='admin'
+     WHERE role<>'admin' AND id IN (SELECT ut.user_id FROM user_title ut JOIN role r ON r.name=ut.role_name WHERE r.tier='admin')`).catch(() => null);
+  const n = promoted?.rowCount ?? promoted?.affectedRows ?? 0;
+  if (n) {
+    await q(`INSERT INTO audit_log(user_id,action,detail) VALUES (NULL,'user.selfheal',$1)`,
+      [`${n} user(s) holding an admin-tier title promoted back to admin`]).catch(() => {});
+    console.warn(`admin invariant: promoted ${n} user(s) holding an admin-tier title back to admin`);
+  }
+  return { promoted: n, gmRestored: !!(gm && gm.tier !== 'admin') };
+}
 
 export async function ensureSchema() {
   // 1) Base tables from schema.sql (split on ';' after stripping line comments).

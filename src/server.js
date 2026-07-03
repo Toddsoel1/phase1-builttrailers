@@ -13,7 +13,7 @@ import cors from 'cors';
 import rateLimit from 'express-rate-limit';
 import { createHmac, timingSafeEqual } from 'crypto';
 import { initDb, dbKind, q, all, one } from './db.js';
-import { ensureSchema } from '../db/migrate.js';
+import { ensureSchema, ensureAdminInvariant } from '../db/migrate.js';
 import { ensureDealers } from './dealerseed.js';
 import { log, captureError, initObservability, requestId, uptimeSeconds } from './observability.js';
 import { authMiddleware, requireTier, signToken, checkPassword, hashPassword } from './auth.js';
@@ -707,6 +707,12 @@ app.patch('/api/users/:id', authMiddleware, requireTier('admin'), async (req, re
   } else if (title) {
     tier = (await one('SELECT tier FROM role WHERE name=$1', [title]))?.tier || cur.role;
   }
+  // Never let the last admin be demoted — a stray tier change on a title (plus this endpoint's
+  // recompute-from-titles) is exactly how the GM locked himself out of Users & Roles.
+  if (cur.role === 'admin' && tier !== 'admin') {
+    const others = await one(`SELECT COUNT(*)::int AS n FROM app_user WHERE role='admin' AND id<>$1 AND active IS DISTINCT FROM false`, [req.params.id]);
+    if (!Number(others?.n)) return res.status(400).json({ error: 'That would remove the last admin — give someone else an admin-tier title first.' });
+  }
   const consentAt = (smsConsent === true && !cur.sms_consent) ? new Date().toISOString() : cur.sms_consent_at;
   const { name } = req.body || {};
   await q('UPDATE app_user SET name=$1,title=$2,role=$3,manager_id=$4,username=$5,phone=$6,email=$7,sms_consent=$8,sms_consent_at=$9 WHERE id=$10',
@@ -723,8 +729,13 @@ app.patch('/api/users/:id', authMiddleware, requireTier('admin'), async (req, re
 });
 app.delete('/api/users/:id', authMiddleware, requireTier('admin'), async (req, res) => {
   if (req.params.id === req.user.id) return res.status(400).json({ error: 'Cannot delete your own account' });
-  const cur = await one('SELECT name FROM app_user WHERE id=$1', [req.params.id]);
+  const cur = await one('SELECT name, role FROM app_user WHERE id=$1', [req.params.id]);
   if (!cur) return res.status(404).json({ error: 'not found' });
+  // Never remove the last admin — that's a full lockout (Users & Roles is admin-only).
+  if (cur.role === 'admin') {
+    const others = await one(`SELECT COUNT(*)::int AS n FROM app_user WHERE role='admin' AND id<>$1 AND active IS DISTINCT FROM false`, [req.params.id]);
+    if (!Number(others?.n)) return res.status(400).json({ error: 'That would remove the last admin. Promote someone else first.' });
+  }
   // Check for any transactions by this user across key tables
   const hasActivity = await one(
     `SELECT 1 FROM audit_log WHERE user_id=$1 LIMIT 1
@@ -2107,6 +2118,8 @@ await ensureSchema();
   await q(`INSERT INTO role_section(role_name, section)
              SELECT DISTINCT role_name, 'performance' FROM role_section WHERE section='orders'
              ON CONFLICT DO NOTHING`).catch(e => console.warn('performance section grant:', e.message));
+  // Un-demote anyone holding an admin-tier title + keep General Manager admin (lockout self-heal).
+  await ensureAdminInvariant().catch(e => console.warn('admin invariant:', e.message));
 console.log('Migrations applied.');
 
 try {

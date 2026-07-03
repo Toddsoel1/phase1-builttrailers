@@ -1256,7 +1256,7 @@ async function viewUsers(){
    <table><thead><tr><th>Job Title</th><th>Permission Tier</th><th>Sections</th><th></th></tr></thead><tbody>
    ${roles.map(r=>`<tr>
      <td>${esc(r.name)}</td>
-     <td><select onchange="saveRoleTier('${esc(r.name)}',this.value)" style="padding:3px 8px;border-radius:6px;border:1px solid var(--border)">
+     <td><select onchange="saveRoleTier('${esc(r.name)}',this.value,'${r.tier}')" style="padding:3px 8px;border-radius:6px;border:1px solid var(--border)">
        ${['admin','editor','viewer'].map(t=>`<option value="${t}" ${r.tier===t?'selected':''}>${t}</option>`).join('')}
      </select></td>
      <td><span class="muted" style="font-size:12px">${(r.sections||[]).length} of ${NAV.length}</span> <button class="btn sm sec" onclick='editRoleSections(${JSON.stringify(r.name)},${JSON.stringify(r.sections||[])})'>Edit access</button></td>
@@ -1342,7 +1342,8 @@ async function saveNewUser(){
     viewUsers();
   }catch(e){toast(e.message);}
 }
-async function saveRoleTier(name,tier){
+async function saveRoleTier(name,tier,oldTier){
+  if(oldTier==='admin'&&tier!=='admin'&&!confirm(`Drop "${name}" from admin to ${tier}?\n\nAnyone whose only admin title is "${name}" will lose admin access — including this Users & Roles screen — the next time their account is edited.`)){viewUsers();return;}
   try{await api('/api/roles/'+encodeURIComponent(name),{method:'PATCH',body:JSON.stringify({tier})});toast(name+' → '+tier);}
   catch(e){toast(e.message);}
 }
