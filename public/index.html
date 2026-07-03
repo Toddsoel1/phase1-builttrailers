@@ -105,6 +105,7 @@ a.lnk{color:var(--blue);cursor:pointer}
     <nav class="nav" id="nav"></nav>
     <div class="who"><div class="muted">Signed in as</div><b id="whoName"></b><span id="whoPill"></span>
       <button class="btn sec sm" id="pushBtn" style="width:100%;margin-top:8px" onclick="enablePush('/api/push/subscribe')">🔔 Enable notifications</button>
+      <button class="btn sec sm" style="width:100%;margin-top:6px" onclick="myEmailModal()">✉️ My email</button>
       <button class="btn sec sm" style="width:100%;margin-top:6px" onclick="logout()">Log out</button></div>
   </aside>
   <main class="main">
@@ -1379,6 +1380,21 @@ async function saveUserSms(id){
 async function revokeUserSms(id){
   if(!confirm('Revoke SMS consent? This employee will no longer receive SMS notifications.'))return;
   try{await api('/api/users/'+id,{method:'PATCH',body:JSON.stringify({smsConsent:false})});closeModal();toast('Consent revoked');viewUsers();}catch(e){toast(e.message);}
+}
+function myEmailModal(){
+  modal('My email',`
+    <p class="muted" style="font-size:12.5px">Where the system can reach you as email features roll out. Only you (and admins) can change it.</p>
+    <div class="field"><label>Email address</label><input id="myEmail" class="inp" type="email" value="${esc(ME.email||'')}" placeholder="you@builttrailers.app"></div>
+    <div class="row" style="gap:8px;margin-top:8px">
+      <button class="btn" onclick="saveMyEmail()">Save</button>
+      <button class="btn sec" onclick="closeModal()">Cancel</button>
+    </div>`);
+}
+async function saveMyEmail(){
+  const email=($('myEmail').value||'').trim();
+  try{ const r=await api('/api/users/me/email',{method:'POST',body:JSON.stringify({email})});
+    ME.email=r.email; closeModal(); toast(r.email?'Email saved':'Email cleared'); }
+  catch(e){ toast(e.message); }
 }
 function changePassword(id,name){
   if(!isAdmin()&&ME.id!==id)return toast('Not authorized');

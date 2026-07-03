@@ -333,6 +333,26 @@ test('VIN: print center + correction are restricted to OM/GM/Admin', async () =>
   assert.equal((await fetch(BASE + `/api/trailers/${vinUnitId}/vin`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + sales }, body: JSON.stringify({ vin: 'BLTHACKVIN0000001' }) })).status, 403, 'sales cannot change a VIN');
 });
 
+test('staff users: any user can set their OWN email without admin (self-service)', async () => {
+  const sr = await api('/api/auth/login', { method: 'POST', body: JSON.stringify({ username: 'aruiz', password: 'built2026' }) });
+  const sales = (await sr.json()).token; // Angela Ruiz — Sales, editor tier, NOT admin
+  const hdrs = { 'Content-Type': 'application/json', Authorization: 'Bearer ' + sales };
+  // Editing another user is (still) admin-only — the path that used to be the ONLY way to set email.
+  const users = await json(await api('/api/users'));
+  const other = users.find(u => u.username !== 'aruiz');
+  assert.equal((await fetch(BASE + '/api/users/' + other.id, { method: 'PATCH', headers: hdrs, body: JSON.stringify({ email: 'x@y.test' }) })).status, 403, 'editing others still admin-only');
+  // But setting your OWN email works for anyone.
+  assert.equal((await fetch(BASE + '/api/users/me/email', { method: 'POST', headers: hdrs, body: JSON.stringify({ email: 'not-an-email' }) })).status, 400, 'bad format rejected');
+  const ok = await fetch(BASE + '/api/users/me/email', { method: 'POST', headers: hdrs, body: JSON.stringify({ email: 'angela@builttrailers.app' }) });
+  assert.equal(ok.status, 200);
+  const me = users.find(u => u.username === 'aruiz');
+  const after = (await json(await api('/api/users'))).find(u => u.id === me.id);
+  assert.equal(after.email, 'angela@builttrailers.app', 'self-set email persisted');
+  // Login payload now carries it, so the UI can prefill "My email".
+  const relog = await json(await api('/api/auth/login', { method: 'POST', body: JSON.stringify({ username: 'aruiz', password: 'built2026' }) }));
+  assert.equal(relog.user.email, 'angela@builttrailers.app');
+});
+
 test('staff users: email is stored, returned, and editable', async () => {
   const r = await api('/api/users', { method: 'POST', body: JSON.stringify({ name: 'Email Test User', titles: ['Sales'], email: 'emailtest@builttrailers.app' }) });
   assert.equal(r.status, 200);

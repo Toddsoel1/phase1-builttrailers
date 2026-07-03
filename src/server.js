@@ -540,7 +540,7 @@ app.post('/api/auth/login', loginLimiter, async (req, res) => {
   const sectionRows = u.role === 'admin' ? null :
     await all(`SELECT DISTINCT rs.section FROM user_title ut JOIN role_section rs ON rs.role_name=ut.role_name WHERE ut.user_id=$1`, [u.id]);
   const sections = sectionRows ? sectionRows.map(r => r.section) : null;
-  const safe = { id: u.id, name: u.name, username: u.username, title: u.title, titles, role: u.role, manager_id: u.manager_id, sections };
+  const safe = { id: u.id, name: u.name, username: u.username, title: u.title, titles, role: u.role, manager_id: u.manager_id, sections, email: u.email || null };
   res.json({ token: signToken(u), user: safe });
 });
 app.get('/api/auth/me', authMiddleware, (req, res) => res.json({ user: req.user }));
@@ -672,6 +672,15 @@ app.post('/api/users', authMiddleware, requireTier('admin'), async (req, res) =>
   for (const rn of roleList) await q('INSERT INTO user_title(user_id,role_name) VALUES($1,$2) ON CONFLICT DO NOTHING', [id, rn]);
   await audit(req, 'user.create', `${name} (${roleList.join(', ') || 'no title'})${effectiveConsent ? ' [sms-consent]' : ''}`);
   res.json({ id, username: base });
+});
+// Self-service email — every signed-in user maintains their own contact email (mirrors the
+// self-service password change above); admins can still set anyone's via PATCH /api/users/:id.
+app.post('/api/users/me/email', authMiddleware, async (req, res) => {
+  const email = String(req.body?.email ?? '').trim();
+  if (email && !/^\S+@\S+\.\S+$/.test(email)) return res.status(400).json({ error: 'That does not look like an email address.' });
+  await q('UPDATE app_user SET email=$1 WHERE id=$2', [email || null, req.user.id]);
+  await audit(req, 'user.email', `self-set ${email || '(cleared)'}`);
+  res.json({ ok: true, email: email || null });
 });
 app.post('/api/users/me/password', authMiddleware, async (req, res) => {
   const { password } = req.body || {};
