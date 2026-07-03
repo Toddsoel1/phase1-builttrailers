@@ -79,6 +79,13 @@ export async function actionItemsFor(user) {
       label: `${plural(n, 'part')} below reorder level`, count: n, link: 'predict' });
   }
 
+  // 4a. Andon: open shop-floor problems mean someone is waiting RIGHT NOW.
+  if (isAdmin || holds('Shop Manager', 'General Manager')) {
+    const oa = await count(`SELECT COUNT(*)::int AS n FROM andon_event WHERE resolved_at IS NULL`);
+    if (oa) items.push({ key: 'andon', icon: '🚨',
+      label: `${plural(oa, 'shop-floor problem')} open — the floor is waiting`, count: oa, link: 'orders' });
+  }
+
   // 4b. Performance expectations — Shop Manager / General Manager get told when the shop
   //     is missing the bar (on-time, build time, stuck WIP, claim rate), with the detail
   //     one click away on the Performance screen.

@@ -170,6 +170,10 @@ const colMigrations = [
   // Customer-merge map: which duplicate ids were folded into which survivor. Consulted by the
   // QuickBooks customer pull so a merged-away 'qbo_*' customer can never be resurrected.
   `CREATE TABLE IF NOT EXISTS customer_merge (old_id TEXT PRIMARY KEY, new_id TEXT NOT NULL, merged_at TIMESTAMPTZ NOT NULL DEFAULT now(), merged_by TEXT)`,
+  // Andon: shop-floor problem reports (raised from the traveler QR station page). Open = the
+  // floor is waiting; resolved_at - raised_at = blocked time feeding the blocker Pareto.
+  `CREATE TABLE IF NOT EXISTS andon_event (id SERIAL PRIMARY KEY, order_id TEXT NOT NULL, unit_id TEXT, stage TEXT, reason TEXT NOT NULL, note TEXT, raised_by TEXT, raised_at TIMESTAMPTZ NOT NULL DEFAULT now(), resolved_by TEXT, resolved_at TIMESTAMPTZ, resolution TEXT)`,
+  `CREATE INDEX IF NOT EXISTS idx_andon_open ON andon_event(order_id) WHERE resolved_at IS NULL`,
 ];
 
 // Admin lockout self-heal, run at every boot. The tier dropdown on the Users screen saves

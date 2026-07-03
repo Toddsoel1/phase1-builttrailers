@@ -1189,11 +1189,34 @@ async function viewPerformance(){
       <div style="flex:1"><div style="font-size:13.5px">${esc(r.text)}</div>
         <div style="margin-top:3px"><span class="pill viewer" style="font-size:10px">${esc(r.owner)}</span> <a class="lnk" style="font-size:12px" onclick="go('${esc(r.link)}')">open →</a></div></div>
     </div>`).join('')}</div>`;
-  const cyc=`<div class="card" style="margin-bottom:16px"><h3>⏱ Stage cycle times <span class="muted" style="text-transform:none;letter-spacing:0">— avg days per stage, trailing 90 days</span></h3>
-    <table><thead><tr><th>Stage</th><th class="center">Completions</th><th class="right">Avg days</th></tr></thead><tbody>
-    ${d.cycles.map(c=>`<tr><td><b>${esc(c.stage)}</b></td><td class="center">${c.n||'—'}</td><td class="right">${c.avgDays!=null?c.avgDays:'—'}</td></tr>`).join('')}
+  const m=d.mct||{};
+  const cyc=`<div class="card" style="margin-bottom:16px"><h3>⏱ Lead time & white space (QRM) <span class="muted" style="text-transform:none;letter-spacing:0">— where orders wait instead of being worked · trailing 90 days</span></h3>
+    <div style="display:flex;gap:18px;flex-wrap:wrap;margin:6px 0 10px;font-size:13px">
+      <span><b>MCT</b> (order → Ready): <b>${m.avgMctDays!=null?m.avgMctDays+' days':'—'}</b>${m.prevAvgMctDays!=null?` <span class="muted">(was ${m.prevAvgMctDays})</span>`:''}</span>
+      ${m.qrmNumber!=null?`<span><b>QRM number:</b> <span class="badge ${m.qrmNumber<=100?'b-ok':'b-below'}">${m.qrmNumber}</span> <span class="muted">under 100 = lead time shrinking</span></span>`:''}
+      ${m.avgFlowEffPct!=null?`<span><b>Flow efficiency:</b> ${m.avgFlowEffPct}% <span class="muted">of lead time is actual work</span></span>`:''}
+    </div>
+    <table><thead><tr><th>Stage</th><th class="center">Completions</th><th class="right">Avg days in stage</th><th class="right">…of which waiting</th><th class="center">Wait share</th></tr></thead><tbody>
+    ${(m.whiteSpace||d.cycles).map(c=>`<tr><td><b>${esc(c.stage)}</b></td><td class="center">${c.n||'—'}</td>
+      <td class="right">${c.avgElapsedDays!=null?c.avgElapsedDays:(c.avgDays!=null?c.avgDays:'—')}</td>
+      <td class="right">${c.avgWaitDays!=null?c.avgWaitDays:'—'}</td>
+      <td class="center">${c.waitSharePct!=null?`<span class="badge ${c.waitSharePct>=80?'b-below':c.waitSharePct>=50?'b-low':'b-ok'}">${c.waitSharePct}%</span>`:'—'}</td></tr>`).join('')}
     </tbody></table>
-    <p class="muted" style="font-size:11px;margin-top:8px">Data accrues from every stage completion (Daily Update, Production Flow, and shop-floor QR scans).</p></div>`;
+    <p class="muted" style="font-size:11px;margin-top:8px">Elapsed time comes from stage completions (Production Flow, Daily Update, shop-floor QR); "actual work" comes from Daily Update hours. High wait share = queue, not effort — cap WIP there.</p></div>`;
+  const an=d.andon||{open:[],pareto:[]};
+  const andonCard=`${an.open.length?`<div class="card" style="margin-bottom:16px;border-color:#c0392b"><h3>🚨 Open shop-floor problems <span class="badge b-below">${an.open.length}</span></h3>
+    <table><thead><tr><th>Order</th><th>Model</th><th>Problem</th><th>Raised by</th><th class="right">Hours open</th><th></th></tr></thead><tbody>
+    ${an.open.map(a=>`<tr><td><b>${esc(a.orderId)}</b></td><td>${esc(a.model||'')}</td>
+      <td>${esc(a.reason)}${a.note?`<br><span class="muted" style="font-size:11px">${esc(a.note)}</span>`:''}</td>
+      <td class="muted" style="font-size:12px">${esc(a.raisedBy||'—')}</td>
+      <td class="right" style="color:var(--red)">${a.hoursOpen}</td>
+      <td><button class="btn sm sec" onclick="orderDetail('${esc(a.orderId)}')">View</button></td></tr>`).join('')}
+    </tbody></table></div>`:''}
+    ${an.pareto.length?`<div class="card" style="margin-bottom:16px"><h3>🧱 Blocker Pareto <span class="muted" style="text-transform:none;letter-spacing:0">— what stops the floor, by hours lost · trailing 90 days</span></h3>
+    <table><thead><tr><th>Reason</th><th class="center">Times raised</th><th class="center">Still open</th><th class="right">Blocked hours</th></tr></thead><tbody>
+    ${an.pareto.map(p=>`<tr><td><b>${esc(p.reason)}</b></td><td class="center">${p.events}</td><td class="center">${p.open||'—'}</td><td class="right">${p.blockedHours}</td></tr>`).join('')}
+    </tbody></table>
+    <p class="muted" style="font-size:11px;margin-top:8px">Workers raise problems by scanning the traveler QR — the top row here is the first waste to attack.</p></div>`:''}`;
   const aging=d.aging.length?`<div class="card" style="margin-bottom:16px"><h3>🧊 Stuck in a stage <span class="badge b-below">${d.aging.length}</span> <span class="muted" style="text-transform:none;letter-spacing:0">— longer than ${d.targets.staleWipDays} days without moving</span></h3>
     <table><thead><tr><th>Order</th><th>Model</th><th>Stage</th><th class="right">Days there</th><th>Due</th><th></th></tr></thead><tbody>
     ${d.aging.map(a=>`<tr><td><b>${esc(a.id)}</b></td><td>${esc(a.model||'')}</td><td>${esc(a.stage)}</td>
@@ -1220,7 +1243,7 @@ async function viewPerformance(){
     </div>
     <button class="btn" onclick="savePerfTargets()">Save expectations</button>
     <p class="muted" style="font-size:11px;margin-top:8px">Misses land in the Shop Manager's and GM's Action Inbox automatically; part shortages land in the Shop Specialist's.</p></div>`:'';
-  $('content').innerHTML=`<div class="grid g4" style="margin-bottom:16px">${kpiCards}</div>${recs}${repCard}${cyc}${aging}${targetsCard}`;
+  $('content').innerHTML=`<div class="grid g4" style="margin-bottom:16px">${kpiCards}</div>${andonCard}${recs}${repCard}${cyc}${aging}${targetsCard}`;
 }
 async function savePerfTargets(){
   const body={onTimePct:$('ptOnTime').value,maxAvgBuildDays:$('ptBuild').value,staleWipDays:$('ptStale').value,maxClaimRatePct:$('ptClaim').value};
@@ -1517,8 +1540,9 @@ function stageBadge(s){const m={'Quote':'b-low','Confirmed':'b-buy','Scheduled':
 async function viewOrders(){
   $('pTitle').textContent='Production Flow';
   $('pSub').textContent=ordView==='queue'?('Production priority — '+(canReorder()?'use ↑ ↓ to resequence':'read-only')):('Production Flow pipeline — '+(canEdit()?'drag a card to change its stage':'read-only'));
-  $('pActions').innerHTML=canSell()?`<button class="btn" onclick="go('neworder')">➕ New Order</button>`:'';
-  const {stages,orders}=await api('/api/orders');
+  $('pActions').innerHTML=(canEdit()?`<button class="btn sm sec" onclick="wipLimitsModal()" title="Cap how many orders may sit in each production stage">🚧 WIP limits</button> `:'')+(canSell()?`<button class="btn" onclick="go('neworder')">➕ New Order</button>`:'');
+  const {stages,orders,wipLimits={}}=await api('/api/orders');
+  window._wipLimits=wipLimits;
   const live=orders.filter(o=>!o.billed && o.stage!=='Cancelled'); // invoiced + rejected drop off the board
   const rejected=orders.filter(o=>o.stage==='Cancelled');
   const viewToggle=`<div class="tabs" style="margin-bottom:12px"><button class="${ordView==='board'?'active':''}" onclick="ordView='board';viewOrders()">🗂️ Board</button><button class="${ordView==='queue'?'active':''}" onclick="ordView='queue';viewOrders()">🏭 Production Queue</button>${rejected.length?`<button class="${ordView==='rejected'?'active':''}" onclick="ordView='rejected';viewOrders()">🚫 Rejected <span style="opacity:.7">${rejected.length}</span></button>`:''}</div>`;
@@ -1529,9 +1553,9 @@ async function viewOrders(){
   const tabs=`<div class="tabs">${types.map(t=>`<button class="${ordFilter===t?'active':''}" onclick="ordFilter='${t}';viewOrders()">${t}<span style="opacity:.7;margin-left:5px">${t==='All'?live.length:live.filter(o=>o.type===t).length}</span></button>`).join('')}</div>`;
   const board=`<div class="kanban">${stages.map(st=>`
     <div class="col" ondragover="event.preventDefault();this.classList.add('over')" ondragleave="this.classList.remove('over')" ondrop="dropOrder(event,'${st}')">
-      <h4>${esc(st)}<span>${filtered.filter(o=>o.stage===st).length}</span></h4>
+      <h4>${esc(st)}${(()=>{const n=filtered.filter(o=>o.stage===st).length,lim=wipLimits[st];return lim?`<span style="${n>lim?'background:#c0392b;color:#fff;border-radius:9px;padding:0 7px;font-weight:700':''}" title="WIP limit ${lim}">${n}/${lim}${n>lim?' ⚠':''}</span>`:`<span>${n}</span>`;})()}</h4>
       ${filtered.filter(o=>o.stage===st).map(o=>`<div class="ocard" draggable="${canEdit()}" ondragstart="window._drag='${o.id}'" onclick="orderDetail('${o.id}')">
-        <div class="t"><span>${o.id}</span><span>${money(o.revenue)}</span></div>
+        <div class="t"><span>${o.andonOpen?'<span title="shop-floor problem open">🔴</span> ':''}${o.id}</span><span>${money(o.revenue)}</span></div>
         <div>${o.qty}× ${o.model}</div>
         <div class="muted" style="font-size:11px">${o.customer} · <span class="badge b-buy">${o.type}</span></div></div>`).join('')}
     </div>`).join('')}</div>`;
@@ -1541,6 +1565,30 @@ async function viewOrders(){
    ${Array.from(new Set(live.map(o=>o.type))).map(t=>{const os=live.filter(o=>o.type===t);return `<tr><td><b>${t}</b></td><td class="right">${os.length}</td><td class="right">${os.reduce((a,o)=>a+o.qty,0)}</td><td class="right">${money(os.reduce((a,o)=>a+o.revenue,0))}</td></tr>`;}).join('')}
    </tbody></table></div>`;
   $('content').innerHTML=viewToggle+tabs+board+summary;
+}
+async function resolveAndon(id,orderId){
+  const resolution=prompt('How was it resolved? (optional — leave blank to just clear it)');
+  if(resolution===null)return; // cancelled
+  try{ await api('/api/andon/'+id+'/resolve',{method:'POST',body:JSON.stringify({resolution:resolution.trim()||undefined})});
+    toast('Problem resolved'); closeModal(); orderDetail(orderId); }
+  catch(e){ toast(e.message); }
+}
+function wipLimitsModal(){
+  const lim=window._wipLimits||{};
+  const stages=['Scheduled','Build','Paint/Powder Coat','Finish'];
+  modal('🚧 WIP limits — cap each stage',`
+    <p class="muted" style="font-size:12.5px;line-height:1.5">The kanban rule: when a stage is at its limit, <b>finish before starting</b>. Less work-in-progress = shorter lead times (and the Performance screen pushes the Shop Manager when a limit is breached). Blank = no limit.</p>
+    ${stages.map((s,i)=>`<div class="field"><label>${esc(s)} — max orders</label><input id="wl${i}" class="inp" type="number" min="0" value="${lim[s]||''}" placeholder="no limit"></div>`).join('')}
+    <div class="row" style="gap:8px;margin-top:8px">
+      <button class="btn" onclick="saveWipLimits()">Save limits</button>
+      <button class="btn sec" onclick="closeModal()">Cancel</button>
+    </div>`);
+}
+async function saveWipLimits(){
+  const stages=['Scheduled','Build','Paint/Powder Coat','Finish'];
+  const body={}; stages.forEach((s,i)=>{const v=Number($('wl'+i).value); if(v>0)body[s]=v;});
+  try{ await api('/api/wip-limits',{method:'POST',body:JSON.stringify(body)}); closeModal(); toast('WIP limits saved'); viewOrders(); }
+  catch(e){ toast(e.message); }
 }
 function renderQueue(orders){
   const q=orders.filter(o=>o.stage!=='Ready' && !o.billed).sort((a,b)=>(a.prodSeq??1e9)-(b.prodSeq??1e9));
@@ -1588,6 +1636,10 @@ async function orderDetail(id){
   modal(o.id+' — '+(o.customer||'(no customer)'),`
     <div style="margin-bottom:10px"><span class="badge b-buy">${esc(o.type)}</span> <span class="muted">${o.qty}× ${esc(o.model)} · ${esc(o.stage)} · due ${o.due||'—'}</span></div>
     ${o.cancelReason?`<div style="background:rgba(192,57,43,.14);border:1px solid rgba(192,57,43,.35);border-radius:8px;padding:8px 11px;font-size:13px;margin-bottom:10px;color:#f0a0a0">🚫 Rejected: ${esc(o.cancelReason)}</div>`:''}
+    ${(o.andons||[]).filter(a=>!a.resolved).map(a=>`<div style="background:rgba(192,57,43,.14);border:1px solid rgba(192,57,43,.35);border-radius:8px;padding:8px 11px;font-size:13px;margin-bottom:10px">
+      🚨 <b>${esc(a.reason)}</b>${a.raisedBy?` — ${esc(a.raisedBy)}`:''}${a.note?`: ${esc(a.note)}`:''} <span class="muted">(${a.blockedHours}h open)</span>
+      ${canEdit()?`<button class="btn sm" style="margin-left:8px" onclick="resolveAndon(${a.id},'${o.id}')">✓ Resolve</button>`:''}
+    </div>`).join('')}
     <div class="grid g4" style="grid-template-columns:1fr 1fr;margin-bottom:12px">
       ${kpi('Revenue',money(o.revenue),'')}${kpi('Rep',o.rep||'—','')}</div>
     ${o.note?`<div class="muted" style="font-size:12.5px;margin-bottom:10px">📝 ${esc(o.note)}</div>`:''}

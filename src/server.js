@@ -47,6 +47,7 @@ import { geocodeAddress } from './geocode.js';
 import { emailConfigured } from './email.js';
 import { runReminders } from './reminders.js';
 import * as analytics from './analytics.js';
+import * as andon from './andon.js';
 
 // Crash fast if JWT_SECRET is unset in production — predictable fallback is a critical vuln
 if (!process.env.JWT_SECRET) {
@@ -248,29 +249,58 @@ app.get('/u/:id', portalLimiter, async (req, res) => {
   const boatRows = u.boat ? (u.boat.options || []).map(o =>
     `<div style="display:flex;justify-content:space-between;gap:10px;padding:6px 0;border-bottom:1px solid #f0f2f5;font-size:14px">
        <span style="color:#6b7785">${e(o.group)}</span><b style="text-align:right">${e(o.choice)}</b></div>`).join('') : '';
-  const actionCard = !u.order ? '' : canAdvance ? `
+  const openProbs = u.order
+    ? await all(`SELECT id, reason, raised_at FROM andon_event WHERE order_id=$1 AND resolved_at IS NULL ORDER BY raised_at`, [u.order.id]).catch(() => [])
+    : [];
+  const probBanner = openProbs.length ? `
+  <div style="background:#fdecea;border:1px solid #f5c3bc;border-radius:14px;padding:14px 16px;margin-top:16px;color:#c0392b;font-size:14px">
+    <b>⚠ Problem open</b> — the office has been alerted.
+    ${openProbs.map(p => `<div style="margin-top:4px">${e(p.reason)} · ${Math.round((Date.now() - new Date(p.raised_at)) / 360000) / 10}h ago</div>`).join('')}
+  </div>` : '';
+  const reasonOpts = andon.ANDON_REASONS.map(r => `<option>${e(r)}</option>`).join('');
+  const statusLine = !stage ? '' : canAdvance ? '' : stage === 'Ready'
+    ? `<p style="color:#1a7f4b;font-weight:600;margin-top:14px">✅ Production complete.</p>`
+    : FLOOR_STAGES.includes(stage) && !pinSet ? ''
+    : `<p style="color:#6b7785;font-size:13px;margin-top:14px">Waiting to be scheduled — the office advances this stage.</p>`;
+  const actionCard = !u.order ? '' : pinSet ? `
+  ${statusLine}
   <div style="background:#fff;border:1px solid #e2e7ec;border-radius:14px;padding:18px;margin-top:16px">
-    <b style="font-size:15px">${stage === 'Scheduled' ? '▶ Start the build' : `✓ Mark ${e(stage)} complete`}</b>
-    <p style="color:#6b7785;font-size:13px;margin:4px 0 10px">Moves order ${e(u.order.id)} to <b>${e(next)}</b>. Use the shop PIN from the office.</p>
+    ${canAdvance ? `<b style="font-size:15px">${stage === 'Scheduled' ? '▶ Start the build' : `✓ Mark ${e(stage)} complete`}</b>
+    <p style="color:#6b7785;font-size:13px;margin:4px 0 10px">Moves order ${e(u.order.id)} to <b>${e(next)}</b>. Use the shop PIN from the office.</p>` : `<b style="font-size:15px">Station actions</b>
+    <p style="color:#6b7785;font-size:13px;margin:4px 0 10px">Use the shop PIN from the office.</p>`}
     <input id="wName" placeholder="Your name / initials" style="width:100%;border:1px solid #e2e7ec;border-radius:9px;padding:12px;font-size:16px;margin-bottom:8px">
     <input id="wPin" type="password" inputmode="numeric" placeholder="Shop PIN" style="width:100%;border:1px solid #e2e7ec;border-radius:9px;padding:12px;font-size:16px">
     <label style="display:flex;align-items:center;gap:6px;margin-top:6px;font-size:13px;color:#6b7785"><input type="checkbox" onchange="document.getElementById('wPin').type=this.checked?'text':'password'"> Show PIN</label>
-    <button onclick="adv()" style="width:100%;margin-top:10px;background:#ff7a18;color:#1a1206;border:none;padding:14px;border-radius:9px;font-weight:700;font-size:16px">${stage === 'Scheduled' ? '▶ Start Build' : `Mark ${e(stage)} complete`}</button>
+    ${canAdvance ? `<button onclick="adv()" style="width:100%;margin-top:10px;background:#ff7a18;color:#1a1206;border:none;padding:14px;border-radius:9px;font-weight:700;font-size:16px">${stage === 'Scheduled' ? '▶ Start Build' : `Mark ${e(stage)} complete`}</button>` : ''}
+    <div style="border-top:1px solid #eef1f4;margin:14px 0 10px"></div>
+    <b style="font-size:14px">🚨 Problem? Tell the office instantly</b>
+    <select id="wReason" style="width:100%;border:1px solid #e2e7ec;border-radius:9px;padding:12px;font-size:16px;margin-top:8px;background:#fff">${reasonOpts}</select>
+    <input id="wNote" placeholder="What's going on? (optional)" style="width:100%;border:1px solid #e2e7ec;border-radius:9px;padding:12px;font-size:16px;margin-top:8px">
+    <button onclick="prob()" style="width:100%;margin-top:10px;background:#fff;color:#c0392b;border:2px solid #c0392b;padding:12px;border-radius:9px;font-weight:700;font-size:15px">Report problem</button>
     <div id="msg" style="display:none;margin-top:10px;padding:11px 13px;border-radius:9px;font-size:14px"></div>
   </div>
   <script>
     var $=function(i){return document.getElementById(i)};
     $('wName').value=localStorage.getItem('shopWorker')||''; $('wPin').value=localStorage.getItem('shopPin')||'';
     function say(ok,t){var m=$('msg');m.style.display='block';m.style.background=ok?'#e8f6ee':'#fdecea';m.style.color=ok?'#1a7f4b':'#c0392b';m.textContent=t;}
+    function saveCreds(){localStorage.setItem('shopWorker',$('wName').value.trim()); localStorage.setItem('shopPin',$('wPin').value);}
+    async function post(path,body){
+      var r=await fetch(path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+      var d=await r.json().catch(function(){return{}});
+      if(!r.ok){ if(r.status===401)localStorage.removeItem('shopPin'); throw new Error(d.error||('Error '+r.status)); }
+      return d;
+    }
     async function adv(){
-      localStorage.setItem('shopWorker',$('wName').value.trim()); localStorage.setItem('shopPin',$('wPin').value);
-      try{
-        var r=await fetch(location.pathname+'/advance',{method:'POST',headers:{'Content-Type':'application/json'},
-          body:JSON.stringify({pin:$('wPin').value,worker:$('wName').value.trim()})});
-        var d=await r.json().catch(function(){return{}});
-        if(!r.ok){ if(r.status===401)localStorage.removeItem('shopPin'); return say(false,d.error||('Error '+r.status)); }
+      saveCreds();
+      try{ var d=await post(location.pathname+'/advance',{pin:$('wPin').value,worker:$('wName').value.trim()});
         say(true,'Done — now "'+d.stage+'". Reloading…'); setTimeout(function(){location.reload()},1200);
-      }catch(err){ say(false,'Network error — try again.'); }
+      }catch(err){ say(false,err.message); }
+    }
+    async function prob(){
+      saveCreds();
+      try{ await post(location.pathname+'/problem',{pin:$('wPin').value,worker:$('wName').value.trim(),reason:$('wReason').value,note:$('wNote').value.trim()});
+        say(true,'Reported — the Shop Manager has been alerted. Reloading…'); setTimeout(function(){location.reload()},1400);
+      }catch(err){ say(false,err.message); }
     }
   </script>` : (stage && FLOOR_STAGES.includes(stage) ? `
   <p style="color:#6b7785;font-size:13px;margin-top:14px">🔒 Shop-floor updates aren't enabled yet — ask the office to set a shop PIN (Print Center).</p>` : stage === 'Ready' ? `
@@ -290,6 +320,7 @@ app.get('/u/:id', portalLimiter, async (req, res) => {
     <b style="font-size:15px">🚤 ${e(u.boat.model || 'Boat build')}${u.boat.year ? ' · ' + e(u.boat.year) : ''}${u.boat.length ? ' · ' + e(u.boat.length) + "'" : ''}</b>
     <div style="margin-top:6px">${boatRows || '<p style="color:#6b7785;font-size:13px">No options recorded.</p>'}</div>
   </div>` : ''}
+  ${probBanner}
   ${actionCard}
 </div></body>`);
 });
@@ -309,6 +340,21 @@ app.post('/u/:id/advance', loginLimiter, async (req, res) => {
     const next = STAGES[STAGES.indexOf(cur.stage) + 1];
     await applyOrderStage(unit.order_id, cur, next, null, `shop floor${worker ? ': ' + String(worker).slice(0, 40) : ''}`);
     res.json({ ok: true, stage: next });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+// Andon from the same station page: PIN-gated problem report. No stage gate — a problem can be
+// discovered any time (even on a Ready unit). Pushes the Shop Manager / GM instantly.
+app.post('/u/:id/problem', loginLimiter, async (req, res) => {
+  try {
+    const { pin, worker, reason, note } = req.body || {};
+    const pinHash = (await one(`SELECT value FROM app_config WHERE key='shop_pin'`, []).catch(() => null))?.value;
+    if (!pinHash) return res.status(503).json({ error: 'Shop-floor updates are not enabled. Ask the office to set a shop PIN.' });
+    if (!pin || !checkPassword(String(pin), pinHash)) return res.status(401).json({ error: 'Wrong PIN.' });
+    if (!reason) return res.status(400).json({ error: 'Pick what the problem is.' });
+    const r = await andon.raiseProblem(req.params.id, { reason, note, worker });
+    await q('INSERT INTO audit_log(user_id,action,detail) VALUES (NULL,$1,$2)',
+      ['andon.raise', `#${r.id} ${r.orderId}: ${reason}${worker ? ` (shop floor: ${String(worker).slice(0, 40)})` : ''}`]).catch(() => {});
+    res.json(r);
   } catch (e) { res.status(400).json({ error: e.message }); }
 });
 app.get('/api/public/trailer/:vin', portalLimiter, async (req, res) => {
@@ -1171,7 +1217,22 @@ app.post('/api/dealer-accounts/:id/reset-password', authMiddleware, requireSales
 });
 
 // ---- orders / fulfillment (Phase 2) ----
-app.get('/api/orders', authMiddleware, async (_req, res) => res.json({ stages: STAGES, orders: await ordersFull() }));
+app.get('/api/orders', authMiddleware, async (_req, res) =>
+  res.json({ stages: STAGES, orders: await ordersFull(), wipLimits: await analytics.getWipLimits() }));
+// Per-stage WIP limits (kanban) — Shop Manager's lever, so editor tier with orders access.
+app.post('/api/wip-limits', authMiddleware, requireTier('editor'), requireSection('orders'), async (req, res) => {
+  const limits = await analytics.setWipLimits(req.body || {});
+  await audit(req, 'wip.limits', JSON.stringify(limits));
+  res.json({ ok: true, limits });
+});
+// Resolve a shop-floor problem (raised from the traveler QR station page).
+app.post('/api/andon/:id/resolve', authMiddleware, requireTier('editor'), requireSection('orders'), async (req, res) => {
+  try {
+    const r = await andon.resolveProblem(Number(req.params.id), req.body?.resolution, req.user.id);
+    await audit(req, 'andon.resolve', `#${req.params.id}${req.body?.resolution ? ': ' + String(req.body.resolution).slice(0, 80) : ''}`);
+    res.json(r);
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
 app.get('/api/orders/:id', authMiddleware, async (req, res) => {
   const o = (await ordersFull()).find(x => x.id === req.params.id);
   if (!o) return res.status(404).json({ error: 'not found' });
@@ -1181,6 +1242,7 @@ app.get('/api/orders/:id', authMiddleware, async (req, res) => {
   o.note = extra?.note || null;
   o.cancelReason = extra?.cancel_reason || null;
   o.build = await boatbuilder.orderBuild(req.params.id).catch(() => null); // boat-build config, if any
+  o.andons = await andon.problemsForOrder(req.params.id).catch(() => []);  // shop-floor problems (open + recent)
   res.json(o);
 });
 app.post('/api/orders', authMiddleware, requireSales, async (req, res) => {

@@ -547,6 +547,50 @@ test('last-admin guard: every admin but me can be demoted, but never the final o
   for (const s of saved) assert.equal(after.find(u => u.id === s.id).role, 'admin', `${s.id} restored to admin`);
 });
 
+test('lean/QRM: WIP limits breach pushes SM, andon flows QR->board->resolve->Pareto, MCT computed', async () => {
+  // -- WIP limits: two orders into Scheduled, cap at 1 -> violation + recommendation
+  const model = (await json(await api('/api/models')))[0];
+  const cust = await json(await api('/api/customers', { method: 'POST', body: JSON.stringify({ name: 'QRM Test Dealer', kind: 'Dealership' }) }));
+  await api('/api/customers/' + cust.id + '/types', { method: 'PATCH', body: JSON.stringify({ type: model.category, on: true }) });
+  const o1 = await json(await api('/api/orders', { method: 'POST', body: JSON.stringify({ customerId: cust.id, modelId: model.id, qty: 1 }) }));
+  const o2 = await json(await api('/api/orders', { method: 'POST', body: JSON.stringify({ customerId: cust.id, modelId: model.id, qty: 1 }) }));
+  await api('/api/orders/' + o1.id + '/stage', { method: 'PATCH', body: JSON.stringify({ stage: 'Scheduled' }) });
+  await api('/api/orders/' + o2.id + '/stage', { method: 'PATCH', body: JSON.stringify({ stage: 'Scheduled' }) });
+  await api('/api/wip-limits', { method: 'POST', body: JSON.stringify({ 'Scheduled': 1 }) });
+  const board = await json(await api('/api/orders'));
+  assert.equal(board.wipLimits['Scheduled'], 1, 'limit rides the board payload');
+  let sc = await json(await api('/api/performance'));
+  assert.ok(sc.wip.violations.some(v => v.stage === 'Scheduled' && v.count >= 2 && v.limit === 1), 'breach detected');
+  assert.ok(sc.recommendations.some(r => r.owner === 'Shop Manager' && r.text.includes('WIP over limit in Scheduled')), 'breach pushed as an owned recommendation');
+
+  // -- MCT: this suite's own stage moves produced completions; white-space rows for all stages
+  assert.ok(Array.isArray(sc.mct.whiteSpace) && sc.mct.whiteSpace.length === 4, 'white-space table covers the four production stages');
+  assert.ok(sc.mct.orders.length >= 1 && typeof sc.mct.avgMctDays === 'number', 'MCT computed from real completions');
+
+  // -- Andon: PIN-gated raise from the station page -> board flag -> inbox -> resolve -> Pareto
+  await api('/api/admin/shop-pin', { method: 'POST', body: JSON.stringify({ pin: '4455' }) });
+  const unit = (await json(await api('/api/search?q=BLTTESTVIN0000099'))).units[0];
+  const bad = await fetch(BASE + '/u/' + unit.id + '/problem', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pin: '0000', reason: 'Machine down' }) });
+  assert.equal(bad.status, 401, 'wrong PIN rejected');
+  const raise = await fetch(BASE + '/u/' + unit.id + '/problem', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pin: '4455', worker: 'JT', reason: 'Waiting on parts', note: 'no axles' }) });
+  assert.equal(raise.status, 200);
+  const { id: andonId, orderId } = await raise.json();
+  assert.equal((await json(await api('/api/orders'))).orders.find(o => o.id === orderId).andonOpen, 1, 'board card flagged 🔴');
+  assert.match(await (await fetch(BASE + '/u/' + unit.id)).text(), /Problem open/i, 'station page shows the open-problem banner');
+  const mr = await api('/api/auth/login', { method: 'POST', body: JSON.stringify({ username: 'mchen', password: 'built2026' }) });
+  const inbox = await json(await fetch(BASE + '/api/inbox', { headers: { Authorization: 'Bearer ' + (await mr.json()).token } }));
+  assert.ok(inbox.items.some(i => i.key === 'andon'), 'Shop Manager inbox carries the open problem');
+  const detail = await json(await api('/api/orders/' + orderId));
+  assert.ok(detail.andons.some(a => a.id === andonId && !a.resolved), 'order detail lists it');
+  assert.equal((await api('/api/andon/' + andonId + '/resolve', { method: 'POST', body: JSON.stringify({ resolution: 'axles arrived' }) })).status, 200);
+  assert.equal((await json(await api('/api/orders'))).orders.find(o => o.id === orderId).andonOpen, 0, 'flag clears on resolve');
+  sc = await json(await api('/api/performance'));
+  assert.ok(sc.andon.pareto.some(p => p.reason === 'Waiting on parts' && p.events >= 1 && p.blockedHours >= 0), 'blocker Pareto tallies the event');
+  // cleanup so later tests see a quiet shop
+  await api('/api/admin/shop-pin', { method: 'POST', body: JSON.stringify({ pin: '' }) });
+  await api('/api/wip-limits', { method: 'POST', body: '{}' });
+});
+
 test('customer merge: repoints orders + backfills details + deletes the duplicate; gated', async () => {
   // Two customers — the duplicate holds an order, an authorized type, and an address.
   const dup = await json(await api('/api/customers', { method: 'POST', body: JSON.stringify({ name: 'Merge Dup Co', kind: 'Dealership', address: '1 Dup St', city: 'Provo', state: 'UT', zip: '84601' }) }));

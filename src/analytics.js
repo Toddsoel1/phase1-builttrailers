@@ -9,8 +9,89 @@
 // expectations" means the bar is explicit, visible, and adjustable as the shop matures.
 import { all, one, q } from './db.js';
 import { mrp } from './mrp.js';
+import { openProblems, blockerPareto } from './andon.js';
 
 const PROD_STAGES = ['Scheduled', 'Build', 'Paint/Powder Coat', 'Finish'];
+
+// ---- WIP limits (kanban/CONWIP): cap how many orders may sit in a production stage ----
+export async function getWipLimits() {
+  const row = await one(`SELECT value FROM app_config WHERE key='wip_limits'`, []).catch(() => null);
+  try { return row ? JSON.parse(row.value) : {}; } catch { return {}; }
+}
+export async function setWipLimits(body) {
+  const next = {};
+  for (const s of PROD_STAGES) {
+    const v = Number(body?.[s]);
+    if (v > 0) next[s] = Math.floor(v); // 0/blank = no limit for that stage
+  }
+  await q(`INSERT INTO app_config(key,value) VALUES('wip_limits',$1) ON CONFLICT(key) DO UPDATE SET value=$1`, [JSON.stringify(next)]);
+  return next;
+}
+async function wipState() {
+  const limits = await getWipLimits();
+  const rows = await all(`SELECT stage, COUNT(*)::int AS n FROM sales_order
+                           WHERE stage = ANY($1) AND billed = false GROUP BY stage`, [PROD_STAGES]).catch(() => []);
+  const counts = Object.fromEntries(rows.map(r => [r.stage, Number(r.n)]));
+  const violations = PROD_STAGES.filter(s => limits[s] && (counts[s] || 0) > limits[s])
+    .map(s => ({ stage: s, count: counts[s] || 0, limit: limits[s] }));
+  return { limits, counts, violations };
+}
+
+// ---- MCT (QRM): calendar lead time split into touch time vs white space ----
+// MCT = order placed -> Ready (calendar days). Touch = logged work_log hours. Flow efficiency =
+// touch / total elapsed (calendar hours) — deliberately calendar-based, per QRM's MCT definition.
+async function mctAnalytics() {
+  const done = await all(`
+    SELECT d.order_id, d.completed_at AS ready_at, o.created_at, m.name AS model
+      FROM order_stage_done d JOIN sales_order o ON o.id=d.order_id
+      LEFT JOIN model m ON m.id=o.model_id
+     WHERE d.stage='Finish' AND d.completed_at > now() - INTERVAL '90 days'
+     ORDER BY d.completed_at`, []).catch(() => []);
+  const touchRows = await all(`SELECT order_id, COALESCE(SUM(hours),0) AS h FROM work_log GROUP BY order_id`, []).catch(() => []);
+  const touchByOrder = Object.fromEntries(touchRows.map(r => [r.order_id, Number(r.h)]));
+  const half = Date.now() - 45 * day;
+  let curSum = 0, curN = 0, prevSum = 0, prevN = 0, effSum = 0, effN = 0;
+  const orders = done.map(r => {
+    const mctDays = Math.max(0, Math.round(days(r.ready_at, r.created_at) * 10) / 10);
+    const touchHours = Math.round((touchByOrder[r.order_id] || 0) * 10) / 10;
+    const flowEffPct = mctDays > 0 && touchHours > 0 ? Math.round((touchHours / (mctDays * 24)) * 1000) / 10 : null;
+    if (new Date(r.ready_at) >= half) { curSum += mctDays; curN++; } else { prevSum += mctDays; prevN++; }
+    if (flowEffPct != null) { effSum += flowEffPct; effN++; }
+    return { orderId: r.order_id, model: r.model, mctDays, touchHours, flowEffPct };
+  });
+  // White space per stage: elapsed stage time minus hours actually worked in that stage.
+  const stamps = await all(`SELECT order_id, stage, completed_at FROM order_stage_done
+                             WHERE completed_at > now() - INTERVAL '90 days' ORDER BY order_id, completed_at`, []).catch(() => []);
+  const stageTouchRows = await all(`SELECT order_id, stage, COALESCE(SUM(hours),0) AS h FROM work_log GROUP BY order_id, stage`, []).catch(() => []);
+  const stageTouch = {};
+  for (const r of stageTouchRows) stageTouch[`${r.order_id}|${r.stage}`] = Number(r.h);
+  const prev = {}, agg = {};
+  for (const r of stamps) {
+    if (prev[r.order_id]) {
+      const elapsed = days(r.completed_at, prev[r.order_id]);
+      if (elapsed >= 0 && elapsed < 120 && PROD_STAGES.includes(r.stage)) {
+        const touchD = (stageTouch[`${r.order_id}|${r.stage}`] || 0) / 24;
+        const g = (agg[r.stage] = agg[r.stage] || { elapsed: 0, wait: 0, n: 0 });
+        g.elapsed += elapsed; g.wait += Math.max(0, elapsed - touchD); g.n++;
+      }
+    }
+    prev[r.order_id] = r.completed_at;
+  }
+  const whiteSpace = PROD_STAGES.map(s => agg[s] ? {
+    stage: s, n: agg[s].n,
+    avgElapsedDays: Math.round((agg[s].elapsed / agg[s].n) * 10) / 10,
+    avgWaitDays: Math.round((agg[s].wait / agg[s].n) * 10) / 10,
+    waitSharePct: agg[s].elapsed > 0 ? Math.round((agg[s].wait / agg[s].elapsed) * 100) : null,
+  } : { stage: s, n: 0, avgElapsedDays: null, avgWaitDays: null, waitSharePct: null });
+  const avgMctDays = curN ? Math.round((curSum / curN) * 10) / 10 : null;
+  const prevAvgMctDays = prevN ? Math.round((prevSum / prevN) * 10) / 10 : null;
+  return {
+    orders, whiteSpace, avgMctDays, prevAvgMctDays,
+    // QRM number: current MCT as % of the prior period — under 100 means lead time is shrinking.
+    qrmNumber: avgMctDays != null && prevAvgMctDays ? Math.round((avgMctDays / prevAvgMctDays) * 100) : null,
+    avgFlowEffPct: effN ? Math.round((effSum / effN) * 10) / 10 : null,
+  };
+}
 
 export const DEFAULT_TARGETS = {
   onTimePct: 90,        // % of orders reaching Ready on or before their due date
@@ -128,10 +209,11 @@ export async function replenishment() {
 
 // The whole scorecard: KPIs vs targets, plus generated "areas for improvement" with owners.
 export async function scorecard() {
-  const [targets, cycles, aging, done, qual, rep, pastDueRow] = await Promise.all([
+  const [targets, cycles, aging, done, qual, rep, pastDueRow, mct, wip, andonOpen, andonTop] = await Promise.all([
     getTargets(), stageCycleTimes(), wipAging(), completions(), quality(), replenishment(),
     one(`SELECT COUNT(*)::int AS n FROM sales_order
           WHERE stage NOT IN ('Quote','Ready','Cancelled') AND due IS NOT NULL AND due < CURRENT_DATE`, []).catch(() => null),
+    mctAnalytics(), wipState(), openProblems(), blockerPareto(),
   ]);
   const pastDue = Number(pastDueRow?.n || 0);
   const stale = aging.filter(a => a.daysInStage > targets.staleWipDays);
@@ -152,6 +234,10 @@ export async function scorecard() {
       status: critParts === 0 ? (warnParts ? 'warn' : 'ok') : 'miss' },
     { key: 'pastDue', label: 'Orders past due', value: pastDue, unit: '', target: 0, dir: '<=',
       status: pastDue === 0 ? 'ok' : 'miss' },
+    { key: 'mct', label: 'MCT (order → Ready)', value: mct.avgMctDays, unit: ' days', target: null, dir: null,
+      status: mct.avgMctDays == null ? 'nodata' : 'info' },
+    { key: 'flowEff', label: 'Flow efficiency', value: mct.avgFlowEffPct, unit: '%', target: null, dir: null,
+      status: mct.avgFlowEffPct == null ? 'nodata' : 'info' },
   ];
 
   // Areas for improvement — each owned, specific, and linked to the screen that fixes it.
@@ -180,8 +266,24 @@ export async function scorecard() {
   else if (warnParts)
     recs.push({ sev: 'warn', owner: 'Shop Specialist', link: 'predict',
       text: `${warnParts} part(s) below reorder level — place orders/schedule builds this week to stay ahead of demand.` });
+  // Andon: an open floor problem means someone is waiting right now.
+  if (andonOpen.length) {
+    const oldest = andonOpen[0];
+    recs.push({ sev: 'miss', owner: 'Shop Manager', link: 'orders',
+      text: `🚨 ${andonOpen.length} shop-floor problem(s) open — oldest: ${oldest.orderId} "${oldest.reason}" (${oldest.hoursOpen}h). The floor is waiting.` });
+  }
+  // WIP over limit: stop starting, finish what's in the stage (Little's Law: WIP drives lead time).
+  for (const v of wip.violations)
+    recs.push({ sev: 'miss', owner: 'Shop Manager', link: 'orders',
+      text: `WIP over limit in ${v.stage} (${v.count}/${v.limit}) — finish before starting; every extra unit in the stage stretches everyone's lead time.` });
+  // QRM: the white-space callout — where orders wait instead of being worked.
+  const worstWait = mct.whiteSpace.filter(w => w.avgWaitDays != null).sort((a, b) => b.avgWaitDays - a.avgWaitDays)[0];
+  if (mct.avgFlowEffPct != null && mct.avgFlowEffPct < 15 && worstWait)
+    recs.push({ sev: 'warn', owner: 'General Manager', link: 'performance',
+      text: `Only ${mct.avgFlowEffPct}% of lead time is actual work — the rest is waiting, mostly in ${worstWait.stage} (${worstWait.avgWaitDays} idle days avg). QRM lever: release less WIP and cap the queue there.` });
   if (!recs.length)
     recs.push({ sev: 'ok', owner: 'Shop', link: 'performance', text: 'All expectations met — consider raising the targets.' });
 
-  return { targets, kpis, cycles, aging: stale, completions: done, quality: qual, replenishment: rep, pastDue, recommendations: recs };
+  return { targets, kpis, cycles, aging: stale, completions: done, quality: qual, replenishment: rep, pastDue,
+           mct, wip, andon: { open: andonOpen, pareto: andonTop }, recommendations: recs };
 }

@@ -41,7 +41,8 @@ export async function allowedTypesFor(custId) {
 export async function ordersFull() {
   const rows = await all(`
     SELECT o.*, m.name AS model_name, m.category AS type, m.price,
-           c.name AS customer_name, u.name AS rep_name
+           c.name AS customer_name, u.name AS rep_name,
+           (SELECT COUNT(*)::int FROM andon_event a WHERE a.order_id=o.id AND a.resolved_at IS NULL) AS andon_open
       FROM sales_order o
       LEFT JOIN model m ON m.id=o.model_id
       LEFT JOIN customer c ON c.id=o.customer_id
@@ -52,7 +53,8 @@ export async function ordersFull() {
     model: o.model_name, type: o.type || 'Custom', qty: o.qty, stage: o.stage, due: o.due,
     deposit: Number(o.deposit), channel: o.channel, rep: o.rep_name, consumed: o.consumed, billed: !!o.billed,
     prodSeq: o.production_seq == null ? null : Number(o.production_seq),
-    price: Number(o.price || 0), revenue: Number(o.price || 0) * o.qty
+    price: Number(o.price || 0), revenue: Number(o.price || 0) * o.qty,
+    andonOpen: Number(o.andon_open || 0)
   }));
 }
 
