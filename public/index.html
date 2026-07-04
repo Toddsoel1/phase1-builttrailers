@@ -116,13 +116,11 @@ body.tv .topbar h2{font-size:24px}
 <div class="login" id="login">
   <div class="box">
     <div class="l">
-      <h1 style="font-size:22px">BUILT <span style="color:var(--accent)">TRAILERS</span></h1>
-      <div style="color:var(--muted);margin-bottom:20px;font-size:13px">Phase 1 — live hosted environment</div>
+      <h1 style="font-size:22px;margin-bottom:20px">BUILT <span style="color:var(--accent)">TRAILERS</span></h1>
       <div class="field"><label>Username</label><input id="liUser" autocomplete="username"></div>
       <div class="field"><label>Password</label><input id="liPass" type="password" autocomplete="current-password"></div>
       <div class="err" id="liErr"></div>
       <button class="btn" style="width:100%" onclick="login()">Sign in</button>
-      <p style="color:var(--muted);font-size:11px;margin-top:12px">Secure auth: passwords are bcrypt-hashed in the database; sessions use JWT.</p>
       <button class="btn sec installBtn" style="width:100%;margin-top:14px;display:none" onclick="promptInstall()">📲 Install app on your phone</button>
     </div>
   </div>
