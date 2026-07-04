@@ -86,6 +86,18 @@ export async function actionItemsFor(user) {
       label: `${plural(oa, 'shop-floor problem')} open — the floor is waiting`, count: oa, link: 'orders' });
   }
 
+  // 4a2. Daily plan: workers see today's goal; the SM is nudged while the plan sits unapproved.
+  const todayStr = new Date().toISOString().slice(0, 10);
+  const myTasks = await count(`SELECT COUNT(*)::int AS n FROM daily_task
+                                WHERE plan_date=$1 AND user_id=$2 AND status='approved' AND completed_at IS NULL`, [todayStr, user.id]);
+  if (myTasks) items.push({ key: 'my_day', icon: '🎯',
+    label: `${plural(myTasks, 'task')} on your plan today`, count: myTasks, link: 'standup' });
+  if (isAdmin || holds('Shop Manager', 'General Manager')) {
+    const prop = await count(`SELECT COUNT(*)::int AS n FROM daily_task WHERE plan_date=$1 AND status='proposed'`, [todayStr]);
+    if (prop) items.push({ key: 'standup_approve', icon: '📣',
+      label: `Today's plan awaits your approval (${plural(prop, 'proposed task')})`, count: prop, link: 'standup' });
+  }
+
   // 4b. Performance expectations — Shop Manager / General Manager get told when the shop
   //     is missing the bar (on-time, build time, stuck WIP, claim rate), with the detail
   //     one click away on the Performance screen.

@@ -9,7 +9,10 @@ const TIER_RANK = { viewer: 0, editor: 1, admin: 2 };
 export function hashPassword(pw) { return bcrypt.hashSync(pw, 10); }
 export function checkPassword(pw, hash) { return bcrypt.compareSync(pw, hash); }
 export function signToken(user) {
-  return jwt.sign({ id: user.id, username: user.username, role: user.role, title: user.title }, JWT_SECRET, { expiresIn: '12h' });
+  // 7 days by default: staff live in this app on their phones now (sessions also persist in
+  // localStorage), so a 12h expiry meant re-typing a password mid-week — an adoption killer.
+  return jwt.sign({ id: user.id, username: user.username, role: user.role, title: user.title }, JWT_SECRET,
+    { expiresIn: process.env.STAFF_SESSION || '7d' });
 }
 
 export async function authMiddleware(req, res, next) {

@@ -176,6 +176,17 @@ const colMigrations = [
   `CREATE INDEX IF NOT EXISTS idx_andon_open ON andon_event(order_id) WHERE resolved_at IS NULL`,
   // Who completed a stage when it wasn't a logged-in user (shop-floor QR scans record initials).
   `ALTER TABLE order_stage_done ADD COLUMN IF NOT EXISTS completed_label TEXT`,
+  // Daily Stand-Up: each worker's default station (drives auto-assignment) + the day's task
+  // list — proposed by the generator, approved/adjusted by the Shop Manager, checked off by
+  // the worker (or auto-checked when the underlying stage completes). Rows are permanent, so
+  // the per-employee planned-vs-actual record IS the table.
+  `ALTER TABLE app_user ADD COLUMN IF NOT EXISTS workstation TEXT`,
+  `CREATE TABLE IF NOT EXISTS daily_task (id SERIAL PRIMARY KEY, plan_date DATE NOT NULL, user_id TEXT,
+     order_id TEXT, stage TEXT, workstation TEXT, description TEXT NOT NULL,
+     est_hours NUMERIC(8,2) NOT NULL DEFAULT 0, status TEXT NOT NULL DEFAULT 'proposed',
+     source TEXT NOT NULL DEFAULT 'auto', assigned_by TEXT, approved_at TIMESTAMPTZ,
+     completed_at TIMESTAMPTZ, completed_via TEXT, created_at TIMESTAMPTZ NOT NULL DEFAULT now())`,
+  `CREATE INDEX IF NOT EXISTS idx_dtask_date ON daily_task(plan_date, user_id)`,
 ];
 
 // Admin lockout self-heal, run at every boot. The tier dropdown on the Users screen saves

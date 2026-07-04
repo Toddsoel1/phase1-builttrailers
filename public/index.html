@@ -194,14 +194,24 @@ const canSell = () => ME && (ME.role==='admin' || hasTitle('Sales','Rep Speciali
 async function login(){
   try{
     const d = await api('/api/auth/login',{method:'POST',body:JSON.stringify({username:$('liUser').value.trim(),password:$('liPass').value})});
-    TOKEN=d.token;ME=d.user;$('login').classList.add('hidden');$('app').classList.remove('hidden');page='dashboard';render();toast('Welcome, '+ME.name.split(' ')[0]+'!');
+    TOKEN=d.token;ME=d.user;
+    localStorage.setItem('staffToken',TOKEN);localStorage.setItem('staffName',ME.name||''); // survive refreshes / phone relaunches
+    $('login').classList.add('hidden');$('app').classList.remove('hidden');page='dashboard';render();toast('Welcome, '+ME.name.split(' ')[0]+'!');
   }catch(e){$('liErr').textContent=e.message;}
 }
-function logout(){TOKEN=null;ME=null;$('app').classList.add('hidden');$('login').classList.remove('hidden');}
+function logout(){TOKEN=null;ME=null;localStorage.removeItem('staffToken');localStorage.removeItem('staffName');$('app').classList.add('hidden');$('login').classList.remove('hidden');}
 $('liPass').addEventListener('keydown',e=>{if(e.key==='Enter')login();});
+// Restore the session on load — before this existed, every refresh meant logging in again.
+(async()=>{
+  const saved=localStorage.getItem('staffToken');
+  if(!saved)return;
+  TOKEN=saved;
+  try{ const d=await api('/api/auth/me'); ME=d.user; $('login').classList.add('hidden'); $('app').classList.remove('hidden'); render(); }
+  catch(e){ /* expired or revoked — api() already cleared the session */ }
+})();
 
 // ---- nav/render ----
-const NAV=[['dashboard','📊 Dashboard'],['orders','🔨 Production Flow'],['daily','📋 Daily Update'],['performance','📈 Performance'],['neworder','➕ New Order'],['customers','🏬 Customers & Dealers'],['parts','📦 Parts Master'],['predict','🤖 Predictive Ordering'],['pos','🧾 Purchase Orders'],['boms','🧩 BOMs & Cost'],['inventory','📈 Inventory Value'],['accounting','💵 Accounting'],['trailers','🚛 Trailers & Warranty'],['printcenter','🖨️ Print Center'],['boatadmin','🚤 Boat Builder'],['testdata','🧪 Test Data'],['team','👷 Team & Payroll'],['timeoff','📅 Schedule & Time Off'],['outcomes','🎯 Goals & Outcomes'],['wins','🎉 Wins'],['forecast','🔮 Forecasting & Planning'],['notify','💬 Notifications'],['support','🆘 Support'],['users','👤 Users & Roles']];
+const NAV=[['dashboard','📊 Dashboard'],['orders','🔨 Production Flow'],['standup','📣 Stand-Up'],['daily','📋 Daily Update'],['performance','📈 Performance'],['neworder','➕ New Order'],['customers','🏬 Customers & Dealers'],['parts','📦 Parts Master'],['predict','🤖 Predictive Ordering'],['pos','🧾 Purchase Orders'],['boms','🧩 BOMs & Cost'],['inventory','📈 Inventory Value'],['accounting','💵 Accounting'],['trailers','🚛 Trailers & Warranty'],['printcenter','🖨️ Print Center'],['boatadmin','🚤 Boat Builder'],['testdata','🧪 Test Data'],['team','👷 Team & Payroll'],['timeoff','📅 Schedule & Time Off'],['outcomes','🎯 Goals & Outcomes'],['wins','🎉 Wins'],['forecast','🔮 Forecasting & Planning'],['notify','💬 Notifications'],['support','🆘 Support'],['users','👤 Users & Roles']];
 function canSee(section){
   if(isAdmin()) return true;
   if(!ME.sections) return true; // null = all sections (admin)
@@ -220,7 +230,7 @@ function navVisible(n){
 const NAV_LABEL = Object.fromEntries(NAV);
 const NAV_GROUPS = [
   ['', ['dashboard']],
-  ['Production', ['orders','daily','performance','trailers','printcenter']],
+  ['Production', ['orders','standup','daily','performance','trailers','printcenter']],
   ['Sales', ['neworder','boatadmin','customers']],
   ['Inventory', ['parts','boms','inventory','predict','pos']],
   ['Finance', ['accounting','forecast']],
@@ -301,7 +311,7 @@ document.addEventListener('keydown',e=>{
 });
 async function render(){
   renderNav();
-  const map={dashboard:viewDash,orders:viewOrders,daily:viewDaily,performance:viewPerformance,neworder:viewNewOrder,customers:viewCustomers,parts:viewParts,predict:viewPredict,pos:viewPOs,boms:viewBoms,inventory:viewInv,accounting:viewAccounting,trailers:viewTrailers,printcenter:viewPrintCenter,boatadmin:viewBoatAdmin,testdata:viewTestData,team:viewTeam,timeoff:viewTimeoff,outcomes:viewOutcomes,wins:viewWins,forecast:viewForecast,notify:viewNotify,support:viewSupport,users:viewUsers};
+  const map={dashboard:viewDash,orders:viewOrders,standup:viewStandup,daily:viewDaily,performance:viewPerformance,neworder:viewNewOrder,customers:viewCustomers,parts:viewParts,predict:viewPredict,pos:viewPOs,boms:viewBoms,inventory:viewInv,accounting:viewAccounting,trailers:viewTrailers,printcenter:viewPrintCenter,boatadmin:viewBoatAdmin,testdata:viewTestData,team:viewTeam,timeoff:viewTimeoff,outcomes:viewOutcomes,wins:viewWins,forecast:viewForecast,notify:viewNotify,support:viewSupport,users:viewUsers};
   try{
     await (map[page]||viewDash)();
     const pa=$('pActions');
@@ -1185,6 +1195,83 @@ async function saveWorkLog(){
     viewDaily();
   }catch(e){ toast(e.message); }
 }
+// ── Daily Stand-Up: the day planned, approved, and scored ──
+async function viewStandup(){
+  $('pTitle').textContent='Daily Stand-Up';$('pSub').textContent='Auto-proposed from the production queue — the Shop Manager approves, the team executes, the day gets scored';
+  const isMgr=isAdmin()||hasTitle('Shop Manager','General Manager');
+  const date=window._suDate||new Date().toISOString().slice(0,10);
+  window._suDate=date;
+  $('pActions').innerHTML=isMgr?`<input type="date" id="suDate" value="${date}" onchange="window._suDate=this.value;viewStandup()" style="padding:6px 8px;border-radius:8px;border:1px solid var(--line);background:var(--panel2);color:var(--txt)"> <button class="btn sm sec" onclick="suGenerate()">⚙ Generate plan</button>`:'';
+  let me,plan=null,report=[];
+  try{
+    [me,report]=await Promise.all([api('/api/standup/me?date='+date),api('/api/standup/report?days=14').catch(()=>[])]);
+    if(isMgr) plan=await api('/api/standup?date='+date);
+  }catch(e){ $('content').innerHTML=`<div class="card"><p class="msg err">${esc(e.message)}</p></div>`; return; }
+  const prog=me.goal?Math.round(me.done/me.goal*100):0;
+  const myCard=`<div class="card" style="margin-bottom:16px"><h3>🎯 My day — ${esc(date)}</h3>
+    ${me.goal?`<div style="display:flex;align-items:center;gap:14px;margin:6px 0 10px;flex-wrap:wrap">
+      <span style="font-size:22px;font-weight:800">${me.done} / ${me.goal} done</span>
+      <div style="flex:1;min-width:140px;height:10px;background:var(--panel2);border-radius:5px;overflow:hidden"><div style="height:100%;width:${prog}%;background:${prog>=100?'var(--green)':'var(--accent)'}"></div></div>
+      <span class="muted" style="font-size:12.5px">est ${me.estHours}h · logged ${me.actualHours}h</span></div>
+    ${me.tasks.map(t=>`<div style="display:flex;gap:10px;align-items:center;padding:7px 0;border-bottom:1px solid var(--line)">
+      <span>${t.done?'✅':'⬜'}</span>
+      <div style="flex:1"><b style="font-size:13.5px;${t.done?'opacity:.55':''}">${esc(t.description)}</b>
+        <div class="muted" style="font-size:11px">${t.workstation?esc(t.workstation)+' · ':''}${t.estHours}h est${t.done&&t.completedVia==='stage'?' · auto-checked by stage completion':''}</div></div>
+      ${!t.done?`<button class="btn sm" onclick="suComplete(${t.id})">✓ Done</button>`:''}
+      ${t.orderId?`<button class="btn sm sec" onclick="orderDetail('${esc(t.orderId)}')">Order</button>`:''}
+    </div>`).join('')}`
+    :'<p class="muted">Nothing assigned to you for this day'+(isMgr?'':' — check with the Shop Manager at stand-up')+'.</p>'}
+  </div>`;
+  let board='';
+  if(isMgr&&plan){
+    const byUser={}; for(const t of plan.tasks){const k=t.user||'— Unassigned —';(byUser[k]=byUser[k]||[]).push(t);}
+    const wOpts=u=>`<option value="">— unassigned —</option>`+plan.workers.map(w=>`<option value="${esc(w.id)}" ${u===w.id?'selected':''}>${esc(w.name)}${w.workstation?' ('+esc(w.workstation)+')':''}</option>`).join('');
+    board=`<div class="card" style="margin-bottom:16px;border-color:var(--accent)">
+      <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:8px">
+        <h3 style="margin:0">📣 The plan — ${plan.tasks.length} task(s)${plan.proposed?` <span class="badge b-low">${plan.proposed} awaiting approval</span>`:(plan.tasks.length?' <span class="badge b-ok">approved</span>':'')}</h3>
+        ${plan.proposed?`<button class="btn" onclick="suApprove()">✓ Approve the day</button>`:''}
+      </div>
+      <p class="muted" style="font-size:12px;margin-bottom:10px">⚙ Generate proposes tasks from the production queue + each model's labor routing, spread across workers by their station. Reassign, resize, add, or delete any time — mid-day resets included. Workers see their tasks once approved; finishing the real stage checks tasks off automatically.</p>
+      ${Object.entries(byUser).map(([name,ts])=>`<div style="margin-bottom:10px"><b style="font-size:13px">${esc(name)}</b> <span class="muted" style="font-size:11px">${ts.filter(t=>t.done).length}/${ts.length} done · ${Math.round(ts.reduce((a,t)=>a+t.estHours,0)*10)/10}h est</span>
+        ${ts.map(t=>`<div style="display:flex;gap:6px;align-items:center;padding:4px 0 4px 12px;font-size:12.5px;flex-wrap:wrap">
+          <span>${t.done?'✅':t.status==='proposed'?'📝':'⬜'}</span>
+          <span style="flex:1;min-width:150px;${t.done?'opacity:.55':''}">${esc(t.description)}</span>
+          <select onchange="suUpdate(${t.id},{userId:this.value})" style="max-width:150px;padding:2px 4px;border-radius:6px;border:1px solid var(--line);background:var(--panel2);color:var(--txt);font-size:11px">${wOpts(t.userId)}</select>
+          <input type="number" step="0.5" min="0" value="${t.estHours}" onchange="suUpdate(${t.id},{estHours:this.value})" style="width:58px;padding:2px 4px;border-radius:6px;border:1px solid var(--line);background:var(--panel2);color:var(--txt);font-size:11px" title="estimated hours">
+          ${!t.done?`<button class="btn sm sec" onclick="suCompleteMgr(${t.id})" title="mark done">✓</button>`:''}
+          <button class="btn sm sec" onclick="suDelete(${t.id})" title="remove from plan">✕</button>
+        </div>`).join('')}
+      </div>`).join('')||'<p class="muted">No tasks yet — hit <b>⚙ Generate plan</b> to propose the day from the production queue.</p>'}
+      <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:10px;border-top:1px solid var(--line);padding-top:10px">
+        <input id="suNewDesc" placeholder="Add a task (e.g. Deep-clean the paint booth)" style="flex:2;min-width:180px;padding:7px;border-radius:8px;border:1px solid var(--line);background:var(--panel2);color:var(--txt)">
+        <input id="suNewEst" type="number" step="0.5" min="0" placeholder="hrs" style="width:70px;padding:7px;border-radius:8px;border:1px solid var(--line);background:var(--panel2);color:var(--txt)">
+        <select id="suNewWho" style="min-width:140px;padding:7px;border-radius:8px;border:1px solid var(--line);background:var(--panel2);color:var(--txt)">${wOpts('')}</select>
+        <button class="btn sm" onclick="suAdd()">＋ Add</button>
+      </div>
+    </div>`;
+  }
+  const repCard=`<div class="card"><h3>📊 Effectiveness — last 14 days ${csvBtn('standup_effectiveness',report)}</h3>
+    ${report.length?`<table><thead><tr><th>Date</th><th>Employee</th><th class="center">Assigned</th><th class="center">Done</th><th class="center">%</th><th class="right">Est hrs</th><th class="right">Logged hrs</th></tr></thead><tbody>
+      ${report.map(r=>`<tr><td class="muted" style="font-size:12px">${esc(r.date)}</td><td><b>${esc(r.user||'')}</b></td>
+        <td class="center">${r.assigned}</td><td class="center">${r.done}</td>
+        <td class="center">${r.donePct!=null?`<span class="badge ${r.donePct>=100?'b-ok':r.donePct>=60?'b-low':'b-below'}">${r.donePct}%</span>`:'—'}</td>
+        <td class="right">${r.estHours}</td><td class="right">${r.actualHours}</td></tr>`).join('')}
+    </tbody></table>`:'<p class="muted">No plan history yet — it builds automatically once days are approved and worked.</p>'}
+  </div>`;
+  $('content').innerHTML=myCard+board+repCard;
+}
+async function suGenerate(){ try{ const r=await api('/api/standup/generate',{method:'POST',body:JSON.stringify({date:window._suDate})}); toast(r.created+' task(s) proposed'); viewStandup(); }catch(e){ toast(e.message);} }
+async function suApprove(){ try{ const r=await api('/api/standup/approve',{method:'POST',body:JSON.stringify({date:window._suDate})}); toast(r.approved+' task(s) approved — the team can see the plan'); viewStandup(); }catch(e){ toast(e.message);} }
+async function suComplete(id){ try{ await api('/api/standup/task/'+id+'/complete',{method:'POST'}); toast('Nice — marked done'); viewStandup(); }catch(e){ toast(e.message);} }
+async function suCompleteMgr(id){ try{ await api('/api/standup/task/'+id+'/complete',{method:'POST'}); viewStandup(); }catch(e){ toast(e.message);} }
+async function suUpdate(id,body){ try{ await api('/api/standup/task/'+id,{method:'PATCH',body:JSON.stringify(body)}); toast('Updated'); }catch(e){ toast(e.message); viewStandup(); } }
+async function suDelete(id){ if(!confirm('Remove this task from the plan?'))return; try{ await api('/api/standup/task/'+id,{method:'DELETE'}); viewStandup(); }catch(e){ toast(e.message);} }
+async function suAdd(){
+  const description=($('suNewDesc').value||'').trim(); if(!description)return toast('Describe the task');
+  try{ await api('/api/standup/task',{method:'POST',body:JSON.stringify({date:window._suDate,description,estHours:$('suNewEst').value,userId:$('suNewWho').value||undefined})}); viewStandup(); }
+  catch(e){ toast(e.message);}
+}
+
 // ── Performance — expectations vs actuals + generated areas for improvement ──
 async function viewPerformance(){
   $('pTitle').textContent='Performance';$('pSub').textContent='The shop measured against explicit expectations — and what to fix to close the gap';$('pActions').innerHTML='';
@@ -1317,12 +1404,15 @@ function toggleRoleSel(p){const l=$(p+'List');if(l)l.style.display=l.style.displ
 function syncRoleSel(p){const names=[...document.querySelectorAll('.'+p+'Chk:checked')].map(c=>c.value);const lab=$(p+'Label');if(lab){lab.textContent=names.length?names.join(', '):'— select roles —';lab.className=names.length?'':'ph';}}
 function getRoleSel(p){return [...document.querySelectorAll('.'+p+'Chk:checked')].map(c=>c.value);}
 async function editUser(id){
-  const [users,roles]=await Promise.all([api('/api/users'),api('/api/roles')]);
+  const [users,roles,wsList]=await Promise.all([api('/api/users'),api('/api/roles'),api('/api/workstations').catch(()=>[])]);
   const u=users.find(x=>x.id===id);if(!u)return;
   const activeUsers=users.filter(x=>x.active!==false&&x.id!==id);
   modal(`Edit — ${esc(u.name)}`,`
     <div class="field"><label>Full name</label><input id="euName" class="inp" value="${esc(u.name)}"></div>
     <div class="field"><label>Email</label><input id="euEmail" class="inp" type="email" value="${esc(u.email||'')}" placeholder="name@builttrailers.app"></div>
+    <div class="field"><label>Workstation <span style="color:var(--muted);font-weight:400">— drives Stand-Up auto-assignment</span></label>
+      <input id="euWs" class="inp" list="euWsList" value="${esc(u.workstation||'')}" placeholder="e.g. Weld Bay">
+      <datalist id="euWsList">${wsList.map(w=>`<option value="${esc(w)}">`).join('')}</datalist></div>
     <div class="field"><label>Job titles <span style="color:var(--muted);font-weight:400">— check all that apply</span></label>
       ${roleCheckboxHtml('eurole', roles, (u.titles&&u.titles.length)?u.titles:(u.title?[u.title]:[]))}</div>
     <div class="field"><label>Reports to</label><select id="euMgrEdit" class="inp">
@@ -1337,11 +1427,12 @@ async function editUser(id){
 async function saveEditUser(id){
   const name=($('euName').value||'').trim();
   const email=($('euEmail').value||'').trim();
+  const workstation=($('euWs').value||'').trim();
   const titles=getRoleSel('eurole');
   const manager_id=$('euMgrEdit').value||null;
   if(!name)return toast('Name is required');
   if(!titles.length)return toast('Select at least one job title');
-  try{await api('/api/users/'+id,{method:'PATCH',body:JSON.stringify({name,email,titles,manager_id})});closeModal();toast('User updated');viewUsers();}
+  try{await api('/api/users/'+id,{method:'PATCH',body:JSON.stringify({name,email,workstation,titles,manager_id})});closeModal();toast('User updated');viewUsers();}
   catch(e){toast(e.message);}
 }
 async function addUserModal(){

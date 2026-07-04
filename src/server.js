@@ -16,7 +16,8 @@ import { initDb, dbKind, q, all, one } from './db.js';
 import { ensureSchema, ensureAdminInvariant } from '../db/migrate.js';
 import { ensureDealers } from './dealerseed.js';
 import { log, captureError, initObservability, requestId, uptimeSeconds } from './observability.js';
-import { authMiddleware, requireTier, signToken, checkPassword, hashPassword } from './auth.js';
+import { authMiddleware, requireTier, signToken, checkPassword, hashPassword, JWT_SECRET } from './auth.js';
+import jwt from 'jsonwebtoken';
 import { modelRollup, modelsSummary, inventoryValuation } from './cost.js';
 import { STAGES, canSell, canReorderProduction, trailerTypes, customersWithTypes, allowedTypesFor, ordersFull, consumeInventory, setProductionOrder } from './orders.js';
 import { logWork, dailyReport, wipReport, consumptionByWorkstation, workstations } from './wip.js';
@@ -49,6 +50,7 @@ import { runReminders } from './reminders.js';
 import * as analytics from './analytics.js';
 import * as andon from './andon.js';
 import { runBackup } from './backup.js';
+import * as standup from './standup.js';
 
 // Crash fast if JWT_SECRET is unset in production — predictable fallback is a critical vuln
 if (!process.env.JWT_SECRET) {
@@ -269,9 +271,12 @@ app.get('/u/:id', portalLimiter, async (req, res) => {
     ${canAdvance ? `<b style="font-size:15px">${stage === 'Scheduled' ? '▶ Start the build' : `✓ Mark ${e(stage)} complete`}</b>
     <p style="color:#6b7785;font-size:13px;margin:4px 0 10px">Moves order ${e(u.order.id)} to <b>${e(next)}</b>. Use the shop PIN from the office.</p>` : `<b style="font-size:15px">Station actions</b>
     <p style="color:#6b7785;font-size:13px;margin:4px 0 10px">Use the shop PIN from the office.</p>`}
+    <div id="asWho" style="display:none;background:#e8f6ee;border:1px solid #b6e2c6;border-radius:9px;padding:10px 12px;font-size:13.5px;color:#1a7f4b"></div>
+    <div id="pinFields">
     <input id="wName" placeholder="Your name / initials" style="width:100%;border:1px solid #e2e7ec;border-radius:9px;padding:12px;font-size:16px;margin-bottom:8px">
     <input id="wPin" type="password" inputmode="numeric" placeholder="Shop PIN" style="width:100%;border:1px solid #e2e7ec;border-radius:9px;padding:12px;font-size:16px">
     <label style="display:flex;align-items:center;gap:6px;margin-top:6px;font-size:13px;color:#6b7785"><input type="checkbox" onchange="document.getElementById('wPin').type=this.checked?'text':'password'"> Show PIN</label>
+    </div>
     ${canAdvance ? `<button onclick="adv()" style="width:100%;margin-top:10px;background:#ff7a18;color:#1a1206;border:none;padding:14px;border-radius:9px;font-weight:700;font-size:16px">${stage === 'Scheduled' ? '▶ Start Build' : `Mark ${e(stage)} complete`}</button>` : ''}
     <div style="border-top:1px solid #eef1f4;margin:14px 0 10px"></div>
     <b style="font-size:14px">🚨 Problem? Tell the office instantly</b>
@@ -282,13 +287,22 @@ app.get('/u/:id', portalLimiter, async (req, res) => {
   </div>
   <script>
     var $=function(i){return document.getElementById(i)};
+    // Signed into the staff app on this phone? Then YOU are the identity — no PIN, no initials.
+    var STK=localStorage.getItem('staffToken')||'';
+    if(STK){ $('pinFields').style.display='none'; var aw=$('asWho'); aw.style.display='block';
+      aw.textContent='✓ Signed in as '+(localStorage.getItem('staffName')||'staff')+' — this action is credited to your account.'; }
     $('wName').value=localStorage.getItem('shopWorker')||''; $('wPin').value=localStorage.getItem('shopPin')||'';
     function say(ok,t){var m=$('msg');m.style.display='block';m.style.background=ok?'#e8f6ee':'#fdecea';m.style.color=ok?'#1a7f4b':'#c0392b';m.textContent=t;}
-    function saveCreds(){localStorage.setItem('shopWorker',$('wName').value.trim()); localStorage.setItem('shopPin',$('wPin').value);}
+    function saveCreds(){if(STK)return; localStorage.setItem('shopWorker',$('wName').value.trim()); localStorage.setItem('shopPin',$('wPin').value);}
     async function post(path,body){
-      var r=await fetch(path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+      var h={'Content-Type':'application/json'}; if(STK)h.Authorization='Bearer '+STK;
+      var r=await fetch(path,{method:'POST',headers:h,body:JSON.stringify(body)});
       var d=await r.json().catch(function(){return{}});
-      if(!r.ok){ if(r.status===401)localStorage.removeItem('shopPin'); throw new Error(d.error||('Error '+r.status)); }
+      if(!r.ok){
+        if(r.status===401&&STK){STK='';localStorage.removeItem('staffToken');$('pinFields').style.display='';$('asWho').style.display='none';}
+        else if(r.status===401)localStorage.removeItem('shopPin');
+        throw new Error(d.error||('Error '+r.status));
+      }
       return d;
     }
     async function adv(){
@@ -329,9 +343,12 @@ app.get('/u/:id', portalLimiter, async (req, res) => {
 app.post('/u/:id/advance', loginLimiter, async (req, res) => {
   try {
     const { pin, worker } = req.body || {};
-    const pinHash = (await one(`SELECT value FROM app_config WHERE key='shop_pin'`, []).catch(() => null))?.value;
-    if (!pinHash) return res.status(503).json({ error: 'Shop-floor updates are not enabled. Ask the office to set a shop PIN.' });
-    if (!pin || !checkPassword(String(pin), pinHash)) return res.status(401).json({ error: 'Wrong PIN.' });
+    const staff = await stationActor(req);
+    if (!staff) {
+      const pinHash = (await one(`SELECT value FROM app_config WHERE key='shop_pin'`, []).catch(() => null))?.value;
+      if (!pinHash) return res.status(503).json({ error: 'Shop-floor updates are not enabled. Ask the office to set a shop PIN.' });
+      if (!pin || !checkPassword(String(pin), pinHash)) return res.status(401).json({ error: 'Wrong PIN.' });
+    }
     const unit = await one('SELECT order_id FROM trailer WHERE id=$1', [req.params.id]);
     if (!unit?.order_id) return res.status(404).json({ error: 'Unit not found or not on an order.' });
     const cur = await one('SELECT * FROM sales_order WHERE id=$1', [unit.order_id]);
@@ -339,22 +356,39 @@ app.post('/u/:id/advance', loginLimiter, async (req, res) => {
     if (!FLOOR_STAGES.includes(cur.stage))
       return res.status(400).json({ error: `Order is "${cur.stage}" — that stage is handled by the office, not the floor.` });
     const next = STAGES[STAGES.indexOf(cur.stage) + 1];
-    await applyOrderStage(unit.order_id, cur, next, null, `shop floor${worker ? ': ' + String(worker).slice(0, 40) : ''}`);
-    res.json({ ok: true, stage: next });
+    await applyOrderStage(unit.order_id, cur, next, staff, staff ? null : `shop floor${worker ? ': ' + String(worker).slice(0, 40) : ''}`);
+    res.json({ ok: true, stage: next, as: staff?.name || null });
   } catch (e) { res.status(400).json({ error: e.message }); }
 });
+// A signed-in staff member IS the identity on station endpoints — their own session (persisted
+// on their phone) beats any PIN: verified attribution with zero typing. Logged-out scans
+// (someone else's phone, a browser without the app) fall back to the shop PIN + initials.
+async function stationActor(req) {
+  const h = req.headers.authorization || '';
+  const tok = h.startsWith('Bearer ') ? h.slice(7) : null;
+  if (!tok) return null;
+  try {
+    const p = jwt.verify(tok, JWT_SECRET);
+    if (p.kind) return null; // dealer/owner tokens don't drive the shop floor
+    return await one('SELECT id, name FROM app_user WHERE id=$1 AND active IS DISTINCT FROM false', [p.id]);
+  } catch { return null; }
+}
 // Andon from the same station page: PIN-gated problem report. No stage gate — a problem can be
 // discovered any time (even on a Ready unit). Pushes the Shop Manager / GM instantly.
 app.post('/u/:id/problem', loginLimiter, async (req, res) => {
   try {
     const { pin, worker, reason, note } = req.body || {};
-    const pinHash = (await one(`SELECT value FROM app_config WHERE key='shop_pin'`, []).catch(() => null))?.value;
-    if (!pinHash) return res.status(503).json({ error: 'Shop-floor updates are not enabled. Ask the office to set a shop PIN.' });
-    if (!pin || !checkPassword(String(pin), pinHash)) return res.status(401).json({ error: 'Wrong PIN.' });
+    const staff = await stationActor(req);
+    if (!staff) {
+      const pinHash = (await one(`SELECT value FROM app_config WHERE key='shop_pin'`, []).catch(() => null))?.value;
+      if (!pinHash) return res.status(503).json({ error: 'Shop-floor updates are not enabled. Ask the office to set a shop PIN.' });
+      if (!pin || !checkPassword(String(pin), pinHash)) return res.status(401).json({ error: 'Wrong PIN.' });
+    }
     if (!reason) return res.status(400).json({ error: 'Pick what the problem is.' });
-    const r = await andon.raiseProblem(req.params.id, { reason, note, worker });
-    await q('INSERT INTO audit_log(user_id,action,detail) VALUES (NULL,$1,$2)',
-      ['andon.raise', `#${r.id} ${r.orderId}: ${reason}${worker ? ` (shop floor: ${String(worker).slice(0, 40)})` : ''}`]).catch(() => {});
+    const by = staff?.name || worker;
+    const r = await andon.raiseProblem(req.params.id, { reason, note, worker: by });
+    await q('INSERT INTO audit_log(user_id,action,detail) VALUES ($1,$2,$3)',
+      [staff?.id || null, 'andon.raise', `#${r.id} ${r.orderId}: ${reason}${by ? ` (${staff ? by : 'shop floor: ' + String(by).slice(0, 40)})` : ''}`]).catch(() => {});
     res.json(r);
   } catch (e) { res.status(400).json({ error: e.message }); }
 });
@@ -695,7 +729,7 @@ async function maxTier(roleNames) {
   return best;
 }
 app.get('/api/users', authMiddleware, async (_req, res) => {
-  const users = await all('SELECT id,name,username,title,role,manager_id,phone,email,sms_consent,sms_consent_at,active FROM app_user ORDER BY active DESC,id', []);
+  const users = await all('SELECT id,name,username,title,role,manager_id,phone,email,workstation,sms_consent,sms_consent_at,active FROM app_user ORDER BY active DESC,id', []);
   for (const u of users) {
     const rows = await all('SELECT role_name FROM user_title WHERE user_id=$1', [u.id]);
     u.titles = rows.map(r => r.role_name);
@@ -739,7 +773,7 @@ app.post('/api/users/me/password', authMiddleware, async (req, res) => {
   res.json({ ok: true });
 });
 app.patch('/api/users/:id', authMiddleware, requireTier('admin'), async (req, res) => {
-  const { title, titles, role, manager_id, password, username, phone, email, smsConsent } = req.body || {};
+  const { title, titles, role, manager_id, password, username, phone, email, workstation, smsConsent } = req.body || {};
   const cur = await one('SELECT * FROM app_user WHERE id=$1', [req.params.id]);
   if (!cur) return res.status(404).json({ error: 'not found' });
   let newTitle = title ?? cur.title;
@@ -762,12 +796,13 @@ app.patch('/api/users/:id', authMiddleware, requireTier('admin'), async (req, re
   }
   const consentAt = (smsConsent === true && !cur.sms_consent) ? new Date().toISOString() : cur.sms_consent_at;
   const { name } = req.body || {};
-  await q('UPDATE app_user SET name=$1,title=$2,role=$3,manager_id=$4,username=$5,phone=$6,email=$7,sms_consent=$8,sms_consent_at=$9 WHERE id=$10',
+  await q('UPDATE app_user SET name=$1,title=$2,role=$3,manager_id=$4,username=$5,phone=$6,email=$7,workstation=$8,sms_consent=$9,sms_consent_at=$10 WHERE id=$11',
     [name ?? cur.name, newTitle, tier,
      manager_id !== undefined ? (manager_id || null) : cur.manager_id,
      username ?? cur.username,
      phone !== undefined ? (phone || null) : cur.phone,
      email !== undefined ? (String(email).trim() || null) : cur.email,
+     workstation !== undefined ? (workstation || null) : cur.workstation,
      smsConsent !== undefined ? !!smsConsent : cur.sms_consent,
      consentAt, req.params.id]);
   if (password) await q('UPDATE app_user SET password_hash=$1 WHERE id=$2', [hashPassword(password), req.params.id]);
@@ -1086,6 +1121,49 @@ app.post('/api/trailer-types', authMiddleware, requireSales, async (req, res) =>
   res.json({ ok: true });
 });
 
+// ---- Daily Stand-Up: auto-proposed tasks, SM approval, goal-vs-actual, effectiveness log ----
+function requireStandupManager(req, res, next) {
+  const titles = req.user?.titles || [];
+  if (req.user?.role === 'admin' || titles.includes('Shop Manager') || titles.includes('General Manager')) return next();
+  return res.status(403).json({ error: 'Managing the daily plan is limited to the Shop Manager / General Manager.' });
+}
+app.get('/api/standup', authMiddleware, requireSection('standup'), async (req, res) =>
+  res.json(await standup.planFor(req.query.date)));
+app.get('/api/standup/me', authMiddleware, async (req, res) =>
+  res.json(await standup.myDay(req.user.id, req.query.date)));
+app.get('/api/standup/report', authMiddleware, requireSection('standup'), async (req, res) =>
+  res.json(await standup.report(Number(req.query.days) || 14)));
+app.post('/api/standup/generate', authMiddleware, requireStandupManager, async (req, res) => {
+  const r = await standup.generatePlan(req.body?.date, req.user.id);
+  await audit(req, 'standup.generate', `${r.date}: ${r.created} task(s) proposed`);
+  res.json(r);
+});
+app.post('/api/standup/approve', authMiddleware, requireStandupManager, async (req, res) => {
+  const r = await standup.approvePlan(req.body?.date, req.user.id);
+  await audit(req, 'standup.approve', `${r.date}: ${r.approved} task(s) approved`);
+  res.json(r);
+});
+app.post('/api/standup/task', authMiddleware, requireStandupManager, async (req, res) => {
+  try { const r = await standup.addTask(req.body?.date, req.body || {}, req.user.id);
+    await audit(req, 'standup.add', `#${r.id} ${String(req.body?.description || '').slice(0, 60)}`); res.json(r); }
+  catch (e) { res.status(400).json({ error: e.message }); }
+});
+app.patch('/api/standup/task/:id', authMiddleware, requireStandupManager, async (req, res) => {
+  try { const r = await standup.updateTask(Number(req.params.id), req.body || {});
+    await audit(req, 'standup.update', `#${req.params.id} (mid-day reset)`); res.json(r); }
+  catch (e) { res.status(400).json({ error: e.message }); }
+});
+app.delete('/api/standup/task/:id', authMiddleware, requireStandupManager, async (req, res) => {
+  try { res.json(await standup.deleteTask(Number(req.params.id))); await audit(req, 'standup.delete', `#${req.params.id}`); }
+  catch (e) { res.status(400).json({ error: e.message }); }
+});
+app.post('/api/standup/task/:id/complete', authMiddleware, async (req, res) => {
+  const titles = req.user?.titles || [];
+  const mgr = req.user.role === 'admin' || titles.includes('Shop Manager') || titles.includes('General Manager');
+  try { res.json(await standup.completeTask(Number(req.params.id), 'manual', req.user.id, mgr)); }
+  catch (e) { res.status(400).json({ error: e.message }); }
+});
+
 // ---- performance analytics — expectations (targets) + generated areas for improvement ----
 app.get('/api/performance', authMiddleware, requireSection('performance'), async (_req, res) => {
   try { res.json(await analytics.scorecard()); } catch (e) { res.status(400).json({ error: e.message }); }
@@ -1326,6 +1404,7 @@ async function applyOrderStage(orderId, curOrder, stage, actorUser, actorLabel) 
     [actorUser?.id || null, 'order.stage', `${orderId} -> ${stage}${actorLabel ? ` (${actorLabel})` : ''}`]).catch(() => {});
   await sms.notifyOrderStage(orderId, stage, actorUser?.id || null); // Phase 6: text the customer
   await dealernotify.notifyDealer(curOrder.customer_id, 'order', `Order ${orderId} is now "${stage}".`, orderId);
+  await standup.autoCompleteForStage(orderId, curOrder.stage); // check off matching daily-plan tasks
 }
 app.patch('/api/orders/:id/stage', authMiddleware, requireTier('editor'), async (req, res) => {
   const stage = req.body?.stage;
@@ -2199,6 +2278,9 @@ await ensureSchema();
   await q(`INSERT INTO role_section(role_name, section)
              SELECT DISTINCT role_name, 'performance' FROM role_section WHERE section='orders'
              ON CONFLICT DO NOTHING`).catch(e => console.warn('performance section grant:', e.message));
+  // Daily Stand-Up: every title sees the screen — workers get My Day, managers run the plan.
+  await q(`INSERT INTO role_section(role_name, section) SELECT name, 'standup' FROM role
+             ON CONFLICT DO NOTHING`).catch(e => console.warn('standup section grant:', e.message));
   // Un-demote anyone holding an admin-tier title + keep General Manager admin (lockout self-heal).
   await ensureAdminInvariant().catch(e => console.warn('admin invariant:', e.message));
 console.log('Migrations applied.');

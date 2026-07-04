@@ -593,6 +593,74 @@ test('lean/QRM: WIP limits breach pushes SM, andon flows QR->board->resolve->Par
   await api('/api/wip-limits', { method: 'POST', body: '{}' });
 });
 
+test('station QR: a signed-in staff session IS the identity — no PIN, real name attributed', async () => {
+  // The shop PIN was cleared by the previous test, so the PIN path would 503 — a session still works.
+  const unit = (await json(await api('/api/search?q=BLTTESTVIN0000099'))).units[0];
+  const r = await fetch(BASE + '/u/' + unit.id + '/problem', { method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token },
+    body: JSON.stringify({ reason: 'Rework needed', note: 'session identity test' }) });
+  assert.equal(r.status, 200, 'signed-in session accepted with no PIN configured at all');
+  const detail = await json(await api('/api/orders/' + unit.orderId));
+  const prob = detail.andons.find(a => a.note === 'session identity test');
+  assert.ok(prob, 'problem recorded');
+  assert.match(prob.raisedBy || '', /Soelberg/, 'attributed to the ACCOUNT name, not typed initials');
+  await api('/api/andon/' + prob.id + '/resolve', { method: 'POST', body: JSON.stringify({ resolution: 'test cleanup' }) });
+});
+
+test('daily stand-up: generate -> gate -> approve -> mid-day reset -> stage auto-completes -> effectiveness', async () => {
+  const today = new Date().toISOString().slice(0, 10);
+  const ws = (await json(await api('/api/workstations')))[0];
+  assert.ok(ws, 'labor routing provides workstations');
+  const users = await json(await api('/api/users'));
+  const maria = users.find(u => u.username === 'mchen');
+  await api('/api/users/' + maria.id, { method: 'PATCH', body: JSON.stringify({ workstation: ws }) });
+
+  // An order sitting in Build (routing rows default to the Build stage) = plannable work.
+  const model = (await json(await api('/api/models')))[0];
+  const cust = await json(await api('/api/customers', { method: 'POST', body: JSON.stringify({ name: 'Standup Test Dealer', kind: 'Dealership' }) }));
+  await api('/api/customers/' + cust.id + '/types', { method: 'PATCH', body: JSON.stringify({ type: model.category, on: true }) });
+  const ord = await json(await api('/api/orders', { method: 'POST', body: JSON.stringify({ customerId: cust.id, modelId: model.id, qty: 1 }) }));
+  await api('/api/orders/' + ord.id + '/stage', { method: 'PATCH', body: JSON.stringify({ stage: 'Build' }) });
+
+  // Sales can't run the plan; the Shop Manager can.
+  const sr = await api('/api/auth/login', { method: 'POST', body: JSON.stringify({ username: 'aruiz', password: 'built2026' }) });
+  const sales = (await sr.json()).token;
+  assert.equal((await fetch(BASE + '/api/standup/generate', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + sales }, body: '{}' })).status, 403, 'plan management is SM/GM-only');
+  const mr = await api('/api/auth/login', { method: 'POST', body: JSON.stringify({ username: 'mchen', password: 'built2026' }) });
+  const smh = { 'Content-Type': 'application/json', Authorization: 'Bearer ' + (await mr.json()).token };
+
+  const gen = await json(await fetch(BASE + '/api/standup/generate', { method: 'POST', headers: smh, body: JSON.stringify({ date: today }) }));
+  assert.ok(gen.created >= 1, 'plan proposed from the production queue');
+  const gen2 = await json(await fetch(BASE + '/api/standup/generate', { method: 'POST', headers: smh, body: JSON.stringify({ date: today }) }));
+  assert.equal(gen2.created, 0, 're-generating fills gaps only — no duplicates');
+
+  let plan = await json(await fetch(BASE + '/api/standup?date=' + today, { headers: smh }));
+  const buildTask = plan.tasks.find(t => t.orderId === ord.id && t.stage === 'Build');
+  assert.ok(buildTask, 'the Build-stage order became a task');
+  assert.ok(buildTask.workstation, 'task carries its workstation from the routing');
+
+  const ap = await json(await fetch(BASE + '/api/standup/approve', { method: 'POST', headers: smh, body: JSON.stringify({ date: today }) }));
+  assert.ok(ap.approved >= 1, 'SM approved the day');
+  // Mid-day reset: reassign to Maria + resize the estimate.
+  assert.equal((await fetch(BASE + '/api/standup/task/' + buildTask.id, { method: 'PATCH', headers: smh, body: JSON.stringify({ userId: maria.id, estHours: 3.5 }) })).status, 200);
+
+  const my = await json(await fetch(BASE + '/api/standup/me?date=' + today, { headers: smh }));
+  assert.ok(my.goal >= 1 && my.tasks.some(t => t.orderId === ord.id), 'My Day shows the goal');
+  assert.equal(my.done, 0, 'nothing done yet');
+
+  // Completing the REAL stage checks the task off automatically.
+  await api('/api/orders/' + ord.id + '/stage', { method: 'PATCH', body: JSON.stringify({ stage: 'Paint/Powder Coat' }) });
+  const my2 = await json(await fetch(BASE + '/api/standup/me?date=' + today, { headers: smh }));
+  const doneTask = my2.tasks.find(t => t.orderId === ord.id);
+  assert.ok(doneTask.done && doneTask.completedVia === 'stage', 'stage completion auto-checked the task');
+  assert.ok(my2.done >= 1, 'goal-vs-actual moved');
+
+  // The day is logged for reporting: per-employee effectiveness row exists.
+  const rep = await json(await api('/api/standup/report?days=7'));
+  const row = rep.find(r => r.userId === maria.id && r.date === today);
+  assert.ok(row && row.assigned >= 1 && row.done >= 1 && row.donePct != null, 'effectiveness recorded per employee per day');
+});
+
 test('order timeline: placed + stage completions with names and shop-floor initials', async () => {
   const unit = (await json(await api('/api/search?q=BLTTESTVIN0000099'))).units[0];
   const o = await json(await api('/api/orders/' + unit.orderId));
