@@ -162,6 +162,80 @@ export async function myOrders(d) {
     boat: !!o.is_boat, editable: o.stage === 'Quote' }));
 }
 
+// ---- stock: unsold stock builds this dealership is authorized to claim ----
+// "Available now" = finished (Ready); everything earlier is "in production — coming soon".
+export async function stockList(d) {
+  if (!d.customer_id) return { available: [], coming: [] };
+  const allowed = (await all('SELECT type FROM customer_allowed_type WHERE customer_id=$1', [d.customer_id])).map(a => a.type);
+  const rows = await all(`
+    SELECT o.id, o.qty, o.stage, o.due, m.name AS model, m.category AS type, m.price,
+           (SELECT string_agg(t.vin, ', ') FROM trailer t WHERE t.order_id=o.id AND t.vin IS NOT NULL) AS vin_list,
+           (SELECT COUNT(*) FROM stock_request sr WHERE sr.order_id=o.id AND sr.status='pending' AND sr.customer_id=$1) AS mine
+      FROM sales_order o JOIN model m ON m.id=o.model_id
+     WHERE o.channel='Stock' AND o.customer_id IS NULL AND o.billed=false AND o.stage <> 'Cancelled'
+     ORDER BY o.due NULLS LAST, o.id`, [d.customer_id]);
+  const mapped = rows.filter(r => allowed.includes(r.type)).map(r => ({
+    id: r.id, model: r.model, type: r.type, qty: r.qty, stage: r.stage, due: r.due,
+    price: Number(r.price || 0), vins: r.vin_list || '', requested: Number(r.mine) > 0 }));
+  return { available: mapped.filter(x => x.stage === 'Ready'), coming: mapped.filter(x => x.stage !== 'Ready') };
+}
+export async function requestStock(d, orderId, note) {
+  if (!d.customer_id) throw new Error('Your account is not linked to a dealer record yet — contact Built Trailers.');
+  const o = await one(`SELECT o.*, m.category FROM sales_order o JOIN model m ON m.id=o.model_id WHERE o.id=$1`, [orderId]);
+  if (!o || o.channel !== 'Stock' || o.customer_id || o.billed || o.stage === 'Cancelled')
+    throw new Error('That stock trailer is no longer available.');
+  const allowed = (await all('SELECT type FROM customer_allowed_type WHERE customer_id=$1', [d.customer_id])).map(a => a.type);
+  if (!allowed.includes(o.category)) throw new Error(`Your dealership isn't authorized to carry ${o.category} trailers.`);
+  if (await one(`SELECT id FROM stock_request WHERE order_id=$1 AND customer_id=$2 AND status='pending'`, [orderId, d.customer_id]))
+    throw new Error('You already have a pending request for this trailer — Built Trailers is reviewing it.');
+  await q(`INSERT INTO stock_request(order_id, dealer_user_id, customer_id, note) VALUES($1,$2,$3,$4)`,
+    [orderId, d.id, d.customer_id, String(note || '').slice(0, 300) || null]);
+  return { ok: true };
+}
+// Staff side: every pending request, oldest first (first come, first served).
+export async function stockRequests() {
+  return (await all(`SELECT sr.id, sr.order_id, sr.note, sr.created_at, c.id AS customer_id, c.name AS dealership,
+                            du.name AS requested_by, m.name AS model, o.qty, o.stage
+                       FROM stock_request sr
+                       JOIN customer c ON c.id = sr.customer_id
+                       LEFT JOIN dealer_user du ON du.id = sr.dealer_user_id
+                       JOIN sales_order o ON o.id = sr.order_id
+                       JOIN model m ON m.id = o.model_id
+                      WHERE sr.status='pending' ORDER BY sr.created_at`, []).catch(() => []))
+    .map(r => ({ id: r.id, orderId: r.order_id, customerId: r.customer_id, dealership: r.dealership,
+      requestedBy: r.requested_by, model: r.model, qty: r.qty, stage: r.stage, note: r.note, at: r.created_at }));
+}
+export async function pendingStockRequestCount() {
+  const r = await one(`SELECT COUNT(*)::int AS n FROM stock_request WHERE status='pending'`, []).catch(() => null);
+  return r ? Number(r.n) : 0;
+}
+
+// The dealer-facing production tracker: the stage ladder with real completion dates.
+// A stage counts done if it's stamped in order_stage_done OR it sits behind the current stage
+// (orders that predate stage stamping still render sensibly).
+const TRACK_STAGES = ['Confirmed', 'Scheduled', 'Build', 'Paint/Powder Coat', 'Finish', 'Ready'];
+export async function orderProgress(d, orderId) {
+  const o = await one(`SELECT o.*, m.name AS model FROM sales_order o LEFT JOIN model m ON m.id=o.model_id
+                        WHERE o.id=$1 AND o.customer_id=$2`, [orderId, d.customer_id]);
+  if (!o) return null;
+  const done = await all(`SELECT stage, completed_at FROM order_stage_done WHERE order_id=$1`, [orderId]).catch(() => []);
+  const at = Object.fromEntries(done.map(r => [r.stage, r.completed_at]));
+  // order_stage_done stamps the stage that was LEFT, so the newest stamp = when the order
+  // arrived where it is now. Ready is terminal: being there IS done (the trailer is finished).
+  const entered = done.reduce((m, r) => (!m || new Date(r.completed_at) > new Date(m) ? r.completed_at : m), null);
+  const curIdx = TRACK_STAGES.indexOf(o.stage);
+  const vins = (await all(`SELECT vin FROM trailer WHERE order_id=$1 AND vin IS NOT NULL ORDER BY vin`, [orderId])).map(r => r.vin);
+  return {
+    id: o.id, model: o.model, qty: o.qty, stage: o.stage, due: o.due, vins,
+    steps: TRACK_STAGES.map((s, i) => {
+      const isCur = s === o.stage;
+      return { stage: s, current: isCur,
+        done: !!at[s] || (curIdx >= 0 && i < curIdx) || (isCur && s === 'Ready'),
+        at: at[s] || (isCur && s === 'Ready' ? entered : null) };
+    }),
+  };
+}
+
 // ---- invoices & team ----
 export async function myInvoices(d) {
   if (!d.customer_id) return { invoices: [], owed: 0, paid: 0 };

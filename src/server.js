@@ -1,4 +1,4 @@
-// Built Trailers — Phase 1 API + static UI
+// Built Trailers — API + static UI
 import 'dotenv/config';
 import express from 'express';
 // Routes async route-handler rejections to Express error handling automatically,
@@ -524,6 +524,24 @@ app.patch('/api/dealer/orders/:id', dealer.dealerAuth, dealer.dealerRole('sales'
 app.post('/api/dealer/orders/:id/boat-build', dealer.dealerAuth, dealer.dealerRole('sales'), async (req, res) => {
   try { const o = await dealerOwnQuote(req, res); if (!o) return; res.json(await boatbuilder.updateBuild(req.params.id, req.body || {})); }
   catch (e) { res.status(e.status || 400).json({ error: e.message }); }
+});
+// Unsold stock builds the dealership may claim: Ready = available now, earlier = coming soon.
+app.get('/api/dealer/stock', dealer.dealerAuth, dealer.dealerRole('sales'), async (req, res) => {
+  res.json(await dealer.stockList(req.dealer));
+});
+app.post('/api/dealer/stock/:orderId/request', dealer.dealerAuth, dealer.dealerRole('sales'), async (req, res) => {
+  try {
+    const r = await dealer.requestStock(req.dealer, req.params.orderId, req.body?.note);
+    await q('INSERT INTO audit_log(user_id,action,detail) VALUES (NULL,$1,$2)',
+      ['stock.request', `${req.params.orderId} requested by ${req.dealer.dealership_name || req.dealer.name}`]).catch(() => {});
+    res.json(r);
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+// The production tracker for one of the dealer's own orders — stage ladder with dates.
+app.get('/api/dealer/orders/:id/progress', dealer.dealerAuth, dealer.dealerRole('sales'), async (req, res) => {
+  const p = await dealer.orderProgress(req.dealer, req.params.id);
+  if (!p) return res.status(404).json({ error: 'order not found' });
+  res.json(p);
 });
 // Public dealer directory (locator feed) — protected by a static bearer token (env DEALER_FEED_TOKEN).
 // Returns only public-safe fields for active dealerships; never internal contacts, reps, or margins.
@@ -1483,6 +1501,42 @@ app.post('/api/orders/:id/customer', authMiddleware, requireSales, async (req, r
   await audit(req, 'order.sold', `${o.id} -> ${cust.name}${msosQueued ? ` (${msosQueued} MSO queued)` : ''}`);
   res.json({ ok: true, msosQueued });
 });
+// ---- Dealer stock requests: a dealer's "I'll take that one" on an unsold stock build ----
+app.get('/api/stock-requests', authMiddleware, requireSection('orders'), async (_req, res) => {
+  res.json(await dealer.stockRequests());
+});
+// Approve = sell the stock order to that dealership (same mechanics as the manual assign above);
+// competing pending requests for the unit auto-decline and those dealers are told it's gone.
+app.post('/api/stock-requests/:id/decide', authMiddleware, requireSales, async (req, res) => {
+  const action = req.body?.action;
+  if (!['approve', 'decline'].includes(action)) return res.status(400).json({ error: "action must be 'approve' or 'decline'" });
+  const sr = await one(`SELECT * FROM stock_request WHERE id=$1`, [req.params.id]);
+  if (!sr || sr.status !== 'pending') return res.status(404).json({ error: 'Request not found or already decided.' });
+  const o = await one(`SELECT o.*, m.name AS model, m.category FROM sales_order o JOIN model m ON m.id=o.model_id WHERE o.id=$1`, [sr.order_id]);
+  const cust = await one('SELECT name FROM customer WHERE id=$1', [sr.customer_id]);
+  if (action === 'decline') {
+    await q(`UPDATE stock_request SET status='declined', decided_by=$1, decided_at=now() WHERE id=$2`, [req.user.id, sr.id]);
+    await audit(req, 'stock.decline', `${sr.order_id} — ${cust?.name || sr.customer_id}`);
+    await dealernotify.notifyDealer(sr.customer_id, 'order', `Your request for stock trailer ${sr.order_id}${o ? ` (${o.model})` : ''} was declined — reach out to Built Trailers with any questions.`, sr.order_id);
+    return res.json({ ok: true, status: 'declined' });
+  }
+  if (!o || o.customer_id) return res.status(400).json({ error: 'That stock order is no longer available (already sold).' });
+  const allowed = await allowedTypesFor(sr.customer_id);
+  if (!allowed.includes(o.category)) return res.status(403).json({ error: `${cust?.name || 'That dealership'} is not authorized to take ${o.category} trailers.` });
+  await q('UPDATE sales_order SET customer_id=$1 WHERE id=$2', [sr.customer_id, o.id]);
+  await q('UPDATE trailer SET customer_id=$1 WHERE order_id=$2', [sr.customer_id, o.id]);
+  const msosQueued = await trailers.releaseMsosIfPaintDone(o.id);
+  await q(`UPDATE stock_request SET status='approved', decided_by=$1, decided_at=now() WHERE id=$2`, [req.user.id, sr.id]);
+  // Everyone else who asked for this unit loses it — tell them so they stop waiting.
+  const losers = await all(`SELECT id, customer_id FROM stock_request WHERE order_id=$1 AND status='pending'`, [o.id]);
+  for (const l of losers) {
+    await q(`UPDATE stock_request SET status='declined', decided_by=$1, decided_at=now() WHERE id=$2`, [req.user.id, l.id]);
+    await dealernotify.notifyDealer(l.customer_id, 'order', `Stock trailer ${o.id} (${o.model}) was claimed by another dealership — it's no longer available.`, o.id);
+  }
+  await audit(req, 'order.sold', `${o.id} -> ${cust?.name || sr.customer_id} (stock request${msosQueued ? `, ${msosQueued} MSO queued` : ''})`);
+  await dealernotify.notifyDealer(sr.customer_id, 'order', `Stock trailer ${o.id} (${o.model}) is yours — confirmed by Built Trailers.${o.stage === 'Ready' ? ' It is finished and ready to go.' : ' You can track its progress under Orders.'}`, o.id);
+  res.json({ ok: true, status: 'approved', msosQueued });
+});
 // Resequence the production queue — order = full ordered array of order IDs
 app.post('/api/orders/production-order', authMiddleware, requireProductionPlanner, async (req, res) => {
   const ids = Array.isArray(req.body?.order) ? req.body.order.filter(x => typeof x === 'string') : null;
@@ -2144,8 +2198,7 @@ app.get('/api/orders/:id/build', authMiddleware, async (req, res) => {
   if (!spec) return res.status(404).json({ error: 'no configured build for this order' });
   res.json(spec);
 });
-// Boat Trailer Builder — the configurator catalog (Nautique boats + option groups/choices). The
-// sizing/validation/pricing engine + dealer submit route come in Phase 1B.
+// Boat Trailer Builder — the configurator catalog (Nautique boats + option groups/choices).
 app.get('/api/boat-catalog', authMiddleware, async (_req, res) => {
   res.json(await boatbuilder.getCatalog());
 });
@@ -2609,4 +2662,4 @@ if (kind === 'postgres' && process.env.DIGEST_DISABLED !== 'true') {
   setTimeout(maybeRunDigest, 50 * 1000);                  // and once shortly after boot
 }
 
-app.listen(PORT, () => console.log(`Built Trailers Phase 1 API on :${PORT} (db: ${kind})`));
+app.listen(PORT, () => console.log(`Built Trailers API on :${PORT} (db: ${kind})`));

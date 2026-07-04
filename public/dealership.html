@@ -120,6 +120,7 @@ footer a{color:var(--accent)}
     <div class="tabs">
       <button id="tabOrders" class="active" onclick="showDash('orders')">Orders</button>
       <button id="tabBuild" onclick="showDash('build')">🚤 Build a Boat</button>
+      <button id="tabStock" onclick="showDash('stock')">🏷️ Stock</button>
       <button id="tabReg" onclick="showDash('reg')">Register a Trailer</button>
       <button id="tabMine" onclick="showDash('mine')">My Registrations</button>
       <button id="tabClaims" onclick="showDash('claims')">Claims</button>
@@ -166,6 +167,12 @@ footer a{color:var(--accent)}
       <h2>Build a boat trailer</h2>
       <p class="lead">Pick the Nautique — we size the trailer automatically. Choose your options and submit; Built Trailers approves it like any order.</p>
       <div id="buildForm"><p class="lead">Loading…</p></div>
+    </div>
+
+    <div id="paneStock" class="card hidden">
+      <h2>Stock trailers</h2>
+      <p class="lead">Unsold builds in the models you carry — finished units you can take today, plus what's coming through production. Request one and Built Trailers confirms it; first come, first served.</p>
+      <div id="stockBody"><p class="lead">Loading…</p></div>
     </div>
 
     <div id="paneReg" class="card">
@@ -237,7 +244,7 @@ async function api(path,opts={}){
   if(!r.ok) throw new Error(d.error||('Error '+r.status)); return d;
 }
 function showAuth(t){['login','signup','forgot','reset'].forEach(p=>$('pane'+p[0].toUpperCase()+p.slice(1)).classList.toggle('hidden',p!==t));$('tabLogin').classList.toggle('active',t==='login');$('tabSignup').classList.toggle('active',t==='signup');}
-function showDash(t){for(const k of ['orders','build','reg','mine','claims','invoices','docs','team','notif']){const pe=$('pane'+k[0].toUpperCase()+k.slice(1)),tb=$('tab'+k[0].toUpperCase()+k.slice(1));if(pe)pe.classList.toggle('hidden',k!==t);if(tb)tb.classList.toggle('active',k===t);}({orders:loadOrders,build:loadBuild,mine:loadMine,claims:loadClaims,notif:loadNotifs,invoices:loadInvoices,docs:loadDocs,team:loadTeam}[t]||(()=>{}))();}
+function showDash(t){for(const k of ['orders','build','stock','reg','mine','claims','invoices','docs','team','notif']){const pe=$('pane'+k[0].toUpperCase()+k.slice(1)),tb=$('tab'+k[0].toUpperCase()+k.slice(1));if(pe)pe.classList.toggle('hidden',k!==t);if(tb)tb.classList.toggle('active',k===t);}({orders:loadOrders,build:loadBuild,stock:loadStock,mine:loadMine,claims:loadClaims,notif:loadNotifs,invoices:loadInvoices,docs:loadDocs,team:loadTeam}[t]||(()=>{}))();}
 async function loadInvoices(){
   try{const r=await api('/api/dealer/invoices');
     $('invBody').innerHTML=`<div class="row" style="margin-bottom:14px">
@@ -333,7 +340,7 @@ async function doReset(){
   catch(e){ setMsg('rsMsg','err',e.message); }
 }
 function logout(){DTOKEN=null;DEALER=null;localStorage.removeItem('dealerToken');$('dash').classList.add('hidden');$('auth').classList.remove('hidden');$('who').innerHTML='';}
-const ROLE_TABS={admin:['orders','build','reg','mine','claims','invoices','docs','team','notif'],sales:['orders','build','invoices','docs','team','notif'],service:['claims','docs','team','notif'],warranty:['reg','mine','claims','docs','team','notif']};
+const ROLE_TABS={admin:['orders','build','stock','reg','mine','claims','invoices','docs','team','notif'],sales:['orders','build','stock','invoices','docs','team','notif'],service:['claims','docs','team','notif'],warranty:['reg','mine','claims','docs','team','notif']};
 function enterDash(){
   $('auth').classList.add('hidden');$('dash').classList.remove('hidden');
   const role=DEALER.role||'admin';
@@ -341,7 +348,7 @@ function enterDash(){
   $('who').innerHTML=`<span>${DEALER.dealership||DEALER.name||''} · ${roleLabel}</span><button class="btn ghost" onclick="logout()">Log out</button>`;
   $('regDealer').textContent=DEALER.dealership||'(your dealership)';
   const allowed=ROLE_TABS[role]||ROLE_TABS.admin;
-  for(const k of ['orders','build','reg','mine','claims','invoices','docs','team','notif']){const tb=$('tab'+k[0].toUpperCase()+k.slice(1));if(tb)tb.style.display=allowed.includes(k)?'':'none';}
+  for(const k of ['orders','build','stock','reg','mine','claims','invoices','docs','team','notif']){const tb=$('tab'+k[0].toUpperCase()+k.slice(1));if(tb)tb.style.display=allowed.includes(k)?'':'none';}
   showDash(allowed[0]);refreshNotifBadge();maybeShowPushNudge();
 }
 let _models=[];
@@ -352,7 +359,7 @@ async function loadOrders(){
     const orders=await api('/api/dealer/orders');
     $('ordersBody').innerHTML=orders.length?`<table><thead><tr><th>Order</th><th>Model</th><th>Qty</th><th>Status</th><th>Due</th><th></th></tr></thead><tbody>
       ${orders.map(o=>`<tr><td><b>${o.id}</b></td><td>${o.model||''}</td><td>${o.qty}</td><td>${orderStatus(o.stage)}${o.vinsAssigned?` <span class="muted" style="font-size:11px">${o.vinsAssigned} VIN${o.vinsAssigned>1?'s':''}</span>`:''}</td><td>${o.due?String(o.due).slice(0,10):'—'}</td>
-      <td style="white-space:nowrap">${o.editable?`<button class="btn sec" style="padding:5px 9px;font-size:12px;margin:0" onclick="editDealerOrder('${o.id}')">Edit</button> <a onclick="withdrawOrder('${o.id}')" style="color:#c0392b;cursor:pointer;font-size:12px;margin-left:3px">Withdraw</a>`:`<button class="btn sec" style="padding:5px 10px;font-size:12px;margin:0" onclick="reorder('${o.modelId}',${o.qty})">Reorder</button>`}</td></tr>`).join('')}
+      <td style="white-space:nowrap">${o.editable?`<button class="btn sec" style="padding:5px 9px;font-size:12px;margin:0" onclick="editDealerOrder('${o.id}')">Edit</button> <a onclick="withdrawOrder('${o.id}')" style="color:#c0392b;cursor:pointer;font-size:12px;margin-left:3px">Withdraw</a>`:`${o.stage!=='Cancelled'?`<button class="btn sec" style="padding:5px 10px;font-size:12px;margin:0" onclick="trackOrder('${o.id}')">📍 Track</button> `:''}<button class="btn sec" style="padding:5px 10px;font-size:12px;margin:0" onclick="reorder('${o.modelId}',${o.qty})">Reorder</button>`}</td></tr>`).join('')}
     </tbody></table>`:'<p class="lead">No orders yet — place your first above.</p>';
   }catch(e){$('ordersBody').innerHTML='<p class="msg err">'+e.message+'</p>';}
 }
@@ -398,6 +405,45 @@ async function saveDealerEdit(id,isBoat){
     if(isBoat){ const sel={}; document.querySelectorAll('[id^="dq_"]').forEach(el=>{ sel[el.id.slice(3)]=el.value; }); await api('/api/dealer/orders/'+id+'/boat-build',{method:'POST',body:JSON.stringify({selections:sel})}); }
     dclose(); setMsg('oMsg','ok','✓ Order '+id+' updated.'); loadOrders();
   }catch(e){ setMsg('dqMsg','err',e.message); }
+}
+
+// ---- Stock trailers: available now + coming through production ----
+async function loadStock(){
+  try{const s=await api('/api/dealer/stock');
+    const row=(x,now)=>`<tr><td><b>${x.model}</b> <span style="color:#6b7785;font-size:11px">${x.type}</span>${x.vins?`<br><span class="mono" style="font-size:11px">${x.vins}</span>`:''}</td>
+      <td>${x.qty}</td>
+      <td>${now?'<span class="badge b-ok">Ready now</span>':`<span class="badge b-pend">${x.stage}</span>${x.due?`<br><span style="color:#6b7785;font-size:11px">est. ${String(x.due).slice(0,10)}</span>`:''}`}</td>
+      <td style="text-align:right">$${Math.round(x.price*x.qty).toLocaleString()}</td>
+      <td>${x.requested?'<span class="badge b-pend">Requested ✓</span>':`<button class="btn sec" style="padding:6px 12px;font-size:13px;margin:0" onclick="requestStockUnit('${x.id}')">Request</button>`}</td></tr>`;
+    const tbl=(rows,now)=>`<table><thead><tr><th>Model</th><th>Qty</th><th>Status</th><th style="text-align:right">Dealer price</th><th></th></tr></thead><tbody>${rows.map(r=>row(r,now)).join('')}</tbody></table>`;
+    $('stockBody').innerHTML=
+      `<h2 style="font-size:15px;margin-top:4px">Available now</h2>`
+      +(s.available.length?tbl(s.available,true):'<p class="lead">Nothing finished and unclaimed right now — check the production list below.</p>')
+      +`<h2 style="font-size:15px;margin-top:22px">In production — coming soon</h2>`
+      +(s.coming.length?tbl(s.coming,false):'<p class="lead">No unsold builds in production.</p>');
+  }catch(e){$('stockBody').innerHTML='<p class="msg err">'+e.message+'</p>';}
+}
+async function requestStockUnit(id){
+  const note=prompt('Request '+id+'?\n\nBuilt Trailers confirms every stock request. Optional note:');
+  if(note===null)return;
+  try{ await api('/api/dealer/stock/'+id+'/request',{method:'POST',body:JSON.stringify({note:note||undefined})});
+    alert('✓ Request sent — Built Trailers will confirm it. Watch 🔔 Updates for the answer.'); loadStock();
+  }catch(e){ alert(e.message); }
+}
+
+// ---- Production tracker: where a confirmed order sits, stage by stage ----
+async function trackOrder(id){
+  let p; try{ p=await api('/api/dealer/orders/'+id+'/progress'); }catch(e){ return alert(e.message); }
+  const steps=p.steps.map(s=>`<div style="display:flex;gap:10px;align-items:flex-start;padding:7px 0;border-bottom:1px solid #f0f2f5">
+    <span style="font-size:16px">${s.done?'✅':s.current?'🔵':'⚪️'}</span>
+    <div style="flex:1"><b style="${s.done||s.current?'':'color:#6b7785;font-weight:500'}">${s.stage}${s.current&&!s.done?' — in progress':''}</b>
+    ${s.at?`<div style="font-size:11.5px;color:#6b7785">${new Date(s.at).toLocaleDateString()}</div>`:''}</div>
+  </div>`).join('');
+  dmodal('Order '+id,`
+    <div class="lead" style="margin-bottom:8px">${p.qty}× ${p.model||''}${p.due?' · requested delivery '+String(p.due).slice(0,10):''}</div>
+    ${(p.vins&&p.vins.length)?`<div class="mono" style="font-size:12px;margin-bottom:10px">VIN${p.vins.length>1?'s':''}: ${p.vins.join(', ')}</div>`:''}
+    ${steps}
+    <button class="btn sec" style="width:100%;margin-top:14px" onclick="dclose()">Close</button>`);
 }
 
 // ---- Boat Trailer Builder (configurator) ----

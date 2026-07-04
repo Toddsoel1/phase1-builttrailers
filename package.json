@@ -1,7 +1,7 @@
 {
   "name": "built-trailers-phase1",
   "version": "1.0.0",
-  "description": "Built Trailers — Phase 1: single source of truth (auth/roles, parts master, BOMs, inventory with live valuation).",
+  "description": "Built Trailers shop operating system — the single source of truth for orders, production, inventory, warranty, and the dealer/owner portals.",
   "type": "module",
   "engines": {
     "node": ">=20"

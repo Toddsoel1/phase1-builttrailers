@@ -1,4 +1,4 @@
--- Built Trailers — Phase 1 schema (PostgreSQL dialect; runs on Render Postgres and PGlite)
+-- Built Trailers schema (PostgreSQL dialect; runs on Render Postgres and PGlite)
 
 CREATE TABLE IF NOT EXISTS role (
   name  TEXT PRIMARY KEY,

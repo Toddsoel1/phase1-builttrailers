@@ -1,4 +1,4 @@
-# Built Trailers — Phase 1 (Live Hosted Environment)
+# Built Trailers — Shop Operating System
 
 The production foundation: a deployable web application backed by a real database that
 serves as the **single source of truth** for parts, BOMs, and inventory — with secure,
@@ -8,7 +8,7 @@ This is real, running software (not a mockup). It has been booted and tested end
 
 ---
 
-## What's in Phase 1
+## What's inside
 
 | Capability | Detail |
 |---|---|

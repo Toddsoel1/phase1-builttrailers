@@ -215,6 +215,13 @@ const colMigrations = [
      source TEXT NOT NULL DEFAULT 'auto', assigned_by TEXT, approved_at TIMESTAMPTZ,
      completed_at TIMESTAMPTZ, completed_via TEXT, created_at TIMESTAMPTZ NOT NULL DEFAULT now())`,
   `CREATE INDEX IF NOT EXISTS idx_dtask_date ON daily_task(plan_date, user_id)`,
+  // A dealer's "I'll take that one" on an unsold stock build — staff approve (which sells the
+  // order via the existing assign-customer path) or decline; competing requests auto-decline.
+  `CREATE TABLE IF NOT EXISTS stock_request (id SERIAL PRIMARY KEY, order_id TEXT NOT NULL,
+     dealer_user_id TEXT, customer_id TEXT NOT NULL, note TEXT,
+     status TEXT NOT NULL DEFAULT 'pending', created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+     decided_by TEXT, decided_at TIMESTAMPTZ)`,
+  `CREATE INDEX IF NOT EXISTS idx_stockreq_pending ON stock_request(order_id) WHERE status='pending'`,
 ];
 
 // Admin lockout self-heal, run at every boot. The tier dropdown on the Users screen saves

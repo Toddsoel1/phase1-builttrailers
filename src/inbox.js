@@ -58,6 +58,13 @@ export async function actionItemsFor(user) {
       label: `${plural(n, 'PO')} ready to receive`, count: n, link: 'pos' });
   }
 
+  // 3b. Dealer stock requests — a dealership wants an unsold stock build; first yes wins it.
+  if (has('orders')) {
+    const n = await count(`SELECT COUNT(*)::int AS n FROM stock_request WHERE status='pending'`);
+    if (n) items.push({ key: 'stock_requests', icon: '🏷️',
+      label: `${plural(n, 'dealer stock request')} awaiting a yes/no`, count: n, link: 'orders' });
+  }
+
   // 4. Replenishment — never run out of what the scheduled orders need.
   //    Shop Specialist / Shop Manager (and admins) get the targeted MRP push with specifics:
   //    ORDER NOW / BUILD NOW when a part will run out before replenishment can land.

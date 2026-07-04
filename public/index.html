@@ -129,7 +129,7 @@ body.tv .topbar h2{font-size:24px}
 <!-- APP -->
 <div class="app hidden" id="app">
   <aside class="sidebar">
-    <div class="brand"><h1>BUILT <span class="t">TRAILERS</span></h1><small>Phase 1 · live</small></div>
+    <div class="brand"><h1>BUILT <span class="t">TRAILERS</span></h1><small>Shop Operating System</small></div>
     <nav class="nav" id="nav"></nav>
     <div class="who"><div class="muted">Signed in as</div><b id="whoName"></b><span id="whoPill"></span>
       <div style="display:flex;gap:6px;margin-top:8px">
@@ -838,7 +838,7 @@ function renderInbox(items){
 }
 
 async function viewDash(){
-  $('pTitle').textContent='Dashboard';$('pSub').textContent='Phase 1 — single source of truth (live from the database)';$('pActions').innerHTML='';
+  $('pTitle').textContent='Dashboard';$('pSub').textContent='The single source of truth — live from the database';$('pActions').innerHTML='';
   const [inv,models,inbox]=await Promise.all([api('/api/inventory/summary'),api('/api/models'),api('/api/inbox').catch(()=>({items:[]}))]);
   const avgMargin=models.reduce((s,m)=>s+m.margin,0)/models.length*100;
   $('content').innerHTML=`
@@ -1987,12 +1987,20 @@ async function viewOrders(){
   $('pTitle').textContent='Production Flow';
   $('pSub').textContent=ordView==='queue'?('Production priority — '+(canReorder()?'use ↑ ↓ to resequence':'read-only')):('Production Flow pipeline — '+(canEdit()?'drag a card to change its stage':'read-only'));
   $('pActions').innerHTML=(canEdit()?`<button class="btn sm sec" onclick="wipLimitsModal()" title="Cap how many orders may sit in each production stage">🚧 WIP limits</button> `:'')+(canSell()?`<button class="btn" onclick="go('neworder')">➕ New Order</button>`:'');
-  const {stages,orders,wipLimits={}}=await api('/api/orders');
+  const [{stages,orders,wipLimits={}},stockReqs]=await Promise.all([api('/api/orders'),api('/api/stock-requests').catch(()=>[])]);
   window._wipLimits=wipLimits;
   const live=orders.filter(o=>!o.billed && o.stage!=='Cancelled'); // invoiced + rejected drop off the board
+  const reqCard=stockReqs.length?`<div class="card" style="margin-bottom:14px;border-color:var(--accent)"><h3>🏷️ Dealer stock requests <span class="badge b-low">${stockReqs.length}</span></h3>
+    <p class="muted" style="font-size:12px;margin-bottom:8px">A dealership wants an unsold stock build. Approving sells it to them (VINs, MSO, and invoicing follow the normal path) and tells everyone else it's taken.</p>
+    ${stockReqs.map(r=>`<div style="display:flex;gap:10px;align-items:center;padding:8px 0;border-bottom:1px solid var(--line);flex-wrap:wrap">
+      <div style="flex:1;min-width:200px"><b style="font-size:13.5px">${esc(r.orderId)} — ${r.qty}× ${esc(r.model)}</b> <span class="badge b-buy">${esc(r.stage)}</span>
+        <div class="muted" style="font-size:11.5px">${esc(r.dealership)}${r.requestedBy?' · '+esc(r.requestedBy):''} · ${new Date(r.at).toLocaleDateString()}${r.note?' — “'+esc(r.note)+'”':''}</div></div>
+      ${canSell()?`<button class="btn sm" onclick="decideStockReq(${r.id},'approve','${esc(r.dealership)}','${esc(r.orderId)}')">✓ Sell to them</button>
+      <button class="btn sm sec" onclick="decideStockReq(${r.id},'decline','${esc(r.dealership)}','${esc(r.orderId)}')">✕ Decline</button>`:''}
+    </div>`).join('')}</div>`:'';
   const rejected=orders.filter(o=>o.stage==='Cancelled');
   const viewToggle=`<div class="tabs" style="margin-bottom:12px"><button class="${ordView==='board'?'active':''}" onclick="ordView='board';viewOrders()">🗂️ Board</button><button class="${ordView==='queue'?'active':''}" onclick="ordView='queue';viewOrders()">🏭 Production Queue</button>${rejected.length?`<button class="${ordView==='rejected'?'active':''}" onclick="ordView='rejected';viewOrders()">🚫 Rejected <span style="opacity:.7">${rejected.length}</span></button>`:''}</div>`;
-  if(ordView==='queue'){ $('content').innerHTML=viewToggle+renderQueue(orders); return; }
+  if(ordView==='queue'){ $('content').innerHTML=viewToggle+reqCard+renderQueue(orders); return; }
   if(ordView==='rejected'){ $('content').innerHTML=viewToggle+renderRejected(rejected); return; }
   const types=['All',...Array.from(new Set(live.map(o=>o.type)))];
   const filtered=ordFilter==='All'?live:live.filter(o=>o.type===ordFilter);
@@ -2010,7 +2018,15 @@ async function viewOrders(){
    <table><thead><tr><th>Type</th><th class="right">Open orders</th><th class="right">Units</th><th class="right">Backlog value</th></tr></thead><tbody>
    ${Array.from(new Set(live.map(o=>o.type))).map(t=>{const os=live.filter(o=>o.type===t);return `<tr><td><b>${t}</b></td><td class="right">${os.length}</td><td class="right">${os.reduce((a,o)=>a+o.qty,0)}</td><td class="right">${money(os.reduce((a,o)=>a+o.revenue,0))}</td></tr>`;}).join('')}
    </tbody></table></div>`;
-  $('content').innerHTML=viewToggle+tabs+board+summary;
+  $('content').innerHTML=viewToggle+reqCard+tabs+board+summary;
+}
+async function decideStockReq(id,action,dealership,orderId){
+  const msg=action==='approve'?('Sell '+orderId+' to '+dealership+'? This assigns the order (and its VINs/MSO) to them and declines any competing requests.')
+    :('Decline '+dealership+"'s request for "+orderId+'?');
+  if(!confirm(msg))return;
+  try{ const r=await api('/api/stock-requests/'+id+'/decide',{method:'POST',body:JSON.stringify({action})});
+    toast(action==='approve'?'✓ '+orderId+' sold to '+dealership+(r.msosQueued?' — MSO queued':''):'Request declined'); viewOrders();
+  }catch(e){ toast(e.message); }
 }
 async function resolveAndon(id,orderId){
   const resolution=prompt('How was it resolved? (optional — leave blank to just clear it)');

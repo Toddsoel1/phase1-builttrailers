@@ -1075,6 +1075,57 @@ test('dealer: logged-in change-password rejects wrong current password, then wor
   assert.equal(newLogin.status, 200, 'new password works');
 });
 
+test('dealer stock: list, request, staff approve sells the order and declines rivals', async () => {
+  // Two dealerships authorized for the same trailer type, both wanting the same stock build.
+  const models = await json(await api('/api/models'));
+  const model = models[0];
+  const mkDealer = async (n) => {
+    const cust = await json(await api('/api/customers', { method: 'POST', body: JSON.stringify({ name: `Stock Test Dealership ${n}`, kind: 'Dealership', allowed: [model.category] }) }));
+    await fetch(BASE + '/api/dealer/signup', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: `stock${n}@x.test`, password: 'stockPw1', name: `Stock ${n}`, dealershipName: `Stock Test Dealership ${n}`, address: '1 Main St', city: 'Provo', state: 'UT', zip: '84601' }) });
+    const signup = (await json(await api('/api/dealers/pending'))).find(d => d.email === `stock${n}@x.test`);
+    await api('/api/dealers/' + signup.id + '/approve', { method: 'POST', body: JSON.stringify({ customerId: cust.id }) });
+    const login = await json(await fetch(BASE + '/api/dealer/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: `stock${n}@x.test`, password: 'stockPw1' }) }));
+    return { cust, headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + login.token } };
+  };
+  const d1 = await mkDealer(1), d2 = await mkDealer(2);
+
+  // One stock build finished (Ready — no units yet, so the QC gate passes trivially), one still queued.
+  const ready = await json(await api('/api/orders/stock', { method: 'POST', body: JSON.stringify({ modelId: model.id, qty: 1 }) }));
+  await api('/api/orders/' + ready.id + '/stage', { method: 'PATCH', body: JSON.stringify({ stage: 'Ready' }) });
+  const coming = await json(await api('/api/orders/stock', { method: 'POST', body: JSON.stringify({ modelId: model.id, qty: 2, due: '2026-11-01' }) }));
+
+  const list = await json(await fetch(BASE + '/api/dealer/stock', { headers: d1.headers }));
+  assert.ok(list.available.find(x => x.id === ready.id), 'finished stock build listed as available now');
+  assert.ok(list.coming.find(x => x.id === coming.id), 'queued stock build listed as coming soon');
+
+  // Both dealers request the finished one; duplicates rejected.
+  assert.equal((await fetch(BASE + '/api/dealer/stock/' + ready.id + '/request', { method: 'POST', headers: d1.headers, body: JSON.stringify({ note: 'we have a buyer' }) })).status, 200);
+  assert.equal((await fetch(BASE + '/api/dealer/stock/' + ready.id + '/request', { method: 'POST', headers: d1.headers, body: '{}' })).status, 400, 'duplicate request rejected');
+  assert.equal((await fetch(BASE + '/api/dealer/stock/' + ready.id + '/request', { method: 'POST', headers: d2.headers, body: '{}' })).status, 200, 'a second dealership may also request');
+  assert.equal((await json(await fetch(BASE + '/api/dealer/stock', { headers: d1.headers }))).available.find(x => x.id === ready.id).requested, true, 'dealer sees their pending request');
+
+  // Staff approve dealership 1 — order sells to them, dealership 2's request auto-declines.
+  const reqs = await json(await api('/api/stock-requests'));
+  const winner = reqs.find(r => r.orderId === ready.id && r.dealership === 'Stock Test Dealership 1');
+  assert.ok(winner, 'staff see the pending request with the dealership named');
+  assert.equal((await api('/api/stock-requests/' + winner.id + '/decide', { method: 'POST', body: JSON.stringify({ action: 'approve' }) })).status, 200);
+  const mine = await json(await fetch(BASE + '/api/dealer/orders', { headers: d1.headers }));
+  assert.ok(mine.find(o => o.id === ready.id), 'order now shows in dealership 1\'s own orders');
+  assert.equal((await json(await api('/api/stock-requests'))).filter(r => r.orderId === ready.id).length, 0, 'rival request auto-declined');
+  assert.ok(!(await json(await fetch(BASE + '/api/dealer/stock', { headers: d2.headers }))).available.find(x => x.id === ready.id), 'sold unit gone from the other dealership\'s stock list');
+
+  // The buyer can now track it: full stage ladder with Ready current.
+  const prog = await json(await fetch(BASE + '/api/dealer/orders/' + ready.id + '/progress', { headers: d1.headers }));
+  assert.equal(prog.steps.length, 6, 'six-stage ladder');
+  const last = prog.steps[prog.steps.length - 1];
+  assert.equal(last.stage, 'Ready');
+  assert.ok(last.current && last.done && last.at, 'Ready is current, stamped with a date');
+  assert.ok(prog.steps.slice(0, 5).every(s => s.done), 'earlier stages render as done');
+  // ...and the other dealership cannot see someone else's order progress.
+  assert.equal((await fetch(BASE + '/api/dealer/orders/' + ready.id + '/progress', { headers: d2.headers })).status, 404, 'progress is scoped to the owning dealership');
+});
+
 test('staff: reset a dealer login\'s password from Customers & Dealers (admin-assist)', async () => {
   const cust = await json(await api('/api/customers', { method: 'POST', body: JSON.stringify({ name: 'Admin Reset Dealership', kind: 'Dealership' }) }));
   await fetch(BASE + '/api/dealer/signup', { method: 'POST', headers: { 'Content-Type': 'application/json' },

@@ -1,4 +1,4 @@
-// Seed Phase 1 database: schema + real Built Trailers catalog + roles/users.
+// Seed the database: schema + real Built Trailers catalog + roles/users.
 // Idempotent — safe to re-run. Default password for every seeded user: built2026
 import fs from 'fs';
 import path from 'path';
