@@ -623,7 +623,7 @@ app.post('/api/auth/login', loginLimiter, async (req, res) => {
   const sectionRows = u.role === 'admin' ? null :
     await all(`SELECT DISTINCT rs.section FROM user_title ut JOIN role_section rs ON rs.role_name=ut.role_name WHERE ut.user_id=$1`, [u.id]);
   const sections = sectionRows ? sectionRows.map(r => r.section) : null;
-  const safe = { id: u.id, name: u.name, username: u.username, title: u.title, titles, role: u.role, manager_id: u.manager_id, sections, email: u.email || null, workstation: u.workstation || null };
+  const safe = { id: u.id, name: u.name, username: u.username, title: u.title, titles, role: u.role, manager_id: u.manager_id, sections, email: u.email || null, workstation: u.workstation || null, schedule: standup.parseSchedule(u.schedule) };
   res.json({ token: signToken(u), user: safe });
 });
 app.get('/api/auth/me', authMiddleware, (req, res) => res.json({ user: req.user }));
@@ -765,6 +765,16 @@ app.post('/api/users/me/email', authMiddleware, async (req, res) => {
   await audit(req, 'user.email', `self-set ${email || '(cleared)'}`);
   res.json({ ok: true, email: email || null });
 });
+// Self-service weekly schedule — which days I work and how long (default: Mon–Thu, 10h, 6am).
+// Drives stand-up auto-assignment (no tasks on your day off) and capacity calibration.
+app.post('/api/users/me/schedule', authMiddleware, async (req, res) => {
+  const s = standup.parseSchedule(req.body || {});
+  if (req.body?.days && (!Array.isArray(req.body.days) || !req.body.days.length))
+    return res.status(400).json({ error: 'Pick at least one workday.' });
+  await q('UPDATE app_user SET schedule=$1 WHERE id=$2', [JSON.stringify(s), req.user.id]);
+  await audit(req, 'user.schedule', `self-set ${s.days.join(',')} × ${s.hours}h from ${s.start}`);
+  res.json({ ok: true, schedule: s });
+});
 app.post('/api/users/me/password', authMiddleware, async (req, res) => {
   const { password } = req.body || {};
   if (!password || password.length < 8) return res.status(400).json({ error: 'Password must be at least 8 characters' });
@@ -773,7 +783,7 @@ app.post('/api/users/me/password', authMiddleware, async (req, res) => {
   res.json({ ok: true });
 });
 app.patch('/api/users/:id', authMiddleware, requireTier('admin'), async (req, res) => {
-  const { title, titles, role, manager_id, password, username, phone, email, workstation, smsConsent } = req.body || {};
+  const { title, titles, role, manager_id, password, username, phone, email, workstation, schedule, smsConsent } = req.body || {};
   const cur = await one('SELECT * FROM app_user WHERE id=$1', [req.params.id]);
   if (!cur) return res.status(404).json({ error: 'not found' });
   let newTitle = title ?? cur.title;
@@ -805,6 +815,9 @@ app.patch('/api/users/:id', authMiddleware, requireTier('admin'), async (req, re
      workstation !== undefined ? (workstation || null) : cur.workstation,
      smsConsent !== undefined ? !!smsConsent : cur.sms_consent,
      consentAt, req.params.id]);
+  if (schedule !== undefined)
+    await q('UPDATE app_user SET schedule=$1 WHERE id=$2',
+      [schedule ? JSON.stringify(standup.parseSchedule(schedule)) : null, req.params.id]);
   if (password) await q('UPDATE app_user SET password_hash=$1 WHERE id=$2', [hashPassword(password), req.params.id]);
   await audit(req, 'user.update', `${req.params.id}${smsConsent !== undefined ? (smsConsent ? ' [sms-consent granted]' : ' [sms-consent revoked]') : ''}`);
   res.json({ ok: true });
@@ -1183,6 +1196,29 @@ app.post('/api/standup/task/:id/complete', authMiddleware, async (req, res) => {
   const mgr = req.user.role === 'admin' || titles.includes('Shop Manager') || titles.includes('General Manager');
   try { res.json(await standup.completeTask(Number(req.params.id), 'manual', req.user.id, mgr)); }
   catch (e) { res.status(400).json({ error: e.message }); }
+});
+// The 60-second end-of-day verification: confirm what actually got done (+ optional note).
+app.post('/api/standup/verify', authMiddleware, async (req, res) => {
+  try {
+    const r = await standup.verifyDay(req.user.id, req.body?.date, req.body?.completeIds, req.body?.note);
+    await audit(req, 'standup.verify', `${r.date}: ${r.done}/${r.goal} done`);
+    res.json(r);
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+// Workstation registry — add stations beyond the model routing (Sub-Assembly, made-parts bench…)
+// and map each to the production stage its work belongs to (drives My Station + auto-planning).
+app.get('/api/workstations/registry', authMiddleware, async (_req, res) => {
+  const reg = await all('SELECT name, stage, active FROM workstation ORDER BY name', []).catch(() => []);
+  res.json(reg);
+});
+app.post('/api/workstations', authMiddleware, requireTier('admin'), async (req, res) => {
+  const name = String(req.body?.name || '').trim();
+  const stage = req.body?.stage && STAGES.includes(req.body.stage) ? req.body.stage : null;
+  if (!name) return res.status(400).json({ error: 'Station name is required.' });
+  await q(`INSERT INTO workstation(name, stage, active) VALUES ($1,$2,true)
+           ON CONFLICT(name) DO UPDATE SET stage=$2, active=true`, [name, stage]);
+  await audit(req, 'workstation.upsert', `${name}${stage ? ' -> ' + stage : ''}`);
+  res.json({ ok: true, name, stage });
 });
 
 // ---- performance analytics — expectations (targets) + generated areas for improvement ----
@@ -2319,6 +2355,11 @@ await ensureSchema();
   // Daily Stand-Up: every title sees the screen — workers get My Day, managers run the plan.
   await q(`INSERT INTO role_section(role_name, section) SELECT name, 'standup' FROM role
              ON CONFLICT DO NOTHING`).catch(e => console.warn('standup section grant:', e.message));
+  // Workstation registry: seed from the model routing so every known station has a row (with
+  // its stage), ready for admins to extend with Sub-Assembly / made-parts stations.
+  await q(`INSERT INTO workstation(name, stage)
+             SELECT ws, MIN(stage) FROM model_labor GROUP BY ws
+             ON CONFLICT (name) DO NOTHING`).catch(e => console.warn('workstation seed:', e.message));
   // Un-demote anyone holding an admin-tier title + keep General Manager admin (lockout self-heal).
   await ensureAdminInvariant().catch(e => console.warn('admin invariant:', e.message));
 console.log('Migrations applied.');

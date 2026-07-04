@@ -181,6 +181,16 @@ const colMigrations = [
   // the worker (or auto-checked when the underlying stage completes). Rows are permanent, so
   // the per-employee planned-vs-actual record IS the table.
   `ALTER TABLE app_user ADD COLUMN IF NOT EXISTS workstation TEXT`,
+  // Weekly work schedule per employee (JSON: {days:[1..4], hours:10, start:"06:00"}). Null =
+  // the shop default (Mon–Thu, 10-hour days). Drives stand-up assignment + capacity; shifts
+  // and Fri/Sat crews later are just different values here.
+  `ALTER TABLE app_user ADD COLUMN IF NOT EXISTS schedule TEXT`,
+  // End-of-day 60-second verification: the employee confirms what they completed.
+  `CREATE TABLE IF NOT EXISTS day_verification (user_id TEXT NOT NULL, plan_date DATE NOT NULL,
+     verified_at TIMESTAMPTZ NOT NULL DEFAULT now(), note TEXT, PRIMARY KEY (user_id, plan_date))`,
+  // Workstation registry — stations exist beyond what the model routing mentions (Sub-Assembly,
+  // made-parts benches...). stage maps a station to the production stage its work belongs to.
+  `CREATE TABLE IF NOT EXISTS workstation (name TEXT PRIMARY KEY, stage TEXT, active BOOLEAN NOT NULL DEFAULT true)`,
   `CREATE TABLE IF NOT EXISTS daily_task (id SERIAL PRIMARY KEY, plan_date DATE NOT NULL, user_id TEXT,
      order_id TEXT, stage TEXT, workstation TEXT, description TEXT NOT NULL,
      est_hours NUMERIC(8,2) NOT NULL DEFAULT 0, status TEXT NOT NULL DEFAULT 'proposed',

@@ -11,7 +11,26 @@
 import { all, one, q } from './db.js';
 
 const PROD_STAGES = ['Scheduled', 'Build', 'Paint/Powder Coat', 'Finish'];
-const DAY_HOURS = Number(process.env.STANDUP_DAY_HOURS || 8);
+
+// The shop default: Monday–Thursday, 10-hour days starting 6am. Each employee can carry their
+// own schedule (app_user.schedule JSON) — a second shift or a Fri/Sat crew is just other values.
+export const DEFAULT_SCHEDULE = {
+  days: (process.env.SHOP_DAYS || '1,2,3,4').split(',').map(Number).filter(n => n >= 0 && n <= 6),
+  hours: Number(process.env.SHOP_HOURS || 10),
+  start: process.env.SHOP_START || '06:00',
+};
+export function parseSchedule(raw) {
+  if (!raw) return { ...DEFAULT_SCHEDULE };
+  try {
+    const s = typeof raw === 'string' ? JSON.parse(raw) : raw;
+    const days = Array.isArray(s.days) ? s.days.map(Number).filter(n => n >= 0 && n <= 6) : DEFAULT_SCHEDULE.days;
+    return { days: days.length ? [...new Set(days)].sort() : DEFAULT_SCHEDULE.days,
+      hours: Math.min(14, Math.max(1, Number(s.hours) || DEFAULT_SCHEDULE.hours)),
+      start: /^\d{2}:\d{2}$/.test(s.start || '') ? s.start : DEFAULT_SCHEDULE.start };
+  } catch { return { ...DEFAULT_SCHEDULE }; }
+}
+const weekdayOf = d => new Date(d + 'T12:00:00').getDay();
+export const worksOn = (schedule, dateStr) => schedule.days.includes(weekdayOf(dateStr));
 
 const today = () => new Date().toISOString().slice(0, 10);
 export function normDate(d) {
@@ -23,7 +42,7 @@ export function normDate(d) {
 // closed plan days (today excluded): the est-hours they actually COMPLETED per planned day,
 // stretched +10% (expectations push gently up), clamped to 50–125% of the base day. No history
 // yet = the base day. Returned alongside completion % so the Shop Manager sees the why.
-export async function workerCalibration() {
+export async function workerCalibration(baseHoursByUser = {}) {
   const rows = await all(`
     SELECT user_id,
            COUNT(DISTINCT plan_date)::int AS days,
@@ -36,10 +55,11 @@ export async function workerCalibration() {
      GROUP BY user_id`, []).catch(() => []);
   const out = {};
   for (const r of rows) {
+    const base = baseHoursByUser[r.user_id] || DEFAULT_SCHEDULE.hours;
     const perDay = r.days ? Number(r.done_est) / r.days : 0;
     const capacity = perDay > 0
-      ? Math.round(Math.min(DAY_HOURS * 1.25, Math.max(DAY_HOURS * 0.5, perDay * 1.1)) * 10) / 10
-      : DAY_HOURS;
+      ? Math.round(Math.min(base * 1.25, Math.max(base * 0.5, perDay * 1.1)) * 10) / 10
+      : base;
     out[r.user_id] = { capacity, days: r.days,
       donePct: r.assigned ? Math.round((r.done / r.assigned) * 100) : null };
   }
@@ -59,10 +79,14 @@ export async function generatePlan(date, byUserId) {
       FROM sales_order o LEFT JOIN model m ON m.id=o.model_id
      WHERE o.stage = ANY($1) AND o.billed = false
      ORDER BY o.production_seq NULLS LAST, o.created_at`, [PROD_STAGES]);
-  const workers = await all(`SELECT id, name, workstation FROM app_user
-                              WHERE active IS DISTINCT FROM false AND workstation IS NOT NULL`, []);
-  const calib = await workerCalibration();
-  const capOf = id => calib[id]?.capacity || DAY_HOURS;
+  const allWorkers = await all(`SELECT id, name, workstation, schedule FROM app_user
+                                 WHERE active IS DISTINCT FROM false AND workstation IS NOT NULL`, []);
+  // Only people scheduled to work THIS day get auto-assigned; everyone else's station work
+  // lands in the unassigned bucket for the Shop Manager to place at stand-up.
+  const workers = allWorkers.filter(w => worksOn(parseSchedule(w.schedule), d));
+  const baseHours = Object.fromEntries(allWorkers.map(w => [w.id, parseSchedule(w.schedule).hours]));
+  const calib = await workerCalibration(baseHours);
+  const capOf = id => calib[id]?.capacity || baseHours[id] || DEFAULT_SCHEDULE.hours;
   const load = {}; // user_id -> hours already assigned today
   for (const t of await all(`SELECT user_id, SUM(est_hours) AS h FROM daily_task
                               WHERE plan_date=$1 AND user_id IS NOT NULL GROUP BY user_id`, [d]))
@@ -153,13 +177,19 @@ export async function planFor(date) {
                            WHERE t.plan_date=$1 ORDER BY u.name NULLS LAST, t.id`, [d]);
   const tasks = rows.map(shape);
   const proposed = tasks.filter(t => t.status === 'proposed').length;
-  const calib = await workerCalibration();
-  const workers = (await all(`SELECT id, name, workstation FROM app_user WHERE active IS DISTINCT FROM false ORDER BY name`, []))
-    .map(w => ({ ...w, capacity: calib[w.id]?.capacity ?? DAY_HOURS, trailingDonePct: calib[w.id]?.donePct ?? null }));
-  return { date: d, tasks, proposed, workers, dayHours: DAY_HOURS };
+  const raw = await all(`SELECT id, name, workstation, schedule FROM app_user WHERE active IS DISTINCT FROM false ORDER BY name`, []);
+  const baseHours = Object.fromEntries(raw.map(w => [w.id, parseSchedule(w.schedule).hours]));
+  const calib = await workerCalibration(baseHours);
+  const workers = raw.map(w => {
+    const sch = parseSchedule(w.schedule);
+    return { id: w.id, name: w.name, workstation: w.workstation,
+      capacity: calib[w.id]?.capacity ?? sch.hours, trailingDonePct: calib[w.id]?.donePct ?? null,
+      scheduledToday: worksOn(sch, d), scheduleDays: sch.days, scheduleHours: sch.hours };
+  });
+  return { date: d, tasks, proposed, workers, dayHours: DEFAULT_SCHEDULE.hours };
 }
 
-// One worker's day: the goal, the score, and the hours story.
+// One worker's day: the goal, the score, the hours story, and whether they've verified it.
 export async function myDay(userId, date) {
   const d = normDate(date);
   const rows = await all(`SELECT t.*, NULL AS user_name FROM daily_task t
@@ -167,9 +197,27 @@ export async function myDay(userId, date) {
   const tasks = rows.map(shape);
   const done = tasks.filter(t => t.done).length;
   const actual = await one(`SELECT COALESCE(SUM(hours),0) AS h FROM work_log WHERE user_id=$1 AND log_date=$2`, [userId, d]).catch(() => null);
+  const ver = await one(`SELECT verified_at, note FROM day_verification WHERE user_id=$1 AND plan_date=$2`, [userId, d]).catch(() => null);
   return { date: d, tasks, goal: tasks.length, done,
     estHours: Math.round(tasks.reduce((a, t) => a + t.estHours, 0) * 10) / 10,
-    actualHours: Number(actual?.h || 0) };
+    actualHours: Number(actual?.h || 0),
+    verifiedAt: ver?.verified_at || null, verifyNote: ver?.note || null };
+}
+
+// The 60-second end-of-day check: the worker confirms what actually got done. Checked task ids
+// complete (their own, that day, only); the confirmation itself is stamped so reporting can
+// distinguish a verified day from an unreviewed one.
+export async function verifyDay(userId, date, completeIds = [], note) {
+  const d = normDate(date);
+  for (const id of (Array.isArray(completeIds) ? completeIds : [])) {
+    const t = await one('SELECT * FROM daily_task WHERE id=$1 AND user_id=$2 AND plan_date=$3', [Number(id), userId, d]);
+    if (t && !t.completed_at)
+      await q(`UPDATE daily_task SET status='done', completed_at=now(), completed_via='verify' WHERE id=$1`, [t.id]);
+  }
+  await q(`INSERT INTO day_verification(user_id, plan_date, note) VALUES ($1,$2,$3)
+           ON CONFLICT(user_id, plan_date) DO UPDATE SET verified_at=now(), note=$3`,
+    [userId, d, (note || '').slice(0, 300) || null]);
+  return myDay(userId, d);
 }
 
 // Effectiveness: per person per day — assigned vs done vs hours — over a trailing window.
@@ -187,8 +235,12 @@ export async function report(days = 14) {
                             WHERE log_date >= CURRENT_DATE - ($1 || ' days')::interval GROUP BY log_date, user_id`,
     [String(Math.max(1, days))]).catch(() => []);
   const hKey = Object.fromEntries(hours.map(h => [`${fmtDate(h.log_date)}|${h.user_id}`, Number(h.h)]));
+  const vers = await all(`SELECT user_id, plan_date FROM day_verification
+                           WHERE plan_date >= CURRENT_DATE - ($1 || ' days')::interval`, [String(Math.max(1, days))]).catch(() => []);
+  const vKey = new Set(vers.map(v => `${fmtDate(v.plan_date)}|${v.user_id}`));
   return rows.map(r => ({ date: fmtDate(r.plan_date), userId: r.user_id, user: r.name,
     assigned: r.assigned, done: r.done, donePct: r.assigned ? Math.round((r.done / r.assigned) * 100) : null,
     estHours: Math.round(Number(r.est) * 10) / 10,
-    actualHours: hKey[`${fmtDate(r.plan_date)}|${r.user_id}`] ?? 0 }));
+    actualHours: hKey[`${fmtDate(r.plan_date)}|${r.user_id}`] ?? 0,
+    verified: vKey.has(`${fmtDate(r.plan_date)}|${r.user_id}`) }));
 }

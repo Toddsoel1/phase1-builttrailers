@@ -92,6 +92,14 @@ export async function actionItemsFor(user) {
                                 WHERE plan_date=$1 AND user_id=$2 AND status='approved' AND completed_at IS NULL`, [todayStr, user.id]);
   if (myTasks) items.push({ key: 'my_day', icon: '🎯',
     label: `${plural(myTasks, 'task')} on your plan today`, count: myTasks, link: 'standup' });
+  // Late-day: nudge the 60-second verification once the shift is winding down (4pm local).
+  const localHour = Number(new Intl.DateTimeFormat('en-US', { timeZone: process.env.BRIEFING_TZ || 'America/Denver', hour: '2-digit', hour12: false }).format(new Date()));
+  if (localHour >= 16) {
+    const hadPlan = await count(`SELECT COUNT(*)::int AS n FROM daily_task WHERE plan_date=$1 AND user_id=$2 AND status<>'proposed'`, [todayStr, user.id]);
+    const verified = await count(`SELECT COUNT(*)::int AS n FROM day_verification WHERE plan_date=$1 AND user_id=$2`, [todayStr, user.id]);
+    if (hadPlan && !verified) items.push({ key: 'verify_day', icon: '⏱',
+      label: '60-second check: verify what you completed today', count: 1, link: 'standup' });
+  }
   if (isAdmin || holds('Shop Manager', 'General Manager')) {
     const prop = await count(`SELECT COUNT(*)::int AS n FROM daily_task WHERE plan_date=$1 AND status='proposed'`, [todayStr]);
     if (prop) items.push({ key: 'standup_approve', icon: '📣',

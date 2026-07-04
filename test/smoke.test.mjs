@@ -706,6 +706,67 @@ test('performance-calibrated plan + My Station + per-VIN build log stamping', as
   for (const s of stamped) assert.equal(s.by, 'Maria Chen', 'each step attributed to the verified account');
 });
 
+test('schedules drive the plan, 60-second day verification, and the workstation registry', async () => {
+  const addDays = (s, n) => { const d = new Date(s + 'T12:00:00'); d.setDate(d.getDate() + n);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
+  const nextDow = t => { let s = new Date().toISOString().slice(0, 10);
+    do { s = addDays(s, 1); } while (new Date(s + 'T12:00:00').getDay() !== t); return s; };
+  const today = new Date().toISOString().slice(0, 10);
+
+  const users = await json(await api('/api/users'));
+  const maria = users.find(u => u.username === 'mchen');
+  const mr = await api('/api/auth/login', { method: 'POST', body: JSON.stringify({ username: 'mchen', password: 'built2026' }) });
+  const mlogin = await mr.json();
+  const smh = { 'Content-Type': 'application/json', Authorization: 'Bearer ' + mlogin.token };
+
+  // Self-service weekly schedule: Mon–Thu, 10-hour days (the shop standard).
+  assert.equal((await fetch(BASE + '/api/users/me/schedule', { method: 'POST', headers: smh, body: JSON.stringify({ days: [] }) })).status, 400, 'empty week rejected');
+  const sch = await json(await fetch(BASE + '/api/users/me/schedule', { method: 'POST', headers: smh, body: JSON.stringify({ days: [1, 2, 3, 4], hours: 10, start: '06:00' }) }));
+  assert.deepEqual(sch.schedule.days, [1, 2, 3, 4]);
+  assert.equal(sch.schedule.hours, 10);
+  const relog = await json(await api('/api/auth/login', { method: 'POST', body: JSON.stringify({ username: 'mchen', password: 'built2026' }) }));
+  assert.equal(relog.user.schedule.hours, 10, 'login payload carries the parsed schedule');
+
+  // Schedule-aware assignment: a Build order planned on SATURDAY leaves her work unassigned
+  // (she's Mon–Thu); the same work planned on MONDAY auto-assigns to her.
+  const model = (await json(await api('/api/models')))[0];
+  const cust = await json(await api('/api/customers', { method: 'POST', body: JSON.stringify({ name: 'Schedule Test Dealer', kind: 'Dealership' }) }));
+  await api('/api/customers/' + cust.id + '/types', { method: 'PATCH', body: JSON.stringify({ type: model.category, on: true }) });
+  const ord = await json(await api('/api/orders', { method: 'POST', body: JSON.stringify({ customerId: cust.id, modelId: model.id, qty: 1 }) }));
+  await api('/api/orders/' + ord.id + '/stage', { method: 'PATCH', body: JSON.stringify({ stage: 'Build' }) });
+  const sat = nextDow(6), mon = nextDow(1);
+  await fetch(BASE + '/api/standup/generate', { method: 'POST', headers: smh, body: JSON.stringify({ date: sat }) });
+  const satPlan = await json(await fetch(BASE + '/api/standup?date=' + sat, { headers: smh }));
+  const satTask = satPlan.tasks.find(t => t.orderId === ord.id && t.stage === 'Build');
+  assert.ok(satTask && satTask.userId === null, 'Saturday: her station work lands unassigned (day off)');
+  assert.equal(satPlan.workers.find(w => w.id === maria.id).scheduledToday, false, 'board marks her OFF that day');
+  await fetch(BASE + '/api/standup/generate', { method: 'POST', headers: smh, body: JSON.stringify({ date: mon }) });
+  const monPlan = await json(await fetch(BASE + '/api/standup?date=' + mon, { headers: smh }));
+  const monTask = monPlan.tasks.find(t => t.orderId === ord.id && t.stage === 'Build');
+  assert.equal(monTask.userId, maria.id, 'Monday: the same work auto-assigns to her');
+
+  // The 60-second verification: confirm the day, checking off what actually got done.
+  const t = await json(await fetch(BASE + '/api/standup/task', { method: 'POST', headers: smh,
+    body: JSON.stringify({ date: today, description: 'verification target', estHours: 1, userId: maria.id }) }));
+  const ver = await json(await fetch(BASE + '/api/standup/verify', { method: 'POST', headers: smh,
+    body: JSON.stringify({ date: today, completeIds: [t.id], note: 'waited on axles 1h' }) }));
+  assert.ok(ver.verifiedAt, 'day stamped verified');
+  assert.ok(ver.tasks.find(x => x.id === t.id).done, 'checked task completed via verification');
+  const rep = await json(await api('/api/standup/report?days=3'));
+  assert.equal(rep.find(r => r.userId === maria.id && r.date === today)?.verified, true, 'report shows the day as verified');
+
+  // Workstation registry: add Sub-Assembly mapped to Build; it powers My Station immediately.
+  const sr = await api('/api/auth/login', { method: 'POST', body: JSON.stringify({ username: 'aruiz', password: 'built2026' }) });
+  assert.equal((await fetch(BASE + '/api/workstations', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + (await sr.json()).token }, body: JSON.stringify({ name: 'Sub-Assembly', stage: 'Build' }) })).status, 403, 'adding stations is admin-only');
+  assert.equal((await api('/api/workstations', { method: 'POST', body: JSON.stringify({ name: 'Sub-Assembly', stage: 'Build' }) })).status, 200);
+  assert.ok((await json(await api('/api/workstations'))).includes('Sub-Assembly'), 'station list includes the new bench');
+  const prevWs = maria.workstation;
+  await api('/api/users/' + maria.id, { method: 'PATCH', body: JSON.stringify({ workstation: 'Sub-Assembly' }) });
+  const st = await json(await fetch(BASE + '/api/mystation', { headers: smh }));
+  assert.equal(st.stage, 'Build', 'registry stage powers My Station for the new bench');
+  await api('/api/users/' + maria.id, { method: 'PATCH', body: JSON.stringify({ workstation: prevWs }) }); // restore
+});
+
 test('order timeline: placed + stage completions with names and shop-floor initials', async () => {
   const unit = (await json(await api('/api/search?q=BLTTESTVIN0000099'))).units[0];
   const o = await json(await api('/api/orders/' + unit.orderId));

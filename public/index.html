@@ -109,7 +109,7 @@ a.lnk{color:var(--blue);cursor:pointer}
     <div class="who"><div class="muted">Signed in as</div><b id="whoName"></b><span id="whoPill"></span>
       <div style="display:flex;gap:6px;margin-top:8px">
         <button class="btn sec sm" id="pushBtn" style="flex:1" title="Enable notifications" onclick="enablePush('/api/push/subscribe')">🔔</button>
-        <button class="btn sec sm" style="flex:1" title="My email" onclick="myEmailModal()">✉️</button>
+        <button class="btn sec sm" style="flex:1" title="My profile — email &amp; work week" onclick="myEmailModal()">👤</button>
         <button class="btn sec sm" style="flex:1.6" title="Log out" onclick="logout()">Log out</button>
       </div></div>
   </aside>
@@ -1213,11 +1213,14 @@ async function viewStandup(){
     if(isMgr) plan=await api('/api/standup?date='+date);
   }catch(e){ $('content').innerHTML=`<div class="card"><p class="msg err">${esc(e.message)}</p></div>`; return; }
   const prog=me.goal?Math.round(me.done/me.goal*100):0;
+  window._suMe=me;
   const myCard=`<div class="card" style="margin-bottom:16px"><h3>🎯 My day — ${esc(date)}</h3>
     ${me.goal?`<div style="display:flex;align-items:center;gap:14px;margin:6px 0 10px;flex-wrap:wrap">
       <span style="font-size:22px;font-weight:800">${me.done} / ${me.goal} done</span>
       <div style="flex:1;min-width:140px;height:10px;background:var(--panel2);border-radius:5px;overflow:hidden"><div style="height:100%;width:${prog}%;background:${prog>=100?'var(--green)':'var(--accent)'}"></div></div>
-      <span class="muted" style="font-size:12.5px">est ${me.estHours}h · logged ${me.actualHours}h</span></div>
+      <span class="muted" style="font-size:12.5px">est ${me.estHours}h · logged ${me.actualHours}h</span>
+      ${me.verifiedAt?`<span class="badge b-ok" title="${esc(me.verifyNote||'')}">✔ day verified ${new Date(me.verifiedAt).toLocaleTimeString([],{hour:'numeric',minute:'2-digit'})}</span>`
+        :`<button class="btn sm" onclick="suVerifyModal()">⏱ Verify my day (60 sec)</button>`}</div>
     ${me.tasks.map(t=>`<div style="display:flex;gap:10px;align-items:center;padding:7px 0;border-bottom:1px solid var(--line)">
       <span>${t.done?'✅':'⬜'}</span>
       <div style="flex:1"><b style="font-size:13.5px;${t.done?'opacity:.55':''}">${esc(t.description)}</b>
@@ -1240,7 +1243,7 @@ async function viewStandup(){
   let board='';
   if(isMgr&&plan){
     const byUser={}; for(const t of plan.tasks){const k=t.user||'— Unassigned —';(byUser[k]=byUser[k]||[]).push(t);}
-    const wOpts=u=>`<option value="">— unassigned —</option>`+plan.workers.map(w=>`<option value="${esc(w.id)}" ${u===w.id?'selected':''}>${esc(w.name)}${w.workstation?' ('+esc(w.workstation)+')':''}</option>`).join('');
+    const wOpts=u=>`<option value="">— unassigned —</option>`+plan.workers.map(w=>`<option value="${esc(w.id)}" ${u===w.id?'selected':''}>${esc(w.name)}${w.workstation?' ('+esc(w.workstation)+')':''}${w.scheduledToday===false?' · OFF this day':''}</option>`).join('');
     board=`<div class="card" style="margin-bottom:16px;border-color:var(--accent)">
       <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:8px">
         <h3 style="margin:0">📣 The plan — ${plan.tasks.length} task(s)${plan.proposed?` <span class="badge b-low">${plan.proposed} awaiting approval</span>`:(plan.tasks.length?' <span class="badge b-ok">approved</span>':'')}</h3>
@@ -1294,6 +1297,28 @@ function msProblem(unitId,orderId){
 async function msProblemSend(unitId){
   try{ await api('/u/'+unitId+'/problem',{method:'POST',body:JSON.stringify({reason:$('msReason').value,note:($('msNote').value||'').trim()})});
     closeModal(); toast('Reported — the Shop Manager has been alerted'); viewStandup(); }
+  catch(e){ toast(e.message); }
+}
+function suVerifyModal(){
+  const me=window._suMe||{tasks:[]};
+  const open=me.tasks.filter(t=>!t.done);
+  modal('⏱ Verify my day — 60 seconds',`
+    <p class="muted" style="font-size:12.5px">Quick check before you head out: tick anything you finished that isn't checked yet, leave the rest honest, and confirm.</p>
+    ${me.tasks.map(t=>`<label style="display:flex;gap:8px;align-items:center;padding:6px 0;border-bottom:1px solid var(--line);cursor:${t.done?'default':'pointer'}">
+      <input type="checkbox" class="suvChk" data-id="${t.id}" ${t.done?'checked disabled':''}>
+      <span style="font-size:13px;${t.done?'opacity:.55':''}">${esc(t.description)} <span class="muted">(${t.estHours}h)</span></span>
+    </label>`).join('')||'<p class="muted">No tasks were on your plan.</p>'}
+    <div class="field" style="margin-top:10px"><label>Anything get in the way? (optional)</label><input id="suvNote" class="inp" placeholder="e.g. waited 2h on axles"></div>
+    <div class="row" style="gap:8px;margin-top:8px">
+      <button class="btn" onclick="suVerifySend()">✔ Confirm my day</button>
+      <button class="btn sec" onclick="closeModal()">Cancel</button>
+    </div>
+    ${open.length?`<p class="muted" style="font-size:11px;margin-top:8px">Unchecked tasks stay open — the Shop Manager sees them at tomorrow's stand-up.</p>`:''}`);
+}
+async function suVerifySend(){
+  const completeIds=[...document.querySelectorAll('.suvChk:checked:not(:disabled)')].map(c=>Number(c.dataset.id));
+  try{ await api('/api/standup/verify',{method:'POST',body:JSON.stringify({date:window._suDate,completeIds,note:($('suvNote').value||'').trim()})});
+    closeModal(); toast('✔ Day verified — thanks'); viewStandup(); }
   catch(e){ toast(e.message); }
 }
 async function suGenerate(){ try{ const r=await api('/api/standup/generate',{method:'POST',body:JSON.stringify({date:window._suDate})}); toast(r.created+' task(s) proposed'); viewStandup(); }catch(e){ toast(e.message);} }
@@ -1387,7 +1412,9 @@ async function savePerfTargets(){
 async function viewUsers(){
   $('pTitle').textContent='Users & Roles';$('pSub').textContent='Accounts, permission tiers and reporting hierarchy';
   if(isAdmin()) $('pActions').innerHTML=`<button class="btn" onclick="addUserModal()">+ Add User</button>`;
-  const [users,roles]=await Promise.all([api('/api/users'),api('/api/roles')]);
+  const [users,roles,wsReg]=await Promise.all([api('/api/users'),api('/api/roles'),
+    isAdmin()?api('/api/workstations/registry').catch(()=>[]):Promise.resolve([])]);
+  window._wsReg=wsReg;
   const byId=Object.fromEntries(users.map(u=>[u.id,u]));
   const tierColor={admin:'admin',editor:'editor',viewer:'viewer'};
   $('content').innerHTML=`
@@ -1424,7 +1451,32 @@ async function viewUsers(){
      <b>admin</b> — full access including user management &nbsp;·&nbsp;
      <b>editor</b> — create orders, POs, update inventory &nbsp;·&nbsp;
      <b>viewer</b> — read-only access to all data
-   </p></div>`:''}`;
+   </p></div>`:''}
+  ${isAdmin()?`<div class="card" style="margin-top:14px">
+   <h3>Workstations <span class="muted" style="text-transform:none;letter-spacing:0">— stations power My Station queues &amp; stand-up auto-planning</span></h3>
+   <table><thead><tr><th>Station</th><th>Production stage</th></tr></thead><tbody>
+   ${(window._wsReg||[]).map(w=>`<tr><td><b>${esc(w.name)}</b></td>
+     <td><select onchange="saveWsStage(${ja(w.name)},this.value)" style="padding:3px 8px;border-radius:6px;border:1px solid var(--line);background:var(--panel2);color:var(--txt)">
+       <option value="">— none —</option>
+       ${['Scheduled','Build','Paint/Powder Coat','Finish'].map(s=>`<option ${w.stage===s?'selected':''}>${s}</option>`).join('')}
+     </select></td></tr>`).join('')}
+   </tbody></table>
+   <div style="display:flex;gap:6px;margin-top:10px;flex-wrap:wrap">
+     <input id="wsNewName" placeholder="New station (e.g. Sub-Assembly)" style="flex:1;min-width:180px;padding:7px;border-radius:8px;border:1px solid var(--line);background:var(--panel2);color:var(--txt)">
+     <select id="wsNewStage" style="min-width:150px;padding:7px;border-radius:8px;border:1px solid var(--line);background:var(--panel2);color:var(--txt)">
+       <option value="">stage: none</option>
+       ${['Scheduled','Build','Paint/Powder Coat','Finish'].map(s=>`<option>${s}</option>`).join('')}
+     </select>
+     <button class="btn sm" onclick="addWorkstation()">＋ Add station</button>
+   </div>
+   <p class="muted" style="font-size:12px;margin-top:8px">Sub-assembly / made-parts benches belong here too — map them to the stage their output feeds (usually Build), then assign workers to the station in their Edit modal.</p>
+  </div>`:''}`;
+}
+async function saveWsStage(name,stage){ try{ await api('/api/workstations',{method:'POST',body:JSON.stringify({name,stage:stage||undefined})}); toast(name+(stage?' → '+stage:' — stage cleared')); }catch(e){ toast(e.message); viewUsers(); } }
+async function addWorkstation(){
+  const name=($('wsNewName').value||'').trim(); if(!name)return toast('Name the station');
+  try{ await api('/api/workstations',{method:'POST',body:JSON.stringify({name,stage:$('wsNewStage').value||undefined})}); toast(name+' added'); viewUsers(); }
+  catch(e){ toast(e.message); }
 }
 // Multi-select role picker: a dropdown of checkboxes so a user can hold several job titles.
 function roleCheckboxHtml(p,roles,pre){
@@ -1619,20 +1671,38 @@ async function revokeUserSms(id){
   if(!confirm('Revoke SMS consent? This employee will no longer receive SMS notifications.'))return;
   try{await api('/api/users/'+id,{method:'PATCH',body:JSON.stringify({smsConsent:false})});closeModal();toast('Consent revoked');viewUsers();}catch(e){toast(e.message);}
 }
+function mySchedule(){
+  let s=ME.schedule; if(typeof s==='string'){try{s=JSON.parse(s);}catch(e){s=null;}}
+  return s&&Array.isArray(s.days)?s:{days:[1,2,3,4],hours:10,start:'06:00'};
+}
 function myEmailModal(){
-  modal('My email',`
-    <p class="muted" style="font-size:12.5px">Where the system can reach you as email features roll out. Only you (and admins) can change it.</p>
+  const sch=mySchedule(), DAYS=['Su','Mo','Tu','We','Th','Fr','Sa'];
+  modal('👤 My profile',`
     <div class="field"><label>Email address</label><input id="myEmail" class="inp" type="email" value="${esc(ME.email||'')}" placeholder="you@builttrailers.app"></div>
+    <div class="field"><label>My work week <span style="color:var(--muted);font-weight:400">— drives your daily plan (no tasks on days off)</span></label>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:4px">
+        ${DAYS.map((d,i)=>`<label style="display:flex;flex-direction:column;align-items:center;gap:2px;font-size:11px;cursor:pointer;padding:5px 8px;border:1px solid var(--line);border-radius:8px">
+          <input type="checkbox" class="mySchDay" value="${i}" ${sch.days.includes(i)?'checked':''}>${d}</label>`).join('')}
+      </div></div>
+    <div class="row">
+      <div class="field"><label>Hours per day</label><input id="mySchHours" class="inp" type="number" min="1" max="14" step="0.5" value="${sch.hours}"></div>
+      <div class="field"><label>Shift starts</label><input id="mySchStart" class="inp" type="time" value="${esc(sch.start||'06:00')}"></div>
+    </div>
     <div class="row" style="gap:8px;margin-top:8px">
-      <button class="btn" onclick="saveMyEmail()">Save</button>
+      <button class="btn" onclick="saveMyProfile()">Save</button>
       <button class="btn sec" onclick="closeModal()">Cancel</button>
     </div>`);
 }
-async function saveMyEmail(){
+async function saveMyProfile(){
   const email=($('myEmail').value||'').trim();
-  try{ const r=await api('/api/users/me/email',{method:'POST',body:JSON.stringify({email})});
-    ME.email=r.email; closeModal(); toast(r.email?'Email saved':'Email cleared'); }
-  catch(e){ toast(e.message); }
+  const days=[...document.querySelectorAll('.mySchDay:checked')].map(c=>Number(c.value));
+  if(!days.length)return toast('Pick at least one workday');
+  try{
+    const r=await api('/api/users/me/email',{method:'POST',body:JSON.stringify({email})});
+    const s=await api('/api/users/me/schedule',{method:'POST',body:JSON.stringify({days,hours:$('mySchHours').value,start:$('mySchStart').value})});
+    ME.email=r.email; ME.schedule=s.schedule;
+    closeModal(); toast('Profile saved');
+  }catch(e){ toast(e.message); }
 }
 function changePassword(id,name){
   if(!isAdmin()&&ME.id!==id)return toast('Not authorized');

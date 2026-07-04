@@ -22,7 +22,7 @@ export async function authMiddleware(req, res, next) {
   try {
     const payload = jwt.verify(tok, JWT_SECRET);
     if (payload.kind === 'dealer') return res.status(403).json({ error: 'Staff access required' });
-    const u = await one('SELECT id,name,username,title,role,manager_id,email,workstation FROM app_user WHERE id=$1', [payload.id]);
+    const u = await one('SELECT id,name,username,title,role,manager_id,email,workstation,schedule FROM app_user WHERE id=$1', [payload.id]);
     if (!u) return res.status(401).json({ error: 'User not found' });
     // All job titles the user holds (multi-role), resolved live so changes need no re-login.
     const titleRows = await all('SELECT role_name FROM user_title WHERE user_id=$1', [u.id]);

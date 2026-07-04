@@ -13,12 +13,16 @@ export const PROD_STAGES = ['Build', 'Paint/Powder Coat', 'Finish'];
 export async function workstations() {
   const a = await all('SELECT DISTINCT ws AS w FROM model_labor', []).catch(() => []);
   const b = await all('SELECT DISTINCT workstation AS w FROM work_log WHERE workstation IS NOT NULL', []).catch(() => []);
-  return [...new Set([...a, ...b].map(r => r.w).filter(Boolean))].sort();
+  const c = await all('SELECT name AS w FROM workstation WHERE active', []).catch(() => []); // registry: Sub-Assembly etc.
+  return [...new Set([...a, ...b, ...c].map(r => r.w).filter(Boolean))].sort();
 }
 
-// The stage a workstation belongs to (from the model routing).
+// The stage a workstation belongs to — the registry wins (it's how added stations like
+// Sub-Assembly get a stage), the model routing is the fallback.
 export async function stageForWorkstation(ws) {
   if (!ws) return null;
+  const reg = await one('SELECT stage FROM workstation WHERE name=$1', [ws]).catch(() => null);
+  if (reg?.stage) return reg.stage;
   const r = await one('SELECT stage FROM model_labor WHERE ws=$1 LIMIT 1', [ws]).catch(() => null);
   return r?.stage || null;
 }
