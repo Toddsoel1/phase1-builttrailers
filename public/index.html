@@ -82,6 +82,27 @@ a.lnk{color:var(--blue);cursor:pointer}
 .chip{display:inline-block;border:1px solid var(--line);border-radius:20px;padding:4px 10px;font-size:12px;margin:2px}
 .modal-bg{position:fixed;inset:0;background:rgba(0,0,0,.6);display:flex;align-items:center;justify-content:center;z-index:150;padding:20px}.modal{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:20px;max-width:540px;width:100%;max-height:86vh;overflow:auto}
 .split{display:grid;grid-template-columns:1fr 1fr;gap:16px}@media(max-width:860px){.split{grid-template-columns:1fr}}
+/* ── Mobile (≤860px): the staff app on a phone — off-canvas nav, swipeable board, no-zoom inputs ── */
+.navbtn{display:none;background:none;border:1px solid var(--line);color:var(--txt);border-radius:8px;padding:7px 11px;font-size:16px;line-height:1;flex-shrink:0}
+.navbg{display:none;position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:39}
+@media(max-width:860px){
+  .navbtn{display:inline-block}
+  .sidebar{position:fixed;left:0;top:0;bottom:0;height:100vh;height:100dvh;z-index:40;transform:translateX(-105%);transition:transform .18s ease;box-shadow:4px 0 24px rgba(0,0,0,.45)}
+  body.navopen .sidebar{transform:translateX(0)}
+  body.navopen .navbg{display:block}
+  .topbar{padding:10px 12px;gap:8px;flex-wrap:wrap}
+  .topbar h2{font-size:16px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .topbar .sub{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .content{padding:12px 10px}
+  .card{padding:13px}
+  table{display:block;overflow-x:auto;white-space:nowrap;-webkit-overflow-scrolling:touch}
+  .kanban{display:flex;overflow-x:auto;gap:10px;padding-bottom:8px;-webkit-overflow-scrolling:touch}
+  .kanban .col{min-width:240px;flex:0 0 240px}
+  .modal-bg{padding:8px 8px 16px;align-items:flex-start;padding-top:14px}
+  .modal{max-width:100%;padding:14px;max-height:92vh}
+  input,select,textarea{font-size:16px} /* ≥16px stops iOS zoom-on-focus */
+  .grid.g4{grid-template-columns:repeat(2,1fr);gap:10px}
+}
 </style>
 </head>
 <body>
@@ -113,8 +134,9 @@ a.lnk{color:var(--blue);cursor:pointer}
         <button class="btn sec sm" style="flex:1.6" title="Log out" onclick="logout()">Log out</button>
       </div></div>
   </aside>
+  <div class="navbg" onclick="closeMobileNav()"></div>
   <main class="main">
-    <div class="topbar"><div><h2 id="pTitle">Dashboard</h2><div class="sub" id="pSub"></div></div><div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap"><button class="btn sm sec" onclick="openSearch()" title="Search everything (Cmd+K / Ctrl+K)">🔍 <span class="muted" style="font-size:11px">⌘K</span></button><div id="pActions"></div></div></div>
+    <div class="topbar"><div style="display:flex;align-items:center;gap:10px;min-width:0"><button class="navbtn" onclick="toggleMobileNav(event)" title="Menu">☰</button><div style="min-width:0"><h2 id="pTitle">Dashboard</h2><div class="sub" id="pSub"></div></div></div><div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap"><button class="btn sm sec" onclick="openSearch()" title="Search everything (Cmd+K / Ctrl+K)">🔍 <span class="muted" style="font-size:11px">⌘K</span></button><div id="pActions"></div></div></div>
     <div class="content" id="content"></div>
   </main>
 </div>
@@ -263,7 +285,10 @@ function toggleNavGroup(label){
   const c=JSON.parse(localStorage.getItem('navCollapsed')||'{}');
   c[label]=!c[label]; localStorage.setItem('navCollapsed',JSON.stringify(c)); renderNav();
 }
-function go(p){page=p;render();}
+function go(p){page=p;closeMobileNav();render();}
+// Off-canvas nav on phones: ☰ opens the sidebar as a drawer; backdrop tap or navigating closes it.
+function toggleMobileNav(e){if(e)e.stopPropagation();document.body.classList.toggle('navopen');}
+function closeMobileNav(){document.body.classList.remove('navopen');}
 
 // ── Global search (Cmd+K / Ctrl+K): jump to an order, VIN, customer, part, or model ──
 let gsItems=[],gsSel=0,gsTimer=null;
