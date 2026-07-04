@@ -196,7 +196,9 @@ async function login(){
     const d = await api('/api/auth/login',{method:'POST',body:JSON.stringify({username:$('liUser').value.trim(),password:$('liPass').value})});
     TOKEN=d.token;ME=d.user;
     localStorage.setItem('staffToken',TOKEN);localStorage.setItem('staffName',ME.name||''); // survive refreshes / phone relaunches
-    $('login').classList.add('hidden');$('app').classList.remove('hidden');page='dashboard';render();toast('Welcome, '+ME.name.split(' ')[0]+'!');
+    $('login').classList.add('hidden');$('app').classList.remove('hidden');
+    page=ME.workstation?'standup':'dashboard'; // floor workers land on their day, not a dashboard
+    render();toast('Welcome, '+ME.name.split(' ')[0]+'!');
   }catch(e){$('liErr').textContent=e.message;}
 }
 function logout(){TOKEN=null;ME=null;localStorage.removeItem('staffToken');localStorage.removeItem('staffName');$('app').classList.add('hidden');$('login').classList.remove('hidden');}
@@ -206,7 +208,9 @@ $('liPass').addEventListener('keydown',e=>{if(e.key==='Enter')login();});
   const saved=localStorage.getItem('staffToken');
   if(!saved)return;
   TOKEN=saved;
-  try{ const d=await api('/api/auth/me'); ME=d.user; $('login').classList.add('hidden'); $('app').classList.remove('hidden'); render(); }
+  try{ const d=await api('/api/auth/me'); ME=d.user;
+    page=ME.workstation?'standup':'dashboard'; // floor workers land on their day
+    $('login').classList.add('hidden'); $('app').classList.remove('hidden'); render(); }
   catch(e){ /* expired or revoked — api() already cleared the session */ }
 })();
 
@@ -1202,9 +1206,10 @@ async function viewStandup(){
   const date=window._suDate||new Date().toISOString().slice(0,10);
   window._suDate=date;
   $('pActions').innerHTML=isMgr?`<input type="date" id="suDate" value="${date}" onchange="window._suDate=this.value;viewStandup()" style="padding:6px 8px;border-radius:8px;border:1px solid var(--line);background:var(--panel2);color:var(--txt)"> <button class="btn sm sec" onclick="suGenerate()">⚙ Generate plan</button>`:'';
-  let me,plan=null,report=[];
+  let me,plan=null,report=[],station=null;
   try{
-    [me,report]=await Promise.all([api('/api/standup/me?date='+date),api('/api/standup/report?days=14').catch(()=>[])]);
+    [me,report,station]=await Promise.all([api('/api/standup/me?date='+date),api('/api/standup/report?days=14').catch(()=>[]),
+      ME.workstation?api('/api/mystation').catch(()=>null):Promise.resolve(null)]);
     if(isMgr) plan=await api('/api/standup?date='+date);
   }catch(e){ $('content').innerHTML=`<div class="card"><p class="msg err">${esc(e.message)}</p></div>`; return; }
   const prog=me.goal?Math.round(me.done/me.goal*100):0;
@@ -1222,6 +1227,16 @@ async function viewStandup(){
     </div>`).join('')}`
     :'<p class="muted">Nothing assigned to you for this day'+(isMgr?'':' — check with the Shop Manager at stand-up')+'.</p>'}
   </div>`;
+  const msCard=(station&&station.workstation)?`<div class="card" style="margin-bottom:16px"><h3>🏭 My station — ${esc(station.workstation)}${station.stage?` <span class="muted" style="text-transform:none;letter-spacing:0">→ ${esc(station.stage)} stage</span>`:''}</h3>
+    ${(station.orders||[]).length?station.orders.map(o=>`<div style="display:flex;gap:10px;align-items:center;padding:8px 0;border-bottom:1px solid var(--line);flex-wrap:wrap">
+      ${o.andonOpen?'<span title="problem open">🔴</span>':'<span>🚛</span>'}
+      <div style="flex:1;min-width:160px"><b style="font-size:13.5px">${esc(o.id)} — ${o.qty}× ${esc(o.model||'')}</b>
+        <div class="muted" style="font-size:11px">${(o.units||[]).map(u=>u.vin?esc(u.vin):'').filter(Boolean).join(' · ')||'VINs assigned at Build'}${o.due?' · due '+String(o.due).slice(0,10):''}</div></div>
+      ${o.units&&o.units.length?`<button class="btn sm" onclick="msComplete('${esc(o.units[0].id)}','${esc(o.id)}')">✓ Mark ${esc(station.stage)} complete</button>
+      <button class="btn sm sec" onclick="msProblem('${esc(o.units[0].id)}','${esc(o.id)}')" title="report a problem">🚨</button>`:''}
+    </div>`).join(''):`<p class="muted">Nothing waiting at your station. 🎉</p>`}
+    <p class="muted" style="font-size:11px;margin-top:8px">Completions are credited to your account and stamp the build log on every VIN in the order.</p>
+  </div>`:'';
   let board='';
   if(isMgr&&plan){
     const byUser={}; for(const t of plan.tasks){const k=t.user||'— Unassigned —';(byUser[k]=byUser[k]||[]).push(t);}
@@ -1232,7 +1247,7 @@ async function viewStandup(){
         ${plan.proposed?`<button class="btn" onclick="suApprove()">✓ Approve the day</button>`:''}
       </div>
       <p class="muted" style="font-size:12px;margin-bottom:10px">⚙ Generate proposes tasks from the production queue + each model's labor routing, spread across workers by their station. Reassign, resize, add, or delete any time — mid-day resets included. Workers see their tasks once approved; finishing the real stage checks tasks off automatically.</p>
-      ${Object.entries(byUser).map(([name,ts])=>`<div style="margin-bottom:10px"><b style="font-size:13px">${esc(name)}</b> <span class="muted" style="font-size:11px">${ts.filter(t=>t.done).length}/${ts.length} done · ${Math.round(ts.reduce((a,t)=>a+t.estHours,0)*10)/10}h est</span>
+      ${Object.entries(byUser).map(([name,ts])=>{const w=plan.workers.find(x=>x.name===name);return `<div style="margin-bottom:10px"><b style="font-size:13px">${esc(name)}</b> <span class="muted" style="font-size:11px">${ts.filter(t=>t.done).length}/${ts.length} done · ${Math.round(ts.reduce((a,t)=>a+t.estHours,0)*10)/10}h est${w?` · suggested load ${w.capacity}h${w.trailingDonePct!=null?` · ${w.trailingDonePct}% trailing completion`:''}`:''}</span>
         ${ts.map(t=>`<div style="display:flex;gap:6px;align-items:center;padding:4px 0 4px 12px;font-size:12.5px;flex-wrap:wrap">
           <span>${t.done?'✅':t.status==='proposed'?'📝':'⬜'}</span>
           <span style="flex:1;min-width:150px;${t.done?'opacity:.55':''}">${esc(t.description)}</span>
@@ -1241,7 +1256,7 @@ async function viewStandup(){
           ${!t.done?`<button class="btn sm sec" onclick="suCompleteMgr(${t.id})" title="mark done">✓</button>`:''}
           <button class="btn sm sec" onclick="suDelete(${t.id})" title="remove from plan">✕</button>
         </div>`).join('')}
-      </div>`).join('')||'<p class="muted">No tasks yet — hit <b>⚙ Generate plan</b> to propose the day from the production queue.</p>'}
+      </div>`;}).join('')||'<p class="muted">No tasks yet — hit <b>⚙ Generate plan</b> to propose the day from the production queue.</p>'}
       <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:10px;border-top:1px solid var(--line);padding-top:10px">
         <input id="suNewDesc" placeholder="Add a task (e.g. Deep-clean the paint booth)" style="flex:2;min-width:180px;padding:7px;border-radius:8px;border:1px solid var(--line);background:var(--panel2);color:var(--txt)">
         <input id="suNewEst" type="number" step="0.5" min="0" placeholder="hrs" style="width:70px;padding:7px;border-radius:8px;border:1px solid var(--line);background:var(--panel2);color:var(--txt)">
@@ -1258,7 +1273,28 @@ async function viewStandup(){
         <td class="right">${r.estHours}</td><td class="right">${r.actualHours}</td></tr>`).join('')}
     </tbody></table>`:'<p class="muted">No plan history yet — it builds automatically once days are approved and worked.</p>'}
   </div>`;
-  $('content').innerHTML=myCard+board+repCard;
+  $('content').innerHTML=myCard+msCard+board+repCard;
+}
+async function msComplete(unitId,orderId){
+  if(!confirm('Mark this stage complete for '+orderId+'? It moves to the next stage for the whole order.'))return;
+  try{ const r=await api('/u/'+unitId+'/advance',{method:'POST',body:'{}'}); toast('✓ '+orderId+' → '+r.stage); viewStandup(); }
+  catch(e){ toast(e.message); }
+}
+function msProblem(unitId,orderId){
+  modal('🚨 Problem on '+esc(orderId),`
+    <div class="field"><label>What's wrong?</label><select id="msReason" class="inp">
+      ${['Waiting on parts','Rework needed','Machine down','Missing info','Other'].map(r=>`<option>${r}</option>`).join('')}
+    </select></div>
+    <div class="field"><label>Details (optional)</label><input id="msNote" class="inp" placeholder="What's going on?"></div>
+    <div class="row" style="gap:8px;margin-top:8px">
+      <button class="btn" style="background:#c0392b;color:#fff" onclick="msProblemSend('${esc(unitId)}')">Report — alerts the Shop Manager</button>
+      <button class="btn sec" onclick="closeModal()">Cancel</button>
+    </div>`);
+}
+async function msProblemSend(unitId){
+  try{ await api('/u/'+unitId+'/problem',{method:'POST',body:JSON.stringify({reason:$('msReason').value,note:($('msNote').value||'').trim()})});
+    closeModal(); toast('Reported — the Shop Manager has been alerted'); viewStandup(); }
+  catch(e){ toast(e.message); }
 }
 async function suGenerate(){ try{ const r=await api('/api/standup/generate',{method:'POST',body:JSON.stringify({date:window._suDate})}); toast(r.created+' task(s) proposed'); viewStandup(); }catch(e){ toast(e.message);} }
 async function suApprove(){ try{ const r=await api('/api/standup/approve',{method:'POST',body:JSON.stringify({date:window._suDate})}); toast(r.approved+' task(s) approved — the team can see the plan'); viewStandup(); }catch(e){ toast(e.message);} }

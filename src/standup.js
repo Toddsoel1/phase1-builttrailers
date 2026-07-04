@@ -19,8 +19,37 @@ export function normDate(d) {
   return /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : today();
 }
 
+// Past goals & performance -> each worker's suggested daily capacity. Trailing 21 days of
+// closed plan days (today excluded): the est-hours they actually COMPLETED per planned day,
+// stretched +10% (expectations push gently up), clamped to 50–125% of the base day. No history
+// yet = the base day. Returned alongside completion % so the Shop Manager sees the why.
+export async function workerCalibration() {
+  const rows = await all(`
+    SELECT user_id,
+           COUNT(DISTINCT plan_date)::int AS days,
+           COUNT(*)::int AS assigned,
+           COUNT(completed_at)::int AS done,
+           COALESCE(SUM(CASE WHEN completed_at IS NOT NULL THEN est_hours END), 0) AS done_est
+      FROM daily_task
+     WHERE status <> 'proposed' AND user_id IS NOT NULL
+       AND plan_date >= CURRENT_DATE - INTERVAL '21 days' AND plan_date < CURRENT_DATE
+     GROUP BY user_id`, []).catch(() => []);
+  const out = {};
+  for (const r of rows) {
+    const perDay = r.days ? Number(r.done_est) / r.days : 0;
+    const capacity = perDay > 0
+      ? Math.round(Math.min(DAY_HOURS * 1.25, Math.max(DAY_HOURS * 0.5, perDay * 1.1)) * 10) / 10
+      : DAY_HOURS;
+    out[r.user_id] = { capacity, days: r.days,
+      donePct: r.assigned ? Math.round((r.done / r.assigned) * 100) : null };
+  }
+  return out;
+}
+
 // Propose the day's tasks. Idempotent per (date, order, stage, workstation): re-running fills
 // gaps (new orders since the last run) without duplicating or touching edited/approved tasks.
+// Assignment is performance-aware: work spreads across a station's workers in proportion to
+// each one's calibrated capacity (see workerCalibration), queue order preserved.
 export async function generatePlan(date, byUserId) {
   const d = normDate(date);
   const existing = await all(`SELECT order_id, stage, workstation FROM daily_task WHERE plan_date=$1`, [d]);
@@ -32,6 +61,8 @@ export async function generatePlan(date, byUserId) {
      ORDER BY o.production_seq NULLS LAST, o.created_at`, [PROD_STAGES]);
   const workers = await all(`SELECT id, name, workstation FROM app_user
                               WHERE active IS DISTINCT FROM false AND workstation IS NOT NULL`, []);
+  const calib = await workerCalibration();
+  const capOf = id => calib[id]?.capacity || DAY_HOURS;
   const load = {}; // user_id -> hours already assigned today
   for (const t of await all(`SELECT user_id, SUM(est_hours) AS h FROM daily_task
                               WHERE plan_date=$1 AND user_id IS NOT NULL GROUP BY user_id`, [d]))
@@ -47,10 +78,11 @@ export async function generatePlan(date, byUserId) {
       const key = `${o.id}|${o.stage}|${r.ws || ''}`;
       if (have.has(key)) continue;
       const est = Math.round(Number(r.h || 0) * o.qty * 100) / 100;
-      // Pick the least-loaded worker at this station who still has room; else leave unassigned.
+      // Fill each station's workers in proportion to their calibrated capacity: the pick is
+      // whoever ends up least full (as a share of THEIR capacity) after taking this task.
       const candidates = workers.filter(w => r.ws && w.workstation === r.ws)
-        .sort((a, b) => (load[a.id] || 0) - (load[b.id] || 0));
-      const pick = candidates.find(w => (load[w.id] || 0) + est <= DAY_HOURS) || candidates[0] || null;
+        .sort((a, b) => (((load[a.id] || 0) + est) / capOf(a.id)) - (((load[b.id] || 0) + est) / capOf(b.id)));
+      const pick = candidates.find(w => (load[w.id] || 0) + est <= capOf(w.id)) || candidates[0] || null;
       if (pick) load[pick.id] = (load[pick.id] || 0) + est;
       await q(`INSERT INTO daily_task(plan_date, user_id, order_id, stage, workstation, description, est_hours, source, assigned_by)
                VALUES ($1,$2,$3,$4,$5,$6,$7,'auto',$8)`,
@@ -112,7 +144,8 @@ const shape = t => ({ id: t.id, date: fmtDate(t.plan_date), userId: t.user_id, u
   estHours: Number(t.est_hours) || 0, status: t.status, source: t.source,
   done: !!t.completed_at, completedAt: t.completed_at, completedVia: t.completed_via });
 
-// The stand-up board: everyone's day, grouped, + the unassigned bucket.
+// The stand-up board: everyone's day, grouped, + the unassigned bucket. Workers carry their
+// performance calibration so the Shop Manager sees each person's suggested load and why.
 export async function planFor(date) {
   const d = normDate(date);
   const rows = await all(`SELECT t.*, u.name AS user_name FROM daily_task t
@@ -120,8 +153,10 @@ export async function planFor(date) {
                            WHERE t.plan_date=$1 ORDER BY u.name NULLS LAST, t.id`, [d]);
   const tasks = rows.map(shape);
   const proposed = tasks.filter(t => t.status === 'proposed').length;
-  return { date: d, tasks, proposed,
-    workers: await all(`SELECT id, name, workstation FROM app_user WHERE active IS DISTINCT FROM false ORDER BY name`, []) };
+  const calib = await workerCalibration();
+  const workers = (await all(`SELECT id, name, workstation FROM app_user WHERE active IS DISTINCT FROM false ORDER BY name`, []))
+    .map(w => ({ ...w, capacity: calib[w.id]?.capacity ?? DAY_HOURS, trailingDonePct: calib[w.id]?.donePct ?? null }));
+  return { date: d, tasks, proposed, workers, dayHours: DAY_HOURS };
 }
 
 // One worker's day: the goal, the score, and the hours story.

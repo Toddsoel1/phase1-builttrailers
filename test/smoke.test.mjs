@@ -661,6 +661,51 @@ test('daily stand-up: generate -> gate -> approve -> mid-day reset -> stage auto
   assert.ok(row && row.assigned >= 1 && row.done >= 1 && row.donePct != null, 'effectiveness recorded per employee per day');
 });
 
+test('performance-calibrated plan + My Station + per-VIN build log stamping', async () => {
+  const users = await json(await api('/api/users'));
+  const maria = users.find(u => u.username === 'mchen');
+  const ws = maria.workstation; // set by the stand-up test
+  assert.ok(ws, 'Maria has a workstation');
+
+  // Past performance -> calibrated suggestion: yesterday Maria completed 5h of assigned work.
+  const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
+  const mr = await api('/api/auth/login', { method: 'POST', body: JSON.stringify({ username: 'mchen', password: 'built2026' }) });
+  const login = await mr.json();
+  assert.equal(login.user.workstation, ws, 'login payload carries the workstation (drives the floor landing page)');
+  const smh = { 'Content-Type': 'application/json', Authorization: 'Bearer ' + login.token };
+  for (const est of [3, 2]) {
+    const t = await json(await fetch(BASE + '/api/standup/task', { method: 'POST', headers: smh,
+      body: JSON.stringify({ date: yesterday, description: `calibration seed ${est}h`, estHours: est, userId: maria.id }) }));
+    await fetch(BASE + '/api/standup/task/' + t.id + '/complete', { method: 'POST', headers: smh });
+  }
+  const plan = await json(await fetch(BASE + '/api/standup?date=' + new Date().toISOString().slice(0, 10), { headers: smh }));
+  const wMaria = plan.workers.find(w => w.id === maria.id);
+  assert.equal(wMaria.capacity, 5.5, 'suggested load = trailing 5h/day completed × 1.1 stretch');
+  assert.equal(wMaria.trailingDonePct, 100, 'trailing completion % rides along for the SM');
+
+  // My Station: an order sitting at her station's stage, complete it from the app — no scan, no PIN.
+  const model = (await json(await api('/api/models')))[0];
+  const cust = await json(await api('/api/customers', { method: 'POST', body: JSON.stringify({ name: 'Station Test Dealer', kind: 'Dealership' }) }));
+  await api('/api/customers/' + cust.id + '/types', { method: 'PATCH', body: JSON.stringify({ type: model.category, on: true }) });
+  const ord = await json(await api('/api/orders', { method: 'POST', body: JSON.stringify({ customerId: cust.id, modelId: model.id, qty: 1 }) }));
+  await api('/api/orders/' + ord.id + '/stage', { method: 'PATCH', body: JSON.stringify({ stage: 'Build' }) }); // VINs auto-assign here
+  const st = await json(await fetch(BASE + '/api/mystation', { headers: smh }));
+  assert.equal(st.workstation, ws);
+  assert.equal(st.stage, 'Build', 'station maps to its routing stage');
+  const mine = st.orders.find(o => o.id === ord.id);
+  assert.ok(mine && mine.units.length === 1 && mine.units[0].vin, 'station queue lists the order with its VIN');
+
+  const done = await json(await fetch(BASE + '/u/' + mine.units[0].id + '/advance', { method: 'POST', headers: smh, body: '{}' }));
+  assert.equal(done.stage, 'Paint/Powder Coat');
+  assert.equal(done.as, 'Maria Chen', 'completion credited to her session, no PIN involved');
+
+  // The per-VIN build log auto-stamped with the verified actor — what a warranty claim will show.
+  const detail = await json(await api('/api/trailers/' + mine.units[0].id + '/detail'));
+  const stamped = detail.buildLog.filter(s => ['Parts', 'Bending'].includes(s.step) && s.done);
+  assert.equal(stamped.length, 2, 'Build completion stamped Parts + Bending on the VIN');
+  for (const s of stamped) assert.equal(s.by, 'Maria Chen', 'each step attributed to the verified account');
+});
+
 test('order timeline: placed + stage completions with names and shop-floor initials', async () => {
   const unit = (await json(await api('/api/search?q=BLTTESTVIN0000099'))).units[0];
   const o = await json(await api('/api/orders/' + unit.orderId));

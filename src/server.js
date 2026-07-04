@@ -20,7 +20,7 @@ import { authMiddleware, requireTier, signToken, checkPassword, hashPassword, JW
 import jwt from 'jsonwebtoken';
 import { modelRollup, modelsSummary, inventoryValuation } from './cost.js';
 import { STAGES, canSell, canReorderProduction, trailerTypes, customersWithTypes, allowedTypesFor, ordersFull, consumeInventory, setProductionOrder } from './orders.js';
-import { logWork, dailyReport, wipReport, consumptionByWorkstation, workstations } from './wip.js';
+import { logWork, dailyReport, wipReport, consumptionByWorkstation, workstations, stageForWorkstation } from './wip.js';
 import { mrp, poList, createPO, receivePO } from './mrp.js';
 import { accountingMode, qboConfigured, ledger, totals, sync, scanInvoice, invoiceList } from './accounting.js';
 import { getAuthUrl, exchangeCode, syncCustomersFromQBO, syncItemsFromQBO, syncInvoicesFromQBO, syncVendorsFromQBO, previewItemsFromQBO, QBOAuthError, QBOFeatureError, qboErrorLog, getRefreshTokenInfo, disconnectQBO, getRealmInfo, getQBItems, updateItemCost } from './qbo.js';
@@ -623,7 +623,7 @@ app.post('/api/auth/login', loginLimiter, async (req, res) => {
   const sectionRows = u.role === 'admin' ? null :
     await all(`SELECT DISTINCT rs.section FROM user_title ut JOIN role_section rs ON rs.role_name=ut.role_name WHERE ut.user_id=$1`, [u.id]);
   const sections = sectionRows ? sectionRows.map(r => r.section) : null;
-  const safe = { id: u.id, name: u.name, username: u.username, title: u.title, titles, role: u.role, manager_id: u.manager_id, sections, email: u.email || null };
+  const safe = { id: u.id, name: u.name, username: u.username, title: u.title, titles, role: u.role, manager_id: u.manager_id, sections, email: u.email || null, workstation: u.workstation || null };
   res.json({ token: signToken(u), user: safe });
 });
 app.get('/api/auth/me', authMiddleware, (req, res) => res.json({ user: req.user }));
@@ -1127,6 +1127,27 @@ function requireStandupManager(req, res, next) {
   if (req.user?.role === 'admin' || titles.includes('Shop Manager') || titles.includes('General Manager')) return next();
   return res.status(403).json({ error: 'Managing the daily plan is limited to the Shop Manager / General Manager.' });
 }
+// My Station: the logged-in worker's queue — every order sitting at their station's stage,
+// with its units, ready to complete or flag straight from the app (no scanning required).
+app.get('/api/mystation', authMiddleware, async (req, res) => {
+  const ws = req.user.workstation;
+  if (!ws) return res.json({ workstation: null, stage: null, orders: [] });
+  const stage = await stageForWorkstation(ws);
+  if (!stage) return res.json({ workstation: ws, stage: null, orders: [] });
+  const orders = await all(`
+    SELECT o.id, o.qty, o.due, m.name AS model,
+           (SELECT COUNT(*)::int FROM andon_event a WHERE a.order_id=o.id AND a.resolved_at IS NULL) AS andon_open
+      FROM sales_order o LEFT JOIN model m ON m.id=o.model_id
+     WHERE o.stage=$1 AND o.billed=false
+     ORDER BY o.production_seq NULLS LAST, o.created_at`, [stage]);
+  const out = [];
+  for (const o of orders) {
+    const units = await all('SELECT id, vin FROM trailer WHERE order_id=$1 ORDER BY id', [o.id]);
+    out.push({ id: o.id, model: o.model, qty: o.qty, due: o.due, andonOpen: Number(o.andon_open || 0),
+      units: units.map(u => ({ id: u.id, vin: u.vin })) });
+  }
+  res.json({ workstation: ws, stage, orders: out });
+});
 app.get('/api/standup', authMiddleware, requireSection('standup'), async (req, res) =>
   res.json(await standup.planFor(req.query.date)));
 app.get('/api/standup/me', authMiddleware, async (req, res) =>
@@ -1405,6 +1426,23 @@ async function applyOrderStage(orderId, curOrder, stage, actorUser, actorLabel) 
   await sms.notifyOrderStage(orderId, stage, actorUser?.id || null); // Phase 6: text the customer
   await dealernotify.notifyDealer(curOrder.customer_id, 'order', `Order ${orderId} is now "${stage}".`, orderId);
   await standup.autoCompleteForStage(orderId, curOrder.stage); // check off matching daily-plan tasks
+  await stampBuildSteps(orderId, curOrder.stage, actorUser, actorLabel); // per-VIN build log for QC/warranty
+}
+// Completing a production stage stamps the per-VIN build log (trailer_build_step) for every unit
+// on the order, attributed to the verified actor — so a warranty claim on any VIN answers "who
+// built/painted/finished this, and when" via the unit detail's Build Log. ON CONFLICT keeps any
+// earlier manual attribution; the office Build Log screen can still correct entries.
+const STAGE_BUILD_STEPS = { 'Build': ['Parts', 'Bending'], 'Paint/Powder Coat': ['Paint'], 'Finish': ['Finishing'] };
+async function stampBuildSteps(orderId, completedStage, actorUser, actorLabel) {
+  const steps = STAGE_BUILD_STEPS[completedStage];
+  if (!steps) return;
+  const who = actorUser?.name || actorLabel || null;
+  const units = await all('SELECT id FROM trailer WHERE order_id=$1', [orderId]).catch(() => []);
+  for (const u of units)
+    for (const step of steps)
+      await q(`INSERT INTO trailer_build_step(trailer_id, step, employee_name, logged_by, completed_at)
+               VALUES ($1,$2,$3,$4,now()) ON CONFLICT(trailer_id, step) DO NOTHING`,
+        [u.id, step, who, actorUser?.id || null]).catch(() => {});
 }
 app.patch('/api/orders/:id/stage', authMiddleware, requireTier('editor'), async (req, res) => {
   const stage = req.body?.stage;

@@ -17,7 +17,7 @@ export async function workstations() {
 }
 
 // The stage a workstation belongs to (from the model routing).
-async function stageForWorkstation(ws) {
+export async function stageForWorkstation(ws) {
   if (!ws) return null;
   const r = await one('SELECT stage FROM model_labor WHERE ws=$1 LIMIT 1', [ws]).catch(() => null);
   return r?.stage || null;
