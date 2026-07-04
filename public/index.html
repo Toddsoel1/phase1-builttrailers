@@ -1206,12 +1206,14 @@ async function viewStandup(){
   const date=window._suDate||new Date().toISOString().slice(0,10);
   window._suDate=date;
   $('pActions').innerHTML=isMgr?`<input type="date" id="suDate" value="${date}" onchange="window._suDate=this.value;viewStandup()" style="padding:6px 8px;border-radius:8px;border:1px solid var(--line);background:var(--panel2);color:var(--txt)"> <button class="btn sm sec" onclick="suGenerate()">⚙ Generate plan</button>`:'';
-  let me,plan=null,report=[],station=null;
+  let me,plan=null,report=[],station=null,tsp=null;
   try{
-    [me,report,station]=await Promise.all([api('/api/standup/me?date='+date),api('/api/standup/report?days=14').catch(()=>[]),
-      ME.workstation?api('/api/mystation').catch(()=>null):Promise.resolve(null)]);
+    [me,report,station,tsp]=await Promise.all([api('/api/standup/me?date='+date),api('/api/standup/report?days=14').catch(()=>[]),
+      ME.workstation?api('/api/mystation').catch(()=>null):Promise.resolve(null),
+      api('/api/timesurvey/pending').catch(()=>null)]);
     if(isMgr) plan=await api('/api/standup?date='+date);
   }catch(e){ $('content').innerHTML=`<div class="card"><p class="msg err">${esc(e.message)}</p></div>`; return; }
+  window._tsp=tsp;
   const prog=me.goal?Math.round(me.done/me.goal*100):0;
   window._suMe=me;
   const myCard=`<div class="card" style="margin-bottom:16px"><h3>🎯 My day — ${esc(date)}</h3>
@@ -1220,7 +1222,8 @@ async function viewStandup(){
       <div style="flex:1;min-width:140px;height:10px;background:var(--panel2);border-radius:5px;overflow:hidden"><div style="height:100%;width:${prog}%;background:${prog>=100?'var(--green)':'var(--accent)'}"></div></div>
       <span class="muted" style="font-size:12.5px">est ${me.estHours}h · logged ${me.actualHours}h</span>
       ${me.verifiedAt?`<span class="badge b-ok" title="${esc(me.verifyNote||'')}">✔ day verified ${new Date(me.verifiedAt).toLocaleTimeString([],{hour:'numeric',minute:'2-digit'})}</span>`
-        :`<button class="btn sm" onclick="suVerifyModal()">⏱ Verify my day (60 sec)</button>`}</div>
+        :`<button class="btn sm" onclick="suVerifyModal()">⏱ Verify my day (60 sec)</button>`}
+      ${tsp&&tsp.due?`<button class="btn sm sec" onclick="timeSurveyModal(window._tsp)">⏲ Time check (${tsp.itemCount})</button>`:''}</div>
     ${me.tasks.map(t=>`<div style="display:flex;gap:10px;align-items:center;padding:7px 0;border-bottom:1px solid var(--line)">
       <span>${t.done?'✅':'⬜'}</span>
       <div style="flex:1"><b style="font-size:13.5px;${t.done?'opacity:.55':''}">${esc(t.description)}</b>
@@ -1343,7 +1346,38 @@ function suVerifyModal(){
 async function suVerifySend(){
   const completeIds=[...document.querySelectorAll('.suvChk:checked:not(:disabled)')].map(c=>Number(c.dataset.id));
   try{ await api('/api/standup/verify',{method:'POST',body:JSON.stringify({date:window._suDate,completeIds,note:($('suvNote').value||'').trim()})});
-    closeModal(); toast('✔ Day verified — thanks'); viewStandup(); }
+    closeModal(); toast('✔ Day verified — thanks');
+    // Enough unsurveyed work piled up? Chain straight into the time check while it's fresh.
+    const p=await api('/api/timesurvey/pending').catch(()=>null);
+    if(p&&p.due){ timeSurveyModal(p); return; }
+    viewStandup(); }
+  catch(e){ toast(e.message); }
+}
+// ── ⏲ Time survey: put hours & minutes on completed work — audits BOM labor + part costs ──
+function timeSurveyModal(p){
+  window._tsLines=[...p.stages.map(s=>({kind:'stage',...s})),...p.parts.map(x=>({kind:'part',...x}))];
+  const hm=(i,mins)=>`<span style="white-space:nowrap"><input id="ts_h_${i}" type="number" min="0" max="99" value="${Math.floor((mins||0)/60)}" style="width:52px;padding:6px;border-radius:8px;border:1px solid var(--line);background:var(--panel2);color:var(--txt)"> h
+    <input id="ts_m_${i}" type="number" min="0" max="59" step="5" value="${Math.round(((mins||0)%60)/5)*5}" style="width:52px;padding:6px;border-radius:8px;border:1px solid var(--line);background:var(--panel2);color:var(--txt)"> m</span>`;
+  modal('⏲ Quick time check — how long did these take?',`
+    <p class="muted" style="font-size:12.5px">Rough is fine — this is what keeps BOM labor and made-part costs honest. Trailer lines start at the BOM estimate: correct them to reality.</p>
+    ${window._tsLines.map((l,i)=>`<div style="display:flex;gap:10px;align-items:center;justify-content:space-between;padding:7px 0;border-bottom:1px solid var(--line);flex-wrap:wrap">
+      <span style="font-size:13px;flex:1;min-width:170px">${l.kind==='stage'?'🚛':'🔩'} ${esc(l.description)}</span>${hm(i,l.kind==='stage'?l.prefillMinutes:0)}
+    </div>`).join('')||'<p class="muted">Nothing pending.</p>'}
+    <div style="margin-top:10px"><b style="font-size:12.5px">Anything else that took time?</b>
+    ${[0,1,2].map(j=>`<div style="display:flex;gap:10px;align-items:center;justify-content:space-between;padding:5px 0;flex-wrap:wrap">
+      <input id="ts_o_${j}" placeholder="${j===0?'e.g. shop cleanup, forklift repair':'…'}" style="flex:1;min-width:170px;padding:7px;border-radius:8px;border:1px solid var(--line);background:var(--panel2);color:var(--txt)">${hm('o'+j,0)}
+    </div>`).join('')}</div>
+    <div class="row" style="gap:8px;margin-top:12px">
+      <button class="btn" onclick="tsSend()">✓ Done — account my hours</button>
+      <button class="btn sec" onclick="closeModal();viewStandup()">Later</button>
+    </div>`);
+}
+async function tsSend(){
+  const mins=i=>{const h=Number($('ts_h_'+i)?.value)||0,m=Number($('ts_m_'+i)?.value)||0;return h*60+m;};
+  const lines=window._tsLines.map((l,i)=>({...l,minutes:mins(i)}));
+  for(const j of [0,1,2]){const d=($('ts_o_'+j)?.value||'').trim();const m=mins('o'+j);if(d&&m>0)lines.push({kind:'other',description:d,minutes:m});}
+  try{ const r=await api('/api/timesurvey',{method:'POST',body:JSON.stringify({lines})});
+    closeModal(); toast('⏲ '+Math.floor(r.totalMinutes/60)+'h '+(r.totalMinutes%60)+'m accounted — thanks, this keeps the BOMs honest'); viewStandup(); }
   catch(e){ toast(e.message); }
 }
 async function suGenerate(){ try{ const r=await api('/api/standup/generate',{method:'POST',body:JSON.stringify({date:window._suDate})}); toast(r.created+' task(s) proposed'); viewStandup(); }catch(e){ toast(e.message);} }
@@ -1483,7 +1517,22 @@ async function viewPerformance(){
     </div>
     <button class="btn" onclick="savePerfTargets()">Save expectations</button>
     <p class="muted" style="font-size:11px;margin-top:8px">Misses land in the Shop Manager's and GM's Action Inbox automatically; part shortages land in the Shop Specialist's.</p></div>`:'';
-  $('content').innerHTML=`<div class="grid g4" style="margin-bottom:16px">${kpiCards}</div>${andonCard}${recs}${repCard}${cyc}${aging}${targetsCard}`;
+  const la=d.laborAccuracy||{byStage:[],byPart:[]};
+  const laborCard=(la.byStage.length||la.byPart.length)?`<div class="card" style="margin-bottom:16px"><h3>⏲ Labor actuals vs BOM ${csvBtn('labor_vs_bom',la.byStage)} ${csvBtn('part_labor_actuals',la.byPart,'parts CSV')}</h3>
+    ${la.byStage.length?`<table><thead><tr><th>Model</th><th>Stage</th><th class="center">Surveys</th><th class="center">Units</th><th class="right">Actual h/unit</th><th class="right">BOM h/unit</th><th class="center">Variance</th></tr></thead><tbody>
+    ${la.byStage.map(s=>`<tr><td><b>${esc(s.model||s.modelId)}</b></td><td>${esc(s.stage)}</td><td class="center">${s.surveys}</td><td class="center">${s.units}</td>
+      <td class="right">${s.actualHoursPerUnit!=null?s.actualHoursPerUnit:'—'}</td><td class="right">${s.bomHoursPerUnit}</td>
+      <td class="center">${s.variancePct!=null?`<span class="badge ${Math.abs(s.variancePct)>=25?'b-below':Math.abs(s.variancePct)>=10?'b-low':'b-ok'}">${s.variancePct>0?'+':''}${s.variancePct}%</span>`:'—'}</td></tr>`).join('')}
+    </tbody></table>`:''}
+    ${la.byPart.length?`<table style="margin-top:10px"><thead><tr><th>Made part</th><th class="center">Qty surveyed</th><th class="right">Min/unit</th><th class="right">Implied labor $/unit</th><th class="right">Current part cost</th></tr></thead><tbody>
+    ${la.byPart.map(p=>`<tr><td><b>${esc(p.partId)}</b><br><span class="muted" style="font-size:11px">${esc(p.name||'')}</span></td>
+      <td class="center">${p.qty}</td><td class="right">${p.minutesPerUnit!=null?p.minutesPerUnit:'—'}</td>
+      <td class="right">${p.impliedLaborPerUnit!=null?money2(p.impliedLaborPerUnit):'—'} <span class="muted" style="font-size:10px">@$${p.rate}/h</span></td>
+      <td class="right">${money2(p.currentCost)}</td></tr>`).join('')}
+    </tbody></table>`:''}
+    <p class="muted" style="font-size:11px;margin-top:8px">Collected from the crew's post-verification time checks. A 25%+ gap with 3+ surveys generates a routing-update recommendation above.</p>
+  </div>`:'';
+  $('content').innerHTML=`<div class="grid g4" style="margin-bottom:16px">${kpiCards}</div>${andonCard}${recs}${repCard}${laborCard}${cyc}${aging}${targetsCard}`;
 }
 async function savePerfTargets(){
   const body={onTimePct:$('ptOnTime').value,maxAvgBuildDays:$('ptBuild').value,staleWipDays:$('ptStale').value,maxClaimRatePct:$('ptClaim').value};

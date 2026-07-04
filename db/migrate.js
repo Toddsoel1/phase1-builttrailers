@@ -196,6 +196,16 @@ const colMigrations = [
   `CREATE TABLE IF NOT EXISTS part_build_log (id SERIAL PRIMARY KEY, part_id TEXT NOT NULL,
      qty NUMERIC(12,2) NOT NULL, user_id TEXT, note TEXT, built_at TIMESTAMPTZ NOT NULL DEFAULT now())`,
   `CREATE INDEX IF NOT EXISTS idx_pbl_user ON part_build_log(user_id, built_at)`,
+  // Time surveys: periodic post-verification "how long did these actually take?" — the actuals
+  // that audit BOM labor hours and made-part costs. Completed items link back to the survey
+  // that covered them, so each is asked about exactly once.
+  `CREATE TABLE IF NOT EXISTS time_survey (id SERIAL PRIMARY KEY, user_id TEXT NOT NULL,
+     total_minutes INT NOT NULL DEFAULT 0, created_at TIMESTAMPTZ NOT NULL DEFAULT now())`,
+  `CREATE TABLE IF NOT EXISTS time_survey_line (id SERIAL PRIMARY KEY, survey_id INT NOT NULL,
+     kind TEXT NOT NULL, order_id TEXT, stage TEXT, model_id TEXT, part_id TEXT,
+     description TEXT NOT NULL, qty NUMERIC(12,2) NOT NULL DEFAULT 1, minutes INT NOT NULL DEFAULT 0)`,
+  `ALTER TABLE trailer_build_step ADD COLUMN IF NOT EXISTS time_survey_id INT`,
+  `ALTER TABLE part_build_log ADD COLUMN IF NOT EXISTS time_survey_id INT`,
   `CREATE TABLE IF NOT EXISTS daily_task (id SERIAL PRIMARY KEY, plan_date DATE NOT NULL, user_id TEXT,
      order_id TEXT, stage TEXT, workstation TEXT, description TEXT NOT NULL,
      est_hours NUMERIC(8,2) NOT NULL DEFAULT 0, status TEXT NOT NULL DEFAULT 'proposed',

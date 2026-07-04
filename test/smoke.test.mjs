@@ -16,7 +16,7 @@ const BASE = `http://localhost:${PORT}`;
 const HERMETIC = { PORT: String(PORT), ACCOUNTING_MODE: 'simulated', SMS_ENABLED: '0',
   QBO_CLIENT_ID: '', QBO_CLIENT_SECRET: '', JWT_SECRET: 'test-secret-smoke',
   LOGIN_RATE_MAX: '100000', PORTAL_RATE_MAX: '100000', DEALER_FEED_TOKEN: 'test-feed-token', GEOCODE_DISABLED: '1',
-  BACKUP_DIR: path.join(tmpdir(), 'bt-smoke-backups') };
+  BACKUP_DIR: path.join(tmpdir(), 'bt-smoke-backups'), TIME_SURVEY_MIN_ITEMS: '3' };
 
 let server, dbDir, token, orderId, modelId;
 
@@ -802,6 +802,50 @@ test('my work: trailers by step + made parts by part number + tasks, over any wi
   assert.equal((await fetch(BASE + '/api/mywork?userId=' + maria.id, { headers: { Authorization: 'Bearer ' + salesTok } })).status, 403, 'peers cannot browse each other');
   const asMgr = await json(await fetch(BASE + '/api/mywork?userId=' + users.find(u => u.username === 'aruiz').id, { headers: smh }));
   assert.equal(asMgr.user, 'Angela Ruiz', 'Shop Manager can review any employee');
+});
+
+test('time survey: triggers on accumulated work, collects minutes, audits BOM labor + part costs', async () => {
+  const mr = await api('/api/auth/login', { method: 'POST', body: JSON.stringify({ username: 'mchen', password: 'built2026' }) });
+  const smh = { 'Content-Type': 'application/json', Authorization: 'Bearer ' + (await mr.json()).token };
+
+  // Maria's unsurveyed work so far: 2 build-step stamps + 1 made-parts entry = 3 ≥ threshold(3).
+  const p = await json(await fetch(BASE + '/api/timesurvey/pending', { headers: smh }));
+  assert.equal(p.due, true, 'enough accumulated work triggers the survey');
+  const stageLine = p.stages.find(s => s.stage === 'Build');
+  assert.ok(stageLine && stageLine.stepIds.length >= 2, 'welded work grouped per order-stage');
+  assert.ok(stageLine.prefillMinutes > 0, 'prefilled from the BOM routing');
+  assert.match(stageLine.description, /Welded/i, 'reads like a human wrote it');
+  const partLine = p.parts.find(x => x.qty === 3);
+  assert.ok(partLine, 'the bunkboard build is listed');
+
+  // Fill it out: welded 1.5h, bunkboards 45m, plus an "other" line.
+  const sub = await fetch(BASE + '/api/timesurvey', { method: 'POST', headers: smh, body: JSON.stringify({ lines: [
+    { kind: 'stage', stepIds: stageLine.stepIds, orderId: stageLine.orderId, stage: stageLine.stage,
+      modelId: stageLine.modelId, qty: stageLine.units, description: stageLine.description, minutes: 90 },
+    { kind: 'part', logId: partLine.logId, description: partLine.description, minutes: 45 },
+    { kind: 'other', description: 'shop cleanup', minutes: 30 },
+  ] }) });
+  assert.equal(sub.status, 200);
+  assert.equal((await sub.json()).totalMinutes, 165, 'all hours accounted');
+
+  // Asked exactly once: nothing pending anymore.
+  const p2 = await json(await fetch(BASE + '/api/timesurvey/pending', { headers: smh }));
+  assert.equal(p2.due, false);
+  assert.equal(p2.stages.length + p2.parts.length, 0, 'covered items are stamped');
+
+  // The payoff: actuals vs BOM by model+stage, and made-part minutes -> implied labor cost.
+  const acc = await json(await api('/api/labor-accuracy'));
+  const st = acc.byStage.find(s => s.modelId === stageLine.modelId && s.stage === 'Build');
+  assert.ok(st, 'stage accuracy row exists');
+  assert.equal(st.actualHoursPerUnit, 1.5, '90 min / 1 unit = 1.5h actual');
+  assert.ok(st.bomHoursPerUnit > 0 && st.variancePct != null, 'compared against the routing');
+  const pt = acc.byPart.find(x => x.partId === partLine.partId);
+  assert.equal(pt.minutesPerUnit, 15, '45 min / 3 units');
+  assert.ok(pt.impliedLaborPerUnit > 0 && typeof pt.currentCost === 'number', 'implied labor $ vs current part cost');
+
+  // Section-gated like the rest of Performance.
+  const sr = await api('/api/auth/login', { method: 'POST', body: JSON.stringify({ username: 'aruiz', password: 'built2026' }) });
+  assert.equal((await fetch(BASE + '/api/labor-accuracy', { headers: { Authorization: 'Bearer ' + (await sr.json()).token } })).status, 403);
 });
 
 test('order timeline: placed + stage completions with names and shop-floor initials', async () => {

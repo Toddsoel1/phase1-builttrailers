@@ -7,6 +7,7 @@
 import { all, one } from './db.js';
 import { TEST_FILTERS as T } from './testdata.js'; // exclude flagged test data from the inbox
 import { replenishment, scorecard } from './analytics.js';
+import { pendingFor as timeSurveyPending } from './timesurvey.js';
 
 // Resolve a raw app_user row into the shape actionItemsFor() expects.
 // Admins implicitly have every section (sections = null). Titles ride along so
@@ -100,6 +101,13 @@ export async function actionItemsFor(user) {
     if (hadPlan && !verified) items.push({ key: 'verify_day', icon: '⏱',
       label: '60-second check: verify what you completed today', count: 1, link: 'standup' });
   }
+  // Time survey due: enough completed work has piled up to put real minutes against it.
+  try {
+    const ts = await timeSurveyPending(user.id);
+    if (ts.due) items.push({ key: 'time_survey', icon: '⏲',
+      label: `Quick time check — put minutes on ${plural(ts.itemCount, 'completed item')} (keeps the BOMs honest)`,
+      count: ts.itemCount, link: 'standup' });
+  } catch { /* pre-migration — skip */ }
   if (isAdmin || holds('Shop Manager', 'General Manager')) {
     const prop = await count(`SELECT COUNT(*)::int AS n FROM daily_task WHERE plan_date=$1 AND status='proposed'`, [todayStr]);
     if (prop) items.push({ key: 'standup_approve', icon: '📣',

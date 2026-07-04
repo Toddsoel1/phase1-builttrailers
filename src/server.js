@@ -52,6 +52,7 @@ import * as andon from './andon.js';
 import { runBackup } from './backup.js';
 import * as standup from './standup.js';
 import { myWork } from './mywork.js';
+import * as timesurvey from './timesurvey.js';
 
 // Crash fast if JWT_SECRET is unset in production — predictable fallback is a critical vuln
 if (!process.env.JWT_SECRET) {
@@ -1225,6 +1226,21 @@ app.post('/api/parts/:id/built', authMiddleware, requireTier('editor'), async (r
     [req.params.id, qty, req.user.id, (req.body?.note || '').slice(0, 200) || null]);
   await audit(req, 'part.built', `${req.params.id}: +${qty} by ${req.user.name}`);
   res.json({ ok: true, onHand: cur.on_hand + qty });
+});
+// ⏱ Time surveys: after the day verification, once enough unsurveyed work has accumulated,
+// ask how long it actually took — the actuals behind BOM-labor and made-part cost accuracy.
+app.get('/api/timesurvey/pending', authMiddleware, async (req, res) => {
+  try { res.json(await timesurvey.pendingFor(req.user.id)); } catch (e) { res.status(400).json({ error: e.message }); }
+});
+app.post('/api/timesurvey', authMiddleware, async (req, res) => {
+  try {
+    const r = await timesurvey.submit(req.user.id, req.body?.lines);
+    await audit(req, 'timesurvey.submit', `#${r.surveyId}: ${r.totalMinutes} min across ${req.body?.lines?.length || 0} line(s)`);
+    res.json(r);
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+app.get('/api/labor-accuracy', authMiddleware, requireSection('performance'), async (_req, res) => {
+  try { res.json(await timesurvey.accuracy()); } catch (e) { res.status(400).json({ error: e.message }); }
 });
 // The 60-second end-of-day verification: confirm what actually got done (+ optional note).
 app.post('/api/standup/verify', authMiddleware, async (req, res) => {

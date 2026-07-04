@@ -10,6 +10,7 @@
 import { all, one, q } from './db.js';
 import { mrp } from './mrp.js';
 import { openProblems, blockerPareto } from './andon.js';
+import { accuracy as laborAccuracy } from './timesurvey.js';
 
 const PROD_STAGES = ['Scheduled', 'Build', 'Paint/Powder Coat', 'Finish'];
 
@@ -209,11 +210,11 @@ export async function replenishment() {
 
 // The whole scorecard: KPIs vs targets, plus generated "areas for improvement" with owners.
 export async function scorecard() {
-  const [targets, cycles, aging, done, qual, rep, pastDueRow, mct, wip, andonOpen, andonTop] = await Promise.all([
+  const [targets, cycles, aging, done, qual, rep, pastDueRow, mct, wip, andonOpen, andonTop, labor] = await Promise.all([
     getTargets(), stageCycleTimes(), wipAging(), completions(), quality(), replenishment(),
     one(`SELECT COUNT(*)::int AS n FROM sales_order
           WHERE stage NOT IN ('Quote','Ready','Cancelled') AND due IS NOT NULL AND due < CURRENT_DATE`, []).catch(() => null),
-    mctAnalytics(), wipState(), openProblems(), blockerPareto(),
+    mctAnalytics(), wipState(), openProblems(), blockerPareto(), laborAccuracy().catch(() => ({ byStage: [], byPart: [] })),
   ]);
   const pastDue = Number(pastDueRow?.n || 0);
   const stale = aging.filter(a => a.daysInStage > targets.staleWipDays);
@@ -281,9 +282,13 @@ export async function scorecard() {
   if (mct.avgFlowEffPct != null && mct.avgFlowEffPct < 15 && worstWait)
     recs.push({ sev: 'warn', owner: 'General Manager', link: 'performance',
       text: `Only ${mct.avgFlowEffPct}% of lead time is actual work — the rest is waiting, mostly in ${worstWait.stage} (${worstWait.avgWaitDays} idle days avg). QRM lever: release less WIP and cap the queue there.` });
+  // Time surveys vs the BOM: enough evidence (3+ surveys) of a 25%+ gap = the routing is wrong.
+  for (const s of labor.byStage.filter(x => x.surveys >= 3 && x.variancePct != null && Math.abs(x.variancePct) >= 25).slice(0, 3))
+    recs.push({ sev: 'warn', owner: 'General Manager', link: 'boms',
+      text: `BOM labor for ${s.model} ${s.stage} reads ${s.bomHoursPerUnit}h/unit; crew actuals average ${s.actualHoursPerUnit}h (n=${s.surveys}, ${s.variancePct > 0 ? '+' : ''}${s.variancePct}%) — update the routing so quotes and schedules stop lying.` });
   if (!recs.length)
     recs.push({ sev: 'ok', owner: 'Shop', link: 'performance', text: 'All expectations met — consider raising the targets.' });
 
   return { targets, kpis, cycles, aging: stale, completions: done, quality: qual, replenishment: rep, pastDue,
-           mct, wip, andon: { open: andonOpen, pareto: andonTop }, recommendations: recs };
+           mct, wip, andon: { open: andonOpen, pareto: andonTop }, laborAccuracy: labor, recommendations: recs };
 }
