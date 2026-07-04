@@ -22,7 +22,7 @@ export function r2Configured() {
 }
 
 let _client = null;
-async function r2Client() {
+export async function r2Client() {
   if (_client) return _client;
   const { S3Client } = await import('@aws-sdk/client-s3');
   _client = new S3Client({

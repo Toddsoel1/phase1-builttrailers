@@ -155,6 +155,17 @@ function pwToggle(inp){
 }
 document.querySelectorAll('input[type=password]').forEach(pwToggle);
 new MutationObserver(ms=>{for(const m of ms)for(const n of m.addedNodes){if(n.nodeType!==1)continue;if(n.matches&&n.matches('input[type=password]'))pwToggle(n);if(n.querySelectorAll)n.querySelectorAll('input[type=password]').forEach(pwToggle);}}).observe(document.body,{childList:true,subtree:true});
+// ── CSV export: views stash their rows at render time; the button downloads them ──
+window._csv={};
+function csvBtn(key,rows,label){window._csv[key]=rows||[];return `<button class="btn sm sec" style="text-transform:none;letter-spacing:0" onclick="dlCSV('${key}')" title="Download as CSV (opens in Excel)">⬇ ${label||'CSV'}</button>`;}
+function dlCSV(key){
+  const rows=window._csv[key]||[]; if(!rows.length)return toast('Nothing to export yet');
+  const cols=[...new Set(rows.flatMap(r=>Object.keys(r)))];
+  const escv=v=>{const s=v==null?'':String(v);return /[",\n]/.test(s)?'"'+s.replace(/"/g,'""')+'"':s;};
+  const csv=[cols.join(','),...rows.map(r=>cols.map(c=>escv(r[c])).join(','))].join('\n');
+  const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv'}));
+  a.download=key+'-'+new Date().toISOString().slice(0,10)+'.csv';a.click();URL.revokeObjectURL(a.href);
+}
 async function api(path, opts={}){
   // Accept:json is required — without it, endpoints that content-negotiate (e.g.
   // /api/auth/qbo) fall back to a 302 redirect, which fetch follows cross-origin and
@@ -776,7 +787,7 @@ async function viewParts(){
   const inactive=allParts.filter(p=>p.active===false).sort((a,b)=>String(a.name||a.id).toLowerCase().localeCompare(String(b.name||b.id).toLowerCase()));
   $('content').innerHTML=`
    <div id="qbItemsPanel" style="display:none;margin-bottom:14px"></div>
-   <div class="card"><h3>Parts (${parts.length})</h3>
+   <div class="card"><h3>Parts (${parts.length}) ${csvBtn('parts_master',allParts)}</h3>
    <table><thead><tr><th>Part</th><th>Type</th><th>Vendor</th><th class="right">On hand</th><th class="right">Reorder</th><th class="right">Unit cost</th><th class="right">Ext. value</th><th class="center">Status</th>${canEdit()?'<th></th>':''}</tr></thead><tbody>
    ${parts.map(p=>`<tr>
      <td><b>${esc(p.id)}</b><br><span class="muted" style="font-size:11px">${esc(p.name)}</span></td>
@@ -1190,7 +1201,7 @@ async function viewPerformance(){
         <div style="margin-top:3px"><span class="pill viewer" style="font-size:10px">${esc(r.owner)}</span> <a class="lnk" style="font-size:12px" onclick="go('${esc(r.link)}')">open →</a></div></div>
     </div>`).join('')}</div>`;
   const m=d.mct||{};
-  const cyc=`<div class="card" style="margin-bottom:16px"><h3>⏱ Lead time & white space (QRM) <span class="muted" style="text-transform:none;letter-spacing:0">— where orders wait instead of being worked · trailing 90 days</span></h3>
+  const cyc=`<div class="card" style="margin-bottom:16px"><h3>⏱ Lead time & white space (QRM) <span class="muted" style="text-transform:none;letter-spacing:0">— where orders wait instead of being worked · trailing 90 days</span> ${csvBtn('qrm_white_space',m.whiteSpace||[])} ${csvBtn('mct_per_order',m.orders||[],'orders CSV')}</h3>
     <div style="display:flex;gap:18px;flex-wrap:wrap;margin:6px 0 10px;font-size:13px">
       <span><b>MCT</b> (order → Ready): <b>${m.avgMctDays!=null?m.avgMctDays+' days':'—'}</b>${m.prevAvgMctDays!=null?` <span class="muted">(was ${m.prevAvgMctDays})</span>`:''}</span>
       ${m.qrmNumber!=null?`<span><b>QRM number:</b> <span class="badge ${m.qrmNumber<=100?'b-ok':'b-below'}">${m.qrmNumber}</span> <span class="muted">under 100 = lead time shrinking</span></span>`:''}
@@ -1212,7 +1223,7 @@ async function viewPerformance(){
       <td class="right" style="color:var(--red)">${a.hoursOpen}</td>
       <td><button class="btn sm sec" onclick="orderDetail('${esc(a.orderId)}')">View</button></td></tr>`).join('')}
     </tbody></table></div>`:''}
-    ${an.pareto.length?`<div class="card" style="margin-bottom:16px"><h3>🧱 Blocker Pareto <span class="muted" style="text-transform:none;letter-spacing:0">— what stops the floor, by hours lost · trailing 90 days</span></h3>
+    ${an.pareto.length?`<div class="card" style="margin-bottom:16px"><h3>🧱 Blocker Pareto <span class="muted" style="text-transform:none;letter-spacing:0">— what stops the floor, by hours lost · trailing 90 days</span> ${csvBtn('blocker_pareto',an.pareto)}</h3>
     <table><thead><tr><th>Reason</th><th class="center">Times raised</th><th class="center">Still open</th><th class="right">Blocked hours</th></tr></thead><tbody>
     ${an.pareto.map(p=>`<tr><td><b>${esc(p.reason)}</b></td><td class="center">${p.events}</td><td class="center">${p.open||'—'}</td><td class="right">${p.blockedHours}</td></tr>`).join('')}
     </tbody></table>
@@ -1644,6 +1655,13 @@ async function orderDetail(id){
       ${kpi('Revenue',money(o.revenue),'')}${kpi('Rep',o.rep||'—','')}</div>
     ${o.note?`<div class="muted" style="font-size:12.5px;margin-bottom:10px">📝 ${esc(o.note)}</div>`:''}
     ${buildSec}
+    ${(o.timeline||[]).length?`<div style="margin:10px 0 12px">
+      <h3 style="font-size:12px;color:var(--muted);text-transform:uppercase;margin-bottom:6px">History</h3>
+      ${o.timeline.map(t=>`<div style="display:flex;gap:8px;align-items:baseline;font-size:12.5px;padding:2px 0">
+        <span class="muted" style="min-width:118px;font-size:11px">${new Date(t.at).toLocaleString([],{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'})}</span>
+        <span><b>${esc(t.event)}</b>${t.by?` <span class="muted">— ${esc(t.by)}</span>`:''}${t.workstation?` <span class="muted" style="font-size:10.5px">@ ${esc(t.workstation)}</span>`:''}</span>
+      </div>`).join('')}
+    </div>`:''}
     <h3 style="font-size:12px;color:var(--muted);text-transform:uppercase;margin-bottom:6px">Parts required</h3>
     <table><thead><tr><th>Part</th><th class="right">Need</th><th class="right">On hand</th><th class="center">Status</th></tr></thead><tbody>
     ${o.bom.map(p=>`<tr><td>${esc(p.name)}</td><td class="right">${p.need}</td><td class="right">${p.onHand}</td><td class="center">${p.short?'<span class="badge b-below">short</span>':'<span class="badge b-ok">ok</span>'}</td></tr>`).join('')}
@@ -2135,7 +2153,7 @@ async function viewAccounting(){
      </div>
      <div id="qboErrOut"><span class="muted">Loading…</span></div>
    </div>
-   <div class="card" style="margin-top:16px"><h3>Accounting ledger (most recent)</h3>
+   <div class="card" style="margin-top:16px"><h3>Accounting ledger (most recent) ${csvBtn('accounting_ledger',acct.events)}</h3>
      <table><thead><tr><th>Type</th><th>Reference</th><th>Party</th><th class="right">Amount</th><th class="center">Mode</th><th class="center">Status</th></tr></thead><tbody>
      ${acct.events.map(e=>`<tr><td>${e.kind==='invoice'?'<span class="badge b-ok">Invoice (AR)</span>':'<span class="badge b-low">Bill (AP)</span>'}</td><td>${e.ref||''}</td><td>${e.party||''}</td><td class="right">${money(e.amount)}</td><td class="center">${e.mode}</td><td class="center"><span class="badge ${e.status==='pending'?'b-low':'b-ok'}">${e.status}</span></td></tr>`).join('')}
      </tbody></table>
@@ -2565,7 +2583,7 @@ async function trailersMarginsTab(){
   const r=await api('/api/warranty/margins');
   const m=r.byModel||[],acc=r.accessories||[];
   const modelCard=`<div class="card" style="margin-bottom:16px">
-    <h3>📊 Dealer margins by model <span class="muted" style="text-transform:none;letter-spacing:0">— retail sale prices captured from buyers' orders on verified registrations · staff-only</span></h3>
+    <h3>📊 Dealer margins by model <span class="muted" style="text-transform:none;letter-spacing:0">— retail sale prices captured from buyers' orders on verified registrations · staff-only</span> ${csvBtn('margins_by_model',m)}</h3>
     ${m.length?`<table><thead><tr><th>Model</th><th class="right">Our price</th><th class="right">Avg sold for</th><th class="right">Dealer margin</th><th class="right">Range</th><th class="center">n</th></tr></thead><tbody>
       ${m.map(x=>`<tr><td><b>${esc(x.model||'')}</b></td>
         <td class="right">${money(x.ourPrice)}</td><td class="right">${money(x.avgSale)}</td>
@@ -2576,7 +2594,7 @@ async function trailersMarginsTab(){
   </div>`;
   const dealers=r.byDealer||[],months=r.byMonth||[];
   const dealerCard=`<div class="card" style="margin-bottom:16px">
-    <h3>🏬 Dealer margins by dealership <span class="muted" style="text-transform:none;letter-spacing:0">— who marks our trailers up the most, across their model mix</span></h3>
+    <h3>🏬 Dealer margins by dealership <span class="muted" style="text-transform:none;letter-spacing:0">— who marks our trailers up the most, across their model mix</span> ${csvBtn('margins_by_dealer',dealers)}</h3>
     ${dealers.length?`<table><thead><tr><th>Dealer</th><th class="center">Sales</th><th class="right">Avg sold for</th><th class="right">Avg markup</th><th class="right">Total markup</th></tr></thead><tbody>
       ${dealers.map(d=>`<tr><td><b>${esc(d.dealer)}</b></td><td class="center">${d.n}</td>
         <td class="right">${money(d.avgSale)}</td>
@@ -2586,7 +2604,7 @@ async function trailersMarginsTab(){
   </div>`;
   const maxAbs=Math.max(1,...months.map(x=>Math.abs(Number(x.totalMargin)||0)));
   const trendCard=`<div class="card" style="margin-bottom:16px">
-    <h3>📈 Margin over time <span class="muted" style="text-transform:none;letter-spacing:0">— by sale month</span></h3>
+    <h3>📈 Margin over time <span class="muted" style="text-transform:none;letter-spacing:0">— by sale month</span> ${csvBtn('margins_by_month',months)}</h3>
     ${months.length?`<table><thead><tr><th>Month</th><th class="center">Sales</th><th class="right">Avg sold for</th><th class="right">Avg markup</th><th class="right">Total markup</th><th style="width:32%"></th></tr></thead><tbody>
       ${months.map(x=>`<tr><td><b>${esc(x.month)}</b></td><td class="center">${x.n}</td>
         <td class="right">${money(x.avgSale)}</td><td class="right">${money(x.avgMargin)}</td>
@@ -2666,7 +2684,7 @@ async function trailersClaimsTab(){
     ${kpi('Costliest model',sum.byModel[0]?esc(sum.byModel[0].model):'—',sum.byModel[0]?money(sum.byModel[0].cost):'')}
     ${kpi('Costliest dealer',sum.byDealer[0]?esc(sum.byDealer[0].dealer):'—',sum.byDealer[0]?money(sum.byDealer[0].cost):'')}
   </div>
-  <div class="card" style="margin-bottom:16px"><h3>💸 Cost & claim rate by model <span class="muted" style="text-transform:none;letter-spacing:0">— which trailer generates the warranty spend</span></h3>
+  <div class="card" style="margin-bottom:16px"><h3>💸 Cost & claim rate by model <span class="muted" style="text-transform:none;letter-spacing:0">— which trailer generates the warranty spend</span> ${csvBtn('warranty_by_model',sum.byModel)}</h3>
     ${sum.byModel.length?`<table><thead><tr><th>Model</th><th class="center">Claims</th><th class="center">Units built</th><th class="center">Claim rate</th><th class="right">Total cost</th><th class="right">Avg / claim</th></tr></thead><tbody>
     ${sum.byModel.map(x=>`<tr><td><b>${esc(x.model)}</b></td><td class="center">${x.claims}</td>
       <td class="center">${x.unitsBuilt||'—'}</td>
@@ -2674,13 +2692,13 @@ async function trailersClaimsTab(){
       <td class="right">${money(x.cost)}</td><td class="right muted">${money(x.avgCost)}</td></tr>`).join('')}
     </tbody></table>`:'<p class="muted">No claims yet.</p>'}
   </div>
-  <div class="card" style="margin-bottom:16px"><h3>🔩 Failures by part <span class="muted" style="text-transform:none;letter-spacing:0">— the components behind the claims: engineering & vendor feedback</span></h3>
+  <div class="card" style="margin-bottom:16px"><h3>🔩 Failures by part <span class="muted" style="text-transform:none;letter-spacing:0">— the components behind the claims: engineering & vendor feedback</span> ${csvBtn('warranty_by_part',sum.byPart||[])}</h3>
     ${(sum.byPart||[]).length?`<table><thead><tr><th>Part</th><th class="center">Claims</th><th class="center">Qty replaced</th><th class="right">Parts cost</th></tr></thead><tbody>
     ${sum.byPart.map(p=>`<tr><td><b>${esc(p.name||p.partId||'—')}</b>${p.partId?`<br><span class="muted" style="font-size:11px">${esc(p.partId)}</span>`:''}</td>
       <td class="center">${p.claims}</td><td class="center">${p.qty}</td><td class="right">${money(p.cost)}</td></tr>`).join('')}
     </tbody></table>`:'<p class="muted">No parts recorded on claims yet — add the failed parts when opening or resolving a claim to build this report.</p>'}
   </div>
-  <div class="card"><h3>Warranty Claims</h3>
+  <div class="card"><h3>Warranty Claims ${csvBtn('warranty_claims',claims)}</h3>
     ${claims.length?`<table><thead><tr><th>Claim</th><th>VIN</th><th>Model</th><th>Dealer</th><th>Issue</th><th class="center">Status</th><th class="right">Cost</th><th></th></tr></thead><tbody>
     ${claims.map(c=>`<tr>
       <td><b>${esc(c.id)}</b></td>

@@ -8,7 +8,7 @@ import jwt from 'jsonwebtoken';
 import { all, one, q } from './db.js';
 import { hashPassword, checkPassword, JWT_SECRET } from './auth.js';
 import { submitRegistration } from './portal.js';
-import { sendDealerPasswordReset } from './email.js';
+import { sendDealerPasswordReset, sendDealerApproved } from './email.js';
 
 const DEFAULT_PORTAL = process.env.DEALER_PORTAL_URL || 'https://dealership.builttrailers.app';
 
@@ -195,6 +195,7 @@ export async function approveTeamMember(admin, memberId, role) {
   if (String(m.dealership_name || '').toLowerCase() !== String(admin.dealership_name || '').toLowerCase()) throw new Error('That sign-up is for a different dealership.');
   const r = DEALER_ROLES.includes(role) ? role : 'sales';
   await q(`UPDATE dealer_user SET status='active', customer_id=$1, role=$2 WHERE id=$3`, [admin.customer_id, r, memberId]);
+  sendDealerApproved({ email: m.email, name: m.name, dealershipName: admin.dealership_name }).catch(e => console.warn('approval email:', e.message));
   return { ok: true };
 }
 export async function rejectTeamMember(admin, memberId) {
@@ -220,7 +221,8 @@ export async function pendingDealers() {
     .map(d => ({ id: d.id, email: d.email, name: d.name, dealershipName: d.dealership_name, createdAt: d.created_at }));
 }
 export async function approveDealer(id, customerId, role) {
-  if (!await one('SELECT id FROM dealer_user WHERE id=$1', [id])) throw new Error('account not found');
+  const du = await one('SELECT * FROM dealer_user WHERE id=$1', [id]);
+  if (!du) throw new Error('account not found');
   // First active user at a dealership becomes its admin; otherwise use the chosen role.
   let r = role && DEALER_ROLES.includes(role) ? role : null;
   if (!r) {
@@ -228,6 +230,8 @@ export async function approveDealer(id, customerId, role) {
     r = existing ? 'sales' : 'admin';
   }
   await q(`UPDATE dealer_user SET status='active', customer_id=$1, role=$2 WHERE id=$3`, [customerId || null, r, id]);
+  // Tell them — until this email existed, approved dealers had to log in on a hunch.
+  sendDealerApproved({ email: du.email, name: du.name, dealershipName: du.dealership_name }).catch(e => console.warn('approval email:', e.message));
   return { ok: true, role: r };
 }
 export async function rejectDealer(id) {

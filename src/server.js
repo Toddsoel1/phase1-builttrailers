@@ -48,6 +48,7 @@ import { emailConfigured } from './email.js';
 import { runReminders } from './reminders.js';
 import * as analytics from './analytics.js';
 import * as andon from './andon.js';
+import { runBackup } from './backup.js';
 
 // Crash fast if JWT_SECRET is unset in production — predictable fallback is a critical vuln
 if (!process.env.JWT_SECRET) {
@@ -1238,11 +1239,21 @@ app.get('/api/orders/:id', authMiddleware, async (req, res) => {
   if (!o) return res.status(404).json({ error: 'not found' });
   const lines = await all(`SELECT b.part_id, b.qty, p.name, p.on_hand FROM bom_line b JOIN part p ON p.id=b.part_id WHERE b.model_id=$1`, [o.modelId]);
   o.bom = lines.map(l => ({ partId: l.part_id, name: l.name, need: Math.round(Number(l.qty) * o.qty), onHand: l.on_hand, short: l.on_hand < Number(l.qty) * o.qty }));
-  const extra = await one('SELECT note, cancel_reason FROM sales_order WHERE id=$1', [req.params.id]);
+  const extra = await one('SELECT note, cancel_reason, created_at FROM sales_order WHERE id=$1', [req.params.id]);
   o.note = extra?.note || null;
   o.cancelReason = extra?.cancel_reason || null;
   o.build = await boatbuilder.orderBuild(req.params.id).catch(() => null); // boat-build config, if any
   o.andons = await andon.problemsForOrder(req.params.id).catch(() => []);  // shop-floor problems (open + recent)
+  // History: order placed + every stage completion with who did it (staff name, or the
+  // shop-floor initials captured at the QR scan) and when.
+  const stamps = await all(`SELECT d.stage, d.completed_at, d.workstation, d.completed_label, u.name AS by_name
+                              FROM order_stage_done d LEFT JOIN app_user u ON u.id=d.completed_by
+                             WHERE d.order_id=$1 ORDER BY d.completed_at`, [req.params.id]).catch(() => []);
+  o.timeline = [
+    ...(extra?.created_at ? [{ event: 'Order placed', at: extra.created_at, by: o.channel || null }] : []),
+    ...stamps.map(s => ({ event: `${s.stage} complete`, at: s.completed_at,
+      by: s.by_name || s.completed_label || null, workstation: s.workstation || null })),
+  ];
   res.json(o);
 });
 app.post('/api/orders', authMiddleware, requireSales, async (req, res) => {
@@ -1307,9 +1318,9 @@ async function applyOrderStage(orderId, curOrder, stage, actorUser, actorLabel) 
   // A FORWARD move means the previous stage just finished — stamp it (same table the daily
   // update writes), so cycle-time analytics accrue from every stage change, not just Daily Update.
   if (STAGES.indexOf(stage) > STAGES.indexOf(curOrder.stage))
-    await q(`INSERT INTO order_stage_done(order_id,stage,completed_by,completed_at)
-             VALUES ($1,$2,$3,now()) ON CONFLICT(order_id,stage) DO NOTHING`,
-      [orderId, curOrder.stage, actorUser?.id || null]).catch(() => {});
+    await q(`INSERT INTO order_stage_done(order_id,stage,completed_by,completed_at,completed_label)
+             VALUES ($1,$2,$3,now(),$4) ON CONFLICT(order_id,stage) DO NOTHING`,
+      [orderId, curOrder.stage, actorUser?.id || null, actorLabel || null]).catch(() => {});
   await trailers.afterStageChange(orderId, curOrder.stage, stage, actorUser); // VINs at Build, print queues at Paint
   await q('INSERT INTO audit_log(user_id,action,detail) VALUES ($1,$2,$3)',
     [actorUser?.id || null, 'order.stage', `${orderId} -> ${stage}${actorLabel ? ` (${actorLabel})` : ''}`]).catch(() => {});
@@ -1656,6 +1667,14 @@ app.post('/api/admin/shop-pin', authMiddleware, requireTier('admin'), async (req
   await q(`INSERT INTO app_config(key,value) VALUES('shop_pin',$1) ON CONFLICT(key) DO UPDATE SET value=$1`, [hashPassword(pin)]);
   await audit(req, 'shoppin.set', 'shop-floor PIN updated');
   res.json({ ok: true, set: true });
+});
+// On-demand backup (same engine the daily scheduler runs; rolling day-of-month key).
+app.post('/api/admin/backup/run', authMiddleware, requireTier('admin'), async (req, res) => {
+  try {
+    const r = await runBackup({ rolling: true });
+    await audit(req, 'backup.manual', `${r.destination}:${r.key} — ${r.tables} tables, ${r.rows} rows, ${r.kb} KB`);
+    res.json(r);
+  } catch (e) { res.status(400).json({ error: e.message }); }
 });
 // Run (or preview with {dryRun:true}) the owner reminder emails on demand — the same
 // runReminders() the daily scheduler calls, so office staff can check who's eligible.
@@ -2275,6 +2294,30 @@ async function maybeRunReminders() {
 if (kind === 'postgres' && process.env.REMINDERS_DISABLED !== 'true') {
   setInterval(maybeRunReminders, 15 * 60 * 1000);         // daily job, checked every 15 min
   setTimeout(maybeRunReminders, 25 * 1000);               // and once shortly after boot
+}
+
+// ---- Daily database backup (in-process — no cron service to configure) ----
+// Rolling day-of-month key in R2 = a ~30-copy window with zero pruning. Same idempotent
+// claim-the-day pattern as the briefing/reminders, so restarts can never double-run it.
+const BACKUP_HOUR = Number(process.env.BACKUP_HOUR || 2);
+async function maybeRunBackup() {
+  try {
+    const p = partsIn(BRIEFING_TZ);
+    if (Number(p.hour) < BACKUP_HOUR) return;
+    const today = `${p.year}-${p.month}-${p.day}`;
+    const last = await one(`SELECT value FROM app_config WHERE key='backup_last_run'`, []).catch(() => null);
+    if (last && last.value === today) return;
+    await q(`INSERT INTO app_config(key,value) VALUES('backup_last_run',$1) ON CONFLICT(key) DO UPDATE SET value=$1`, [today]);
+    const r = await runBackup({ rolling: true });
+    await q('INSERT INTO audit_log(user_id,action,detail) VALUES (NULL,$1,$2)',
+      ['backup.daily', `${r.destination}:${r.key} — ${r.tables} tables, ${r.rows} rows, ${r.kb} KB${r.warning ? ' [NOT OFF-SITE]' : ''}`]).catch(() => {});
+    console.log(`Daily backup (${today}): ${r.destination} ${r.key} — ${r.tables} tables, ${r.rows} rows, ${r.kb} KB`);
+    if (r.warning) console.warn('⚠ backup:', r.warning);
+  } catch (e) { console.warn('backup scheduler:', e.message); }
+}
+if (kind === 'postgres' && process.env.BACKUPS_DISABLED !== 'true') {
+  setInterval(maybeRunBackup, 15 * 60 * 1000);            // daily job, checked every 15 min
+  setTimeout(maybeRunBackup, 40 * 1000);                  // and once shortly after boot
 }
 
 app.listen(PORT, () => console.log(`Built Trailers Phase 1 API on :${PORT} (db: ${kind})`));

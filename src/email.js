@@ -65,6 +65,21 @@ export async function sendDealerNotification({ email, kind, body }) {
   return sendEmail({ to: email, subject, html, text });
 }
 
+// "You're approved" — sent when Built Trailers staff approve a dealership signup (or a
+// dealership admin approves a teammate). Until this existed, approved dealers heard nothing.
+export async function sendDealerApproved({ email, name, dealershipName }) {
+  const url = DEALER_PORTAL();
+  const subject = 'Your Built Trailers dealer account is approved';
+  const html = `<div style="font-family:Arial,Helvetica,sans-serif;color:#1a2230;max-width:560px">
+    <h2 style="margin:0 0 8px">You're in${name ? ', ' + escapeHtml(name) : ''}!</h2>
+    <p>Your dealer portal account${dealershipName ? ` for <b>${escapeHtml(dealershipName)}</b>` : ''} has been approved. You can now place orders, build boat-trailer quotes, register warranties, and track claims.</p>
+    <p style="margin:18px 0"><a href="${url}" style="display:inline-block;background:#e8631a;color:#fff;padding:11px 20px;border-radius:8px;text-decoration:none;font-weight:bold">Log in to the dealer portal</a></p>
+    <p style="color:#6b7785;font-size:13px">Sign in with the email and password you created. Tip: add the portal to your phone's home screen for one-tap access.</p>
+    <p style="color:#6b7785;font-size:12px;margin-top:18px">Built Trailers</p></div>`;
+  const text = `Your Built Trailers dealer account${dealershipName ? ` for ${dealershipName}` : ''} is approved. Log in: ${url}`;
+  return sendEmail({ to: email, subject, html, text });
+}
+
 // Self-service password reset link for a dealer account (link expires in 1 hour).
 export async function sendDealerPasswordReset({ email, name, resetUrl }) {
   const subject = 'Reset your Built Trailers dealer portal password';

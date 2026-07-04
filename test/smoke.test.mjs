@@ -5,7 +5,7 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -15,7 +15,8 @@ const BASE = `http://localhost:${PORT}`;
 // real external service regardless of what's in .env.
 const HERMETIC = { PORT: String(PORT), ACCOUNTING_MODE: 'simulated', SMS_ENABLED: '0',
   QBO_CLIENT_ID: '', QBO_CLIENT_SECRET: '', JWT_SECRET: 'test-secret-smoke',
-  LOGIN_RATE_MAX: '100000', PORTAL_RATE_MAX: '100000', DEALER_FEED_TOKEN: 'test-feed-token', GEOCODE_DISABLED: '1' };
+  LOGIN_RATE_MAX: '100000', PORTAL_RATE_MAX: '100000', DEALER_FEED_TOKEN: 'test-feed-token', GEOCODE_DISABLED: '1',
+  BACKUP_DIR: path.join(tmpdir(), 'bt-smoke-backups') };
 
 let server, dbDir, token, orderId, modelId;
 
@@ -47,6 +48,7 @@ before(async () => {
 after(() => {
   try { server?.kill('SIGKILL'); } catch {}
   try { rmSync(dbDir, { recursive: true, force: true }); } catch {}
+  try { rmSync(HERMETIC.BACKUP_DIR, { recursive: true, force: true }); } catch {}
 });
 
 test('health endpoint reports DB status + uptime', async () => {
@@ -589,6 +591,29 @@ test('lean/QRM: WIP limits breach pushes SM, andon flows QR->board->resolve->Par
   // cleanup so later tests see a quiet shop
   await api('/api/admin/shop-pin', { method: 'POST', body: JSON.stringify({ pin: '' }) });
   await api('/api/wip-limits', { method: 'POST', body: '{}' });
+});
+
+test('order timeline: placed + stage completions with names and shop-floor initials', async () => {
+  const unit = (await json(await api('/api/search?q=BLTTESTVIN0000099'))).units[0];
+  const o = await json(await api('/api/orders/' + unit.orderId));
+  assert.ok(Array.isArray(o.timeline) && o.timeline.length >= 2, 'timeline present');
+  assert.equal(o.timeline[0].event, 'Order placed', 'starts at order placement');
+  assert.ok(o.timeline.some(t => /complete$/.test(t.event)), 'stage completions listed');
+  const floor = o.timeline.find(t => t.by === 'shop floor: JT');
+  assert.ok(floor, 'the QR-scan stage completion carries the worker initials');
+});
+
+test('backup: admin-only, dumps every table to a gzipped rolling file', async () => {
+  const sr = await api('/api/auth/login', { method: 'POST', body: JSON.stringify({ username: 'aruiz', password: 'built2026' }) });
+  const sales = (await sr.json()).token;
+  assert.equal((await fetch(BASE + '/api/admin/backup/run', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + sales }, body: '{}' })).status, 403, 'backup is admin-only');
+  const r = await json(await api('/api/admin/backup/run', { method: 'POST', body: '{}' }));
+  assert.equal(r.ok, true);
+  assert.equal(r.destination, 'local', 'no R2 in tests -> local fallback');
+  assert.ok(r.tables >= 30 && r.rows > 100, `dumped the whole database (${r.tables} tables, ${r.rows} rows)`);
+  assert.match(r.key, /builttrailers-daily-\d\d\.json\.gz$/, 'rolling day-of-month filename');
+  assert.ok(existsSync(r.key), 'backup file actually written');
+  assert.ok(r.warning, 'local copy warns it is not off-site');
 });
 
 test('customer merge: repoints orders + backfills details + deletes the duplicate; gated', async () => {
