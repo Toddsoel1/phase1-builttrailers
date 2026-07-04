@@ -20,8 +20,8 @@ import { authMiddleware, requireTier, signToken, checkPassword, hashPassword, JW
 import jwt from 'jsonwebtoken';
 import { modelRollup, modelsSummary, inventoryValuation } from './cost.js';
 import { STAGES, canSell, canReorderProduction, trailerTypes, customersWithTypes, allowedTypesFor, ordersFull, consumeInventory, setProductionOrder } from './orders.js';
-import { logWork, dailyReport, wipReport, consumptionByWorkstation, workstations, stageForWorkstation } from './wip.js';
-import { mrp, poList, createPO, receivePO } from './mrp.js';
+import { logWork, dailyReport, wipReport, consumptionByWorkstation, workstations, stageForWorkstation, qcMissing } from './wip.js';
+import { mrp, poList, createPO, receivePO, vendorScorecard, vendorActualLeads } from './mrp.js';
 import { accountingMode, qboConfigured, ledger, totals, sync, scanInvoice, invoiceList } from './accounting.js';
 import { getAuthUrl, exchangeCode, syncCustomersFromQBO, syncItemsFromQBO, syncInvoicesFromQBO, syncVendorsFromQBO, previewItemsFromQBO, QBOAuthError, QBOFeatureError, qboErrorLog, getRefreshTokenInfo, disconnectQBO, getRealmInfo, getQBItems, updateItemCost } from './qbo.js';
 import * as people from './people.js';
@@ -47,6 +47,7 @@ import * as testdata from './testdata.js';
 import { geocodeAddress } from './geocode.js';
 import { emailConfigured } from './email.js';
 import { runReminders } from './reminders.js';
+import { sendWeeklyDigest } from './digest.js';
 import * as analytics from './analytics.js';
 import * as andon from './andon.js';
 import { runBackup } from './backup.js';
@@ -1494,6 +1495,12 @@ app.post('/api/orders/production-order', authMiddleware, requireProductionPlanne
 // station page — so VIN assignment, print queues, customer SMS, and dealer notifications
 // can never diverge between the two.
 async function applyOrderStage(orderId, curOrder, stage, actorUser, actorLabel) {
+  // QC gate: nothing reaches Ready until every unit on the order passed the checklist.
+  if (stage === 'Ready') {
+    const missing = await qcMissing(orderId);
+    if (missing.length)
+      throw new Error(`QC checklist not passed for ${missing.length} unit(s) (${missing.slice(0, 3).map(m => m.ref).join(', ')}${missing.length > 3 ? '…' : ''}) — run ✅ QC from My Station first.`);
+  }
   await q('UPDATE sales_order SET stage=$1 WHERE id=$2', [stage, orderId]);
   // A FORWARD move means the previous stage just finished — stamp it (same table the daily
   // update writes), so cycle-time analytics accrue from every stage change, not just Daily Update.
@@ -1530,7 +1537,8 @@ app.patch('/api/orders/:id/stage', authMiddleware, requireTier('editor'), async 
   if (!STAGES.includes(stage)) return res.status(400).json({ error: 'invalid stage' });
   const cur = await one('SELECT * FROM sales_order WHERE id=$1', [req.params.id]);
   if (!cur) return res.status(404).json({ error: 'not found' });
-  await applyOrderStage(req.params.id, cur, stage, req.user);
+  try { await applyOrderStage(req.params.id, cur, stage, req.user); }
+  catch (e) { return res.status(400).json({ error: e.message }); } // e.g. the QC gate at Ready
   res.json({ ok: true });
 });
 // Reject / cancel an order (a dealer quote we won't accept, or any non-invoiced order). Soft: keeps
@@ -1664,6 +1672,17 @@ app.post('/api/mrp/auto', authMiddleware, requireTier('editor'), async (req, res
 
 // ---- vendors ----
 app.get('/api/vendors', authMiddleware, async (_req, res) => res.json(await approvals.listVendors()));
+// Supplier scorecard: on-time %, promised vs actual lead — and the effective lead MRP is using.
+app.get('/api/vendors/scorecard', authMiddleware, requireSection('pos'), async (_req, res) =>
+  res.json(await vendorScorecard()));
+// Adopt a vendor's demonstrated (median) lead time as the new promised lead_days.
+app.post('/api/vendors/:id/adopt-lead', authMiddleware, requireTier('admin'), async (req, res) => {
+  const a = (await vendorActualLeads())[req.params.id];
+  if (!a || a.n < 3) return res.status(400).json({ error: 'Not enough received POs yet (needs 3+) to trust the actuals.' });
+  await q('UPDATE vendor SET lead_days=$1 WHERE id=$2', [a.median, req.params.id]);
+  await audit(req, 'vendor.adopt_lead', `${req.params.id} -> ${a.median} days (median of ${a.n} receipts)`);
+  res.json({ ok: true, leadDays: a.median });
+});
 app.post('/api/vendors', authMiddleware, requireTier('admin'), async (req, res) => {
   try {
     const { name, leadDays, terms } = req.body || {};
@@ -1880,6 +1899,15 @@ app.post('/api/admin/reminders/run', authMiddleware, requireTier('admin'), async
   try {
     const r = await runReminders({ dryRun: !!req.body?.dryRun });
     if (!req.body?.dryRun) await audit(req, 'reminders.manual', `expiry ${r.expirySent ?? 0}, maintenance ${r.maintenanceSent ?? 0}`);
+    res.json(r);
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+// Send (or preview with {dryRun:true}) the weekly performance digest on demand — the same
+// sendWeeklyDigest() the Monday scheduler calls, so admins can see who gets it and what it says.
+app.post('/api/admin/digest/send', authMiddleware, requireTier('admin'), async (req, res) => {
+  try {
+    const r = await sendWeeklyDigest({ dryRun: !!req.body?.dryRun });
+    if (!req.body?.dryRun) await audit(req, 'digest.manual', `sent ${r.sent ?? 0}/${r.recipients ?? 0}${r.skipped ? ' — ' + r.skipped : ''}`);
     res.json(r);
   } catch (e) { res.status(400).json({ error: e.message }); }
 });
@@ -2189,7 +2217,35 @@ app.get('/api/warranty/claims', authMiddleware, requireSection('trailers'), asyn
 app.get('/api/trailers/:id/detail', authMiddleware, requireSection('trailers'), async (req, res) => {
   const d = await warranty.trailerDetail(req.params.id);
   if (!d) return res.status(404).json({ error: 'trailer not found' });
+  d.photos = await portal.attachmentsFor('unit', req.params.id).catch(() => []); // QC / build photos
   res.json(d);
+});
+// ---- QC checklist: the human gate before an order may reach Ready ----
+const DEFAULT_QC = ['Lights & wiring work', 'Brakes engage', 'Torque check complete', 'Decals & VIN plate on', 'Final visual pass'];
+app.get('/api/qc/checklist', authMiddleware, async (_req, res) => {
+  const row = await one(`SELECT value FROM app_config WHERE key='qc_checklist'`, []).catch(() => null);
+  let items; try { items = row ? JSON.parse(row.value) : DEFAULT_QC; } catch { items = DEFAULT_QC; }
+  res.json({ items });
+});
+app.post('/api/qc/checklist', authMiddleware, requireTier('admin'), async (req, res) => {
+  const items = (Array.isArray(req.body?.items) ? req.body.items : []).map(s => String(s).trim()).filter(Boolean).slice(0, 30);
+  if (!items.length) return res.status(400).json({ error: 'The checklist needs at least one item.' });
+  await q(`INSERT INTO app_config(key,value) VALUES('qc_checklist',$1) ON CONFLICT(key) DO UPDATE SET value=$1`, [JSON.stringify(items)]);
+  await audit(req, 'qc.checklist', `${items.length} item(s)`);
+  res.json({ ok: true, items });
+});
+// Pass QC on one unit: stamps the QC build step (verified actor) + attaches photos to the VIN.
+app.post('/api/trailers/:id/qc', authMiddleware, requireTier('editor'), async (req, res) => {
+  if (req.body?.confirmed !== true) return res.status(400).json({ error: 'Confirm every checklist item first.' });
+  const t = await one('SELECT id FROM trailer WHERE id=$1', [req.params.id]);
+  if (!t) return res.status(404).json({ error: 'Unit not found.' });
+  await q(`INSERT INTO trailer_build_step(trailer_id, step, employee_name, logged_by, note, completed_at)
+           VALUES ($1,'QC',$2,$3,$4,now()) ON CONFLICT(trailer_id, step) DO NOTHING`,
+    [req.params.id, req.user.name, req.user.id, (req.body?.note || '').slice(0, 300) || null]);
+  const photos = Array.isArray(req.body?.photos) ? req.body.photos.slice(0, 4).map(p => ({ dataUrl: p, kind: 'photo' })) : [];
+  const saved = await portal.saveAttachments('unit', req.params.id, photos, req.user.name).catch(() => 0);
+  await audit(req, 'qc.pass', `${req.params.id} by ${req.user.name}${saved ? ` (+${saved} photo(s))` : ''}`);
+  res.json({ ok: true, photos: saved });
 });
 // Mutations require editor tier (shop floor + supervisors)
 app.post('/api/trailers/:id/build-step', authMiddleware, requireTier('editor'), requireSection('trailers'), async (req, res) => {
@@ -2527,6 +2583,30 @@ async function maybeRunBackup() {
 if (kind === 'postgres' && process.env.BACKUPS_DISABLED !== 'true') {
   setInterval(maybeRunBackup, 15 * 60 * 1000);            // daily job, checked every 15 min
   setTimeout(maybeRunBackup, 40 * 1000);                  // and once shortly after boot
+}
+
+// ---- Weekly performance digest (Mondays at DIGEST_HOUR, BRIEFING_TZ) ----
+// Emails the scorecard to admins + Shop/General Managers. Same idempotent claim-the-day
+// pattern; skips (without claiming) until email is configured, so the first digest goes
+// out the Monday after Resend is turned on. Preview: POST /api/admin/digest/send {dryRun:true}.
+const DIGEST_HOUR = Number(process.env.DIGEST_HOUR || 6);
+const DIGEST_DOW = process.env.DIGEST_DOW || 'Mon';
+async function maybeRunDigest() {
+  try {
+    const p = partsIn(BRIEFING_TZ);
+    if (Number(p.hour) < DIGEST_HOUR || weekdayIn(BRIEFING_TZ) !== DIGEST_DOW) return;
+    if (!emailConfigured()) return;                        // don't claim the day — retry once email is on
+    const today = `${p.year}-${p.month}-${p.day}`;
+    const last = await one(`SELECT value FROM app_config WHERE key='digest_last_run'`, []).catch(() => null);
+    if (last && last.value === today) return;
+    await q(`INSERT INTO app_config(key,value) VALUES('digest_last_run',$1) ON CONFLICT(key) DO UPDATE SET value=$1`, [today]);
+    const r = await sendWeeklyDigest();
+    console.log(`Weekly digest (${today}): sent ${r.sent ?? 0}/${r.recipients ?? 0}${r.errors ? `, errors ${r.errors}` : ''}.`);
+  } catch (e) { console.warn('digest scheduler:', e.message); }
+}
+if (kind === 'postgres' && process.env.DIGEST_DISABLED !== 'true') {
+  setInterval(maybeRunDigest, 30 * 60 * 1000);            // weekly job, checked every 30 min
+  setTimeout(maybeRunDigest, 50 * 1000);                  // and once shortly after boot
 }
 
 app.listen(PORT, () => console.log(`Built Trailers Phase 1 API on :${PORT} (db: ${kind})`));

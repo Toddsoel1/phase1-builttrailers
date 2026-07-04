@@ -406,11 +406,34 @@ test('shop floor: station page + PIN-gated stage advance (full flow)', async () 
   assert.equal((await api('/api/admin/shop-pin', { method: 'POST', body: JSON.stringify({ pin: '7788' }) })).status, 200);
   assert.equal((await json(await api('/api/admin/shop-pin'))).set, true, 'status reports PIN set');
 
-  // Page now offers the action; wrong PIN 401; right PIN advances Finish -> Ready
+  // Page now offers the action; wrong PIN 401
   page = await (await fetch(BASE + '/u/' + unit.id)).text();
   assert.match(page, /Mark Finish complete/i, 'action button rendered for the current stage');
   const bad = await fetch(BASE + '/u/' + unit.id + '/advance', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pin: '0000', worker: 'JT' }) });
   assert.equal(bad.status, 401, 'wrong PIN rejected');
+
+  // The QC gate: even with the right PIN, Finish -> Ready is blocked until the unit passes QC
+  const gated = await fetch(BASE + '/u/' + unit.id + '/advance', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pin: '7788', worker: 'JT' }) });
+  assert.equal(gated.status, 400, 'Ready is gated on QC');
+  assert.match((await gated.json()).error, /QC checklist/i, 'gate says why');
+
+  // The checklist: any staff can read it; only an admin can edit it
+  const cl = await json(await api('/api/qc/checklist'));
+  assert.ok(Array.isArray(cl.items) && cl.items.length >= 3, 'default checklist present');
+  assert.equal((await fetch(BASE + '/api/qc/checklist', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + sales }, body: JSON.stringify({ items: ['x'] }) })).status, 403, 'sales cannot edit the checklist');
+  assert.equal((await api('/api/qc/checklist', { method: 'POST', body: JSON.stringify({ items: [] }) })).status, 400, 'empty checklist rejected');
+  assert.equal((await api('/api/qc/checklist', { method: 'POST', body: JSON.stringify({ items: ['Lights work', 'Final visual pass'] }) })).status, 200);
+  assert.deepEqual((await json(await api('/api/qc/checklist'))).items, ['Lights work', 'Final visual pass'], 'edited checklist round-trips');
+
+  // Pass QC (photo included) as signed-in staff — must confirm the checklist
+  const px = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
+  assert.equal((await api('/api/trailers/' + unit.id + '/qc', { method: 'POST', body: JSON.stringify({ photos: [px] }) })).status, 400, 'unconfirmed QC rejected');
+  assert.equal((await api('/api/trailers/' + unit.id + '/qc', { method: 'POST', body: JSON.stringify({ confirmed: true, photos: [px], note: 'smoke QC' }) })).status, 200);
+  const det = await json(await api('/api/trailers/' + unit.id + '/detail'));
+  assert.ok(det.buildLog.find(s => s.step === 'QC')?.done, 'QC build step stamped');
+  assert.ok((det.photos || []).length >= 1, 'unit photo attached');
+
+  // With QC passed, the same PIN advance now succeeds: Finish -> Ready
   const ok = await fetch(BASE + '/u/' + unit.id + '/advance', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pin: '7788', worker: 'JT' }) });
   assert.equal(ok.status, 200);
   assert.equal((await ok.json()).stage, 'Ready');
@@ -435,6 +458,18 @@ test('owner reminders: admin-only run endpoint, dry-run shape, unconfigured-emai
   assert.ok(Array.isArray(dry.expiry) && Array.isArray(dry.maintenance), 'dry run lists who would be emailed');
   const real = await json(await api('/api/admin/reminders/run', { method: 'POST', body: '{}' }));
   assert.equal(real.skipped, 'email not configured', 'real run without RESEND_API_KEY skips safely');
+});
+
+test('weekly digest: admin-only send endpoint, dry-run recipients, unconfigured-email skip', async () => {
+  const sr = await api('/api/auth/login', { method: 'POST', body: JSON.stringify({ username: 'aruiz', password: 'built2026' }) });
+  const sales = (await sr.json()).token;
+  assert.equal((await fetch(BASE + '/api/admin/digest/send', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + sales }, body: '{}' })).status, 403, 'sales cannot send the digest');
+  const dry = await json(await api('/api/admin/digest/send', { method: 'POST', body: JSON.stringify({ dryRun: true }) }));
+  assert.equal(dry.dryRun, true);
+  assert.match(dry.subject, /weekly digest/i, 'digest subject built from the scorecard');
+  assert.ok(Array.isArray(dry.recipients), 'dry run lists who would be emailed');
+  const real = await json(await api('/api/admin/digest/send', { method: 'POST', body: '{}' }));
+  assert.equal(real.skipped, 'email not configured', 'real send without RESEND_API_KEY skips safely');
 });
 
 test('owner: full registration (phone + full address) succeeds and is visible to staff', async () => {

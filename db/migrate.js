@@ -206,6 +206,9 @@ const colMigrations = [
      description TEXT NOT NULL, qty NUMERIC(12,2) NOT NULL DEFAULT 1, minutes INT NOT NULL DEFAULT 0)`,
   `ALTER TABLE trailer_build_step ADD COLUMN IF NOT EXISTS time_survey_id INT`,
   `ALTER TABLE part_build_log ADD COLUMN IF NOT EXISTS time_survey_id INT`,
+  // When the PO actually arrived — the supplier scorecard's raw material (actual vs promised
+  // lead time, on-time %), which also self-corrects the MRP's lead-time math.
+  `ALTER TABLE purchase_order ADD COLUMN IF NOT EXISTS received_at TIMESTAMPTZ`,
   `CREATE TABLE IF NOT EXISTS daily_task (id SERIAL PRIMARY KEY, plan_date DATE NOT NULL, user_id TEXT,
      order_id TEXT, stage TEXT, workstation TEXT, description TEXT NOT NULL,
      est_hours NUMERIC(8,2) NOT NULL DEFAULT 0, status TEXT NOT NULL DEFAULT 'proposed',

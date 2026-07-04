@@ -102,6 +102,14 @@ export async function orderWipMap() {
   return map;
 }
 
+// Units on the order that haven't passed the QC checklist yet — the gate before Ready.
+// Every path that can move an order to Ready checks this (stage PATCH, station QR, daily update).
+export async function qcMissing(orderId) {
+  return all(`SELECT COALESCE(t.vin, t.id) AS ref FROM trailer t
+               WHERE t.order_id=$1 AND NOT EXISTS
+                 (SELECT 1 FROM trailer_build_step s WHERE s.trailer_id=t.id AND s.step='QC')`, [orderId]).catch(() => []);
+}
+
 // Log a daily production update. If stageComplete, consume that stage's BOM and advance the
 // order to the next production stage so the board reflects progress.
 export async function logWork({ userId, orderId, workstation, stage, hours, note, stageComplete, logDate }) {
@@ -113,7 +121,7 @@ export async function logWork({ userId, orderId, workstation, stage, hours, note
   await q(`INSERT INTO work_log(log_date,user_id,order_id,workstation,stage,hours,note,stage_complete)
            VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
     [day, userId || null, orderId, workstation || null, stage || null, Number(hours) || 0, note || null, !!stageComplete]);
-  let consumed = null, advanced = null;
+  let consumed = null, advanced = null, qcHold = 0;
   if (stageComplete && PROD_STAGES.includes(stage)) {
     consumed = await consumeStage(orderId, stage, { workstation, userId, logDate: day });
     const idx = PROD_STAGES.indexOf(stage);
@@ -121,11 +129,16 @@ export async function logWork({ userId, orderId, workstation, stage, hours, note
     // only move forward — never drag an order backward if it's already further along
     const cur = (await one('SELECT stage FROM sales_order WHERE id=$1', [orderId]))?.stage;
     const allStages = ['Quote', 'Confirmed', 'Scheduled', ...PROD_STAGES, 'Ready'];
-    if (allStages.indexOf(advanced) > allStages.indexOf(cur))
+    if (advanced === 'Ready') {
+      // the QC gate: hold at Finish (work still logged + consumed) until every VIN passes QC
+      const missing = await qcMissing(orderId);
+      if (missing.length) { qcHold = missing.length; advanced = null; }
+    }
+    if (advanced && allStages.indexOf(advanced) > allStages.indexOf(cur))
       await q('UPDATE sales_order SET stage=$1 WHERE id=$2', [advanced, orderId]);
     else advanced = null;
   }
-  return { stage, consumed, advanced };
+  return { stage, consumed, advanced, qcHold };
 }
 
 // Daily report: every log line + per-workstation/user hours and material $ consumed, for a date.

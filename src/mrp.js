@@ -31,14 +31,36 @@ async function onOrder() {
   const o = {}; rows.forEach(r => o[r.part_id] = Number(r.q)); return o;
 }
 
+// Actual lead times observed per vendor (received POs, trailing 180 days). The MRP uses the
+// CONSERVATIVE effective lead — max(promised, median actual over the last receipts, once there
+// are 3+) — so a chronically slow vendor makes ORDER-NOW fire earlier, never later.
+export async function vendorActualLeads() {
+  const rows = await all(`
+    SELECT vendor_id, EXTRACT(EPOCH FROM (received_at - placed::timestamptz)) / 86400 AS days
+      FROM purchase_order
+     WHERE received_at IS NOT NULL AND vendor_id IS NOT NULL
+       AND received_at > now() - INTERVAL '180 days'
+     ORDER BY vendor_id, received_at DESC`, []).catch(() => []);
+  const byVendor = {};
+  for (const r of rows) (byVendor[r.vendor_id] = byVendor[r.vendor_id] || []).push(Math.max(0, Math.round(Number(r.days))));
+  const out = {};
+  for (const [v, arr] of Object.entries(byVendor)) {
+    const last = arr.slice(0, 8).sort((a, b) => a - b);
+    out[v] = { n: arr.length, median: last[Math.floor(last.length / 2)] };
+  }
+  return out;
+}
+const effectiveLead = (promised, actual) =>
+  actual && actual.n >= 3 ? Math.max(promised, actual.median) : promised;
+
 export async function mrp() {
-  const [parts, demand, daily, onord] = await Promise.all([
+  const [parts, demand, daily, onord, actuals] = await Promise.all([
     all(`SELECT p.*, v.name AS vendor_name, v.lead_days FROM part p LEFT JOIN vendor v ON v.id=p.vendor_id WHERE p.active = true`, []),
-    grossDemand(), dailyConsumption(), onOrder()
+    grossDemand(), dailyConsumption(), onOrder(), vendorActualLeads()
   ]);
   const today = new Date();
   return parts.map(p => {
-    const lead = Number(p.lead_days) || 0;
+    const lead = effectiveLead(Number(p.lead_days) || 0, p.vendor_id ? actuals[p.vendor_id] : null);
     const dem = demand[p.id] || 0;
     const cons = daily[p.id] || 0.0001;
     const oo = onord[p.id] || 0;
@@ -64,6 +86,36 @@ export async function mrp() {
       reorderLevel, cost: Number(p.cost), action, sev, suggestQty, orderBy
     };
   });
+}
+
+// The supplier scorecard: receipts, on-time %, promised vs actual lead days — and the effective
+// lead the MRP is actually using for each vendor (with a slow flag when actuals beat promises).
+export async function vendorScorecard() {
+  const vendors = await all(`SELECT id, name, lead_days, status FROM vendor WHERE status <> 'rejected' ORDER BY name`, []);
+  const pos = await all(`SELECT vendor_id, eta, placed, received_at FROM purchase_order
+                          WHERE received_at IS NOT NULL AND vendor_id IS NOT NULL`, []).catch(() => []);
+  const actuals = await vendorActualLeads();
+  const agg = {};
+  for (const p of pos) {
+    const g = (agg[p.vendor_id] = agg[p.vendor_id] || { receipts: 0, onTime: 0, withEta: 0, leadSum: 0 });
+    g.receipts++;
+    g.leadSum += Math.max(0, Math.round((new Date(p.received_at) - new Date(p.placed)) / 86400000));
+    if (p.eta) {
+      g.withEta++;
+      if (new Date(p.received_at).toISOString().slice(0, 10) <= String(p.eta).slice(0, 10)) g.onTime++;
+    }
+  }
+  return vendors.map(v => {
+    const g = agg[v.id], a = actuals[v.id];
+    const promised = Number(v.lead_days) || 0;
+    return { id: v.id, name: v.name, promisedLead: promised,
+      receipts: g?.receipts || 0,
+      onTimePct: g && g.withEta ? Math.round((g.onTime / g.withEta) * 100) : null,
+      avgActualLead: g && g.receipts ? Math.round(g.leadSum / g.receipts) : null,
+      medianActualLead: a?.median ?? null,
+      effectiveLead: effectiveLead(promised, a),
+      slow: !!(a && a.n >= 3 && a.median > promised) };
+  }).sort((x, y) => y.receipts - x.receipts);
 }
 
 export async function poList() {
@@ -105,7 +157,7 @@ export async function receivePO(poId, userId) {
   if (po.status === 'Pending Approval') throw new Error('PO is pending approval — cannot receive until approved');
   if (po.status === 'Rejected') throw new Error('PO was rejected');
   await q('UPDATE part SET on_hand = on_hand + $1 WHERE id=$2', [po.qty, po.part_id]);
-  await q("UPDATE purchase_order SET status='Received' WHERE id=$1", [poId]);
+  await q("UPDATE purchase_order SET status='Received', received_at=now() WHERE id=$1", [poId]);
   await q('INSERT INTO audit_log(user_id,action,detail) VALUES ($1,$2,$3)', [userId || null, 'po.receive', `${poId}: +${po.qty} ${po.part_id}`]);
   // Phase 4: post a vendor bill to accounting on receipt
   const v = await one('SELECT name FROM vendor WHERE id=$1', [po.vendor_id]);

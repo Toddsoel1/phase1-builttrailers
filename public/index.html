@@ -103,6 +103,12 @@ a.lnk{color:var(--blue);cursor:pointer}
   input,select,textarea{font-size:16px} /* ≥16px stops iOS zoom-on-focus */
   .grid.g4{grid-template-columns:repeat(2,1fr);gap:10px}
 }
+/* 📺 TV mode: chrome-free, hands-free — the rotating big board for a wall display */
+body.tv .sidebar,body.tv .navbtn,body.tv .navbg{display:none!important}
+body.tv .topbar button,body.tv #pActions{display:none!important}
+body.tv .topbar h2{font-size:24px}
+#tvExit{position:fixed;right:16px;bottom:16px;z-index:500;background:var(--panel2);color:var(--txt);border:1px solid var(--line);border-radius:10px;padding:9px 16px;cursor:pointer;opacity:.25;transition:opacity .15s}
+#tvExit:hover{opacity:1}
 </style>
 </head>
 <body>
@@ -220,7 +226,7 @@ async function login(){
     localStorage.setItem('staffToken',TOKEN);localStorage.setItem('staffName',ME.name||''); // survive refreshes / phone relaunches
     $('login').classList.add('hidden');$('app').classList.remove('hidden');
     page=ME.workstation?'standup':'dashboard'; // floor workers land on their day, not a dashboard
-    render();toast('Welcome, '+ME.name.split(' ')[0]+'!');
+    render();toast('Welcome, '+ME.name.split(' ')[0]+'!');maybeTv();
   }catch(e){$('liErr').textContent=e.message;}
 }
 function logout(){TOKEN=null;ME=null;localStorage.removeItem('staffToken');localStorage.removeItem('staffName');$('app').classList.add('hidden');$('login').classList.remove('hidden');}
@@ -232,7 +238,7 @@ $('liPass').addEventListener('keydown',e=>{if(e.key==='Enter')login();});
   TOKEN=saved;
   try{ const d=await api('/api/auth/me'); ME=d.user;
     page=ME.workstation?'standup':'dashboard'; // floor workers land on their day
-    $('login').classList.add('hidden'); $('app').classList.remove('hidden'); render(); }
+    $('login').classList.add('hidden'); $('app').classList.remove('hidden'); render(); maybeTv(); }
   catch(e){ /* expired or revoked — api() already cleared the session */ }
 })();
 
@@ -289,6 +295,40 @@ function go(p){page=p;closeMobileNav();render();}
 // Off-canvas nav on phones: ☰ opens the sidebar as a drawer; backdrop tap or navigating closes it.
 function toggleMobileNav(e){if(e)e.stopPropagation();document.body.classList.toggle('navopen');}
 function closeMobileNav(){document.body.classList.remove('navopen');}
+
+// ── 📺 TV mode: hands-free rotation of the big-board views for a wall display ──
+// Start it from Performance (📺 button) or open the app with ?tv=1; it survives refreshes
+// (localStorage), so a dedicated shop TV comes back up in TV mode on its own.
+const TV_VIEWS=['orders','standup','performance'];
+let _tvTimer=null,_tvIdx=0;
+function startTvMode(){
+  if(_tvTimer)return;
+  const secs=Number(localStorage.getItem('tvSeconds'))||45;
+  document.body.classList.add('tv'); localStorage.setItem('tvMode','1');
+  let b=document.getElementById('tvExit');
+  if(!b){b=document.createElement('button');b.id='tvExit';b.textContent='✕ Exit TV';b.onclick=stopTvMode;document.body.appendChild(b);}
+  _tvIdx=0; go(TV_VIEWS[0]);
+  _tvTimer=setInterval(()=>{_tvIdx=(_tvIdx+1)%TV_VIEWS.length;go(TV_VIEWS[_tvIdx]);},secs*1000); // each rotation re-fetches = always-live data
+  toast('📺 TV mode — rotating every '+secs+'s (Esc exits)');
+}
+function stopTvMode(){
+  if(_tvTimer){clearInterval(_tvTimer);_tvTimer=null;}
+  localStorage.removeItem('tvMode'); document.body.classList.remove('tv');
+  const b=document.getElementById('tvExit'); if(b)b.remove(); render();
+}
+function maybeTv(){ if(localStorage.getItem('tvMode')==='1'||location.search.indexOf('tv=1')>=0)startTvMode(); }
+document.addEventListener('keydown',e=>{if(e.key==='Escape'&&_tvTimer)stopTvMode();});
+
+// 📧 Weekly digest on demand: preview who gets it, confirm, send. (Mondays it sends itself.)
+async function sendDigestNow(){
+  try{
+    const p=await api('/api/admin/digest/send',{method:'POST',body:JSON.stringify({dryRun:true})});
+    const who=(p.recipients||[]).map(r=>r.name).join(', ')||'nobody — no admins/managers have an email on file';
+    if(!confirm('Email the weekly performance digest now?\n\nGoes to: '+who))return;
+    const r=await api('/api/admin/digest/send',{method:'POST',body:'{}'});
+    toast(r.skipped?'Digest skipped — '+r.skipped:'📧 Digest sent to '+r.sent+' of '+r.recipients);
+  }catch(e){ toast(e.message); }
+}
 
 // ── Global search (Cmd+K / Ctrl+K): jump to an order, VIN, customer, part, or model ──
 let gsItems=[],gsSel=0,gsTimer=null;
@@ -1219,7 +1259,7 @@ async function saveWorkLog(){
   const body={orderId,workstation:$('wlWs').value||undefined,stage:$('wlStage').value,hours:Number($('wlHours').value)||0,note:($('wlNote').value||'').trim()||undefined,stageComplete:$('wlComplete').checked};
   try{
     const r=await api('/api/work-log',{method:'POST',body:JSON.stringify(body)});
-    if(r.consumed&&r.consumed.consumed) toast(`${r.stage} complete — $${Math.round(r.consumed.materialValue)} materials consumed`+(r.advanced?`, moved to ${r.advanced}`:''));
+    if(r.consumed&&r.consumed.consumed) toast(`${r.stage} complete — $${Math.round(r.consumed.materialValue)} materials consumed`+(r.advanced?`, moved to ${r.advanced}`:r.qcHold?` — held at Finish: ${r.qcHold} unit(s) still need ✅ QC`:''));
     else toast('Update logged');
     viewDaily();
   }catch(e){ toast(e.message); }
@@ -1265,6 +1305,7 @@ async function viewStandup(){
         <div class="muted" style="font-size:11px">${(o.units||[]).map(u=>u.vin?esc(u.vin):'').filter(Boolean).join(' · ')||'VINs assigned at Build'}${o.due?' · due '+String(o.due).slice(0,10):''}</div></div>
       ${o.units&&o.units.length?`<button class="btn sm" onclick="msComplete('${esc(o.units[0].id)}','${esc(o.id)}')">✓ Mark ${esc(station.stage)} complete</button>
       <button class="btn sm sec" onclick="msProblem('${esc(o.units[0].id)}','${esc(o.id)}')" title="report a problem">🚨</button>`:''}
+      ${station.stage==='Finish'&&o.units&&o.units.length?`<div style="flex-basis:100%;display:flex;gap:6px;flex-wrap:wrap;padding-left:26px">${o.units.map(u=>`<button class="btn sm sec" onclick="qcModal('${esc(u.id)}','${esc(o.id)}','${esc(u.vin||u.id)}')">✅ QC ${esc(u.vin||u.id)}</button>`).join('')}</div>`:''}
     </div>`).join(''):`<p class="muted">Nothing waiting at your station. 🎉</p>`}
     <button class="btn sm sec" style="margin-top:10px" onclick="msLogParts()">🔩 Log made parts — sub-assembly / bench work</button>
     <p class="muted" style="font-size:11px;margin-top:8px">Completions are credited to your account and stamp the build log on every VIN in the order. Logged parts go into stock under your name.</p>
@@ -1351,6 +1392,49 @@ async function msProblemSend(unitId){
   try{ await api('/u/'+unitId+'/problem',{method:'POST',body:JSON.stringify({reason:$('msReason').value,note:($('msNote').value||'').trim()})});
     closeModal(); toast('Reported — the Shop Manager has been alerted'); viewStandup(); }
   catch(e){ toast(e.message); }
+}
+// ---- QC: the checklist gate every unit passes before its order can reach Ready ----
+async function qcModal(unitId,orderId,vin){
+  let items; try{ items=(await api('/api/qc/checklist')).items; }catch(e){ return toast(e.message); }
+  modal('✅ QC — '+esc(vin),`
+    <p class="muted" style="font-size:12.5px">Walk the unit and tick every item. The order can't move to Ready until each VIN passes. Photos attach to this VIN's record.</p>
+    ${items.map((it,i)=>`<label style="display:flex;gap:8px;align-items:center;padding:6px 0;border-bottom:1px solid var(--line);cursor:pointer">
+      <input type="checkbox" class="qcChk" data-i="${i}"><span style="font-size:13px">${esc(it)}</span>
+    </label>`).join('')}
+    <div class="field" style="margin-top:10px"><label>Photos of the finished unit (up to 4)</label>
+      <input id="qcPhotos" class="inp" type="file" accept="image/*" multiple capture="environment"></div>
+    <div class="field"><label>Note (optional)</label><input id="qcNote" class="inp" placeholder="anything worth recording"></div>
+    <div class="row" style="gap:8px;margin-top:8px;flex-wrap:wrap">
+      <button class="btn" id="qcPassBtn" onclick="qcSend('${esc(unitId)}','${esc(orderId)}','${esc(vin)}')">✔ Pass QC</button>
+      <button class="btn sec" style="color:var(--red)" onclick="qcFail('${esc(unitId)}','${esc(vin)}')">❌ Fails — flag rework</button>
+      <button class="btn sec" onclick="closeModal()">Cancel</button>
+    </div>`);
+  window._qcItems=items;
+}
+function qcReadPhotos(){
+  const files=[...($('qcPhotos').files||[])].slice(0,4);
+  return Promise.all(files.map(f=>new Promise((res,rej)=>{
+    if(f.size>8*1024*1024)return rej(new Error(f.name+' is over 8 MB — snap a smaller photo'));
+    const r=new FileReader(); r.onload=()=>res({dataUrl:r.result,name:f.name}); r.onerror=()=>rej(new Error('Could not read '+f.name)); r.readAsDataURL(f);
+  })));
+}
+async function qcSend(unitId,orderId,vin){
+  const boxes=[...document.querySelectorAll('.qcChk')];
+  if(boxes.some(b=>!b.checked))return toast('Every checklist item must be ticked to pass — or flag rework.');
+  const btn=$('qcPassBtn'); btn.disabled=true; btn.textContent='Saving…';
+  try{
+    const photos=(await qcReadPhotos()).map(p=>p.dataUrl);
+    await api('/api/trailers/'+encodeURIComponent(unitId)+'/qc',{method:'POST',body:JSON.stringify({confirmed:true,photos,note:($('qcNote').value||'').trim()})});
+    closeModal(); toast('✔ '+vin+' passed QC'+(photos.length?' — '+photos.length+' photo(s) saved':'')); viewStandup();
+  }catch(e){ btn.disabled=false; btn.textContent='✔ Pass QC'; toast(e.message); }
+}
+async function qcFail(unitId,vin){
+  const missed=[...document.querySelectorAll('.qcChk')].map((b,i)=>b.checked?null:(window._qcItems||[])[i]).filter(Boolean);
+  const note=($('qcNote').value||'').trim();
+  if(!confirm('Flag '+vin+' for rework? The Shop Manager gets alerted with the failed items.'))return;
+  try{ await api('/u/'+unitId+'/problem',{method:'POST',body:JSON.stringify({reason:'Rework needed',note:('QC failed: '+(missed.join('; ')||'see note')+(note?' — '+note:'')).slice(0,300)})});
+    closeModal(); toast('🚨 Rework flagged — the Shop Manager has been alerted'); viewStandup();
+  }catch(e){ toast(e.message); }
 }
 function suVerifyModal(){
   const me=window._suMe||{tasks:[]};
@@ -1475,7 +1559,8 @@ async function viewMyWork(){
 
 // ── Performance — expectations vs actuals + generated areas for improvement ──
 async function viewPerformance(){
-  $('pTitle').textContent='Performance';$('pSub').textContent='The shop measured against explicit expectations — and what to fix to close the gap';$('pActions').innerHTML='';
+  $('pTitle').textContent='Performance';$('pSub').textContent='The shop measured against explicit expectations — and what to fix to close the gap';
+  $('pActions').innerHTML='<button class="btn sm sec" onclick="startTvMode()" title="Rotate Production Flow / Stand-Up / Performance on a wall display">📺 TV mode</button>'+(isAdmin()?' <button class="btn sm sec" onclick="sendDigestNow()" title="Email the weekly digest to admins + managers">📧 Send digest</button>':'');
   let d; try{ d=await api('/api/performance'); }catch(e){ $('content').innerHTML=`<div class="card"><p class="msg err">${esc(e.message)}</p></div>`; return; }
   const badge=s=>s==='ok'?'<span class="badge b-ok">on target</span>':s==='warn'?'<span class="badge b-low">close</span>':s==='miss'?'<span class="badge b-below">missed</span>':s==='nodata'?'<span class="badge b-buy">no data yet</span>':'<span class="badge b-buy">tracking</span>';
   const kpiCards=d.kpis.map(k=>`<div class="card" style="margin:0">
@@ -2296,16 +2381,36 @@ async function makePO(partId,qty){
 async function autoPO(){
   try{const r=await api('/api/mrp/auto',{method:'POST'});toast('⚡ Generated '+r.created+' purchase orders');page='pos';render();}catch(e){toast(e.message);}
 }
+async function adoptVendorLead(id,name,days){
+  if(!confirm(`Set ${name}'s promised lead time to their demonstrated ${days} days? New POs and MRP timing will use it.`))return;
+  try{ await api('/api/vendors/'+encodeURIComponent(id)+'/adopt-lead',{method:'POST'}); toast(name+' → '+days+'-day lead adopted'); viewPOs(); }
+  catch(e){ toast(e.message); }
+}
 async function viewPOs(){
   $('pTitle').textContent='Purchase Orders';$('pSub').textContent='Generated for vendors as quantities dictate — receive to add stock';
   $('pActions').innerHTML=canEdit()?`<button class="btn" onclick="showNewVendor()">+ Vendor</button>&nbsp;<button class="btn sec" onclick="go('predict')">🤖 Predictive POs</button>`:'';
-  const [pos,myPending,rules,users]=await Promise.all([
+  const [pos,myPending,rules,users,vsc]=await Promise.all([
     api('/api/po'),api('/api/approvals/pending'),
     ME.role==='admin'?api('/api/approval-rules'):Promise.resolve([]),
     ME.role==='admin'?api('/api/users'):Promise.resolve([]),
+    api('/api/vendors/scorecard').catch(()=>[]),
   ]);
   const open=pos.filter(p=>p.status==='Open');
   const pending=pos.filter(p=>p.status==='Pending Approval');
+  const scored=vsc.filter(v=>v.receipts>0);
+  const vendorCard=scored.length?`<div class="card" style="margin-bottom:14px">
+    <h3>🏭 Supplier scorecard <span class="muted" style="text-transform:none;letter-spacing:0">— actual lead times feed the MRP automatically (slow vendors trigger earlier ORDER-NOWs)</span> ${csvBtn('supplier_scorecard',scored)}</h3>
+    <table><thead><tr><th>Vendor</th><th class="center">Receipts</th><th class="center">On-time</th><th class="right">Promised lead</th><th class="right">Actual (avg/med)</th><th class="right">MRP uses</th>${isAdmin()?'<th></th>':''}</tr></thead><tbody>
+    ${scored.map(v=>`<tr>
+      <td><b>${esc(v.name)}</b>${v.slow?' <span class="badge b-below">slow</span>':''}</td>
+      <td class="center">${v.receipts}</td>
+      <td class="center">${v.onTimePct!=null?`<span class="badge ${v.onTimePct>=90?'b-ok':v.onTimePct>=70?'b-low':'b-below'}">${v.onTimePct}%</span>`:'—'}</td>
+      <td class="right">${v.promisedLead}d</td>
+      <td class="right">${v.avgActualLead!=null?v.avgActualLead+'d':'—'}${v.medianActualLead!=null?` <span class="muted">/ ${v.medianActualLead}d</span>`:''}</td>
+      <td class="right"><b>${v.effectiveLead}d</b></td>
+      ${isAdmin()?`<td>${v.slow?`<button class="btn sm sec" onclick="adoptVendorLead('${esc(v.id)}','${esc(v.name)}',${v.medianActualLead})">Adopt ${v.medianActualLead}d</button>`:''}</td>`:''}
+    </tr>`).join('')}
+    </tbody></table></div>`:'';
   $('content').innerHTML=`
    <div class="grid g4" style="margin-bottom:16px">
     ${kpi('Open POs',open.length,'awaiting delivery')}
@@ -2328,6 +2433,7 @@ async function viewPOs(){
       </td>
     </tr>`).join('')}
     </tbody></table></div>`:''}
+   ${vendorCard}
    <div class="card"><h3>Purchase orders</h3>
    <table><thead><tr><th>PO</th><th>Vendor</th><th>Part</th><th class="right">Qty</th><th class="right">Total</th><th>ETA</th><th class="center">Status</th>${canEdit()?'<th></th>':''}</tr></thead><tbody>
    ${pos.map(p=>{
@@ -2777,9 +2883,20 @@ async function viewPrintCenter(){
         <input id="spPin" type="password" inputmode="numeric" placeholder="New PIN (4–8 digits)" style="width:170px;padding:8px;border-radius:8px;border:1px solid var(--line);background:var(--panel2);color:var(--txt)">
         <button class="btn sm" onclick="setShopPin()">Set PIN</button>
         <button class="btn sm sec" onclick="clearShopPin()">Clear (disable)</button>
-      </div></div>`:'')+
+      </div></div>
+    <div class="card" style="margin-bottom:16px"><h3>✅ QC checklist</h3>
+      <p class="muted" style="font-size:12px;margin-bottom:10px">Every VIN must pass this checklist (✅ QC on My Station, Finish stage) before its order can move to Ready. One item per line.</p>
+      <textarea id="qcList" rows="6" style="width:100%;padding:8px;border-radius:8px;border:1px solid var(--line);background:var(--panel2);color:var(--txt);font-size:13px;font-family:inherit" placeholder="loading…"></textarea>
+      <button class="btn sm" style="margin-top:8px" onclick="saveQcChecklist()">Save checklist</button>
+    </div>`:'')+
     `<div class="card" style="border-style:dashed"><p class="muted" style="margin:0">🖨️ The actual VIN label and MSO print layouts are being finalized with your samples. Until then, print through your current process and tap <b>Mark printed</b> to keep the queue accurate.</p></div>`;
-  if(isAdmin())loadShopPin();
+  if(isAdmin()){loadShopPin();loadQcChecklist();}
+}
+async function loadQcChecklist(){ try{ const r=await api('/api/qc/checklist'); const t=$('qcList'); if(t)t.value=r.items.join('\n'); }catch(e){} }
+async function saveQcChecklist(){
+  const items=($('qcList').value||'').split('\n').map(s=>s.trim()).filter(Boolean);
+  if(!items.length)return toast('The checklist needs at least one item.');
+  try{ await api('/api/qc/checklist',{method:'POST',body:JSON.stringify({items})}); toast('✓ QC checklist saved — '+items.length+' item(s)'); }catch(e){ toast(e.message); }
 }
 async function loadShopPin(){ try{ const r=await api('/api/admin/shop-pin'); const s=$('spStatus'); if(s){s.className='badge '+(r.set?'b-ok':'b-low');s.textContent=r.set?'PIN set — floor updates ON':'No PIN — floor updates OFF';} }catch(e){} }
 async function setShopPin(){
@@ -3107,6 +3224,7 @@ async function openTrailerDetail(id){
     <div style="margin-bottom:6px"><span class="muted">${esc(d.model||'')} · ${esc(d.customer||'')} · order ${esc(d.orderId||'—')}</span></div>
     <h3 style="font-size:13px;color:var(--accent);margin:14px 0 6px">Build history <span class="muted" style="text-transform:none">— who did each step</span></h3>
     <table><thead><tr><th>Step</th><th>By</th><th>When</th>${canW?'<th></th>':''}</tr></thead><tbody>${buildRows}</tbody></table>
+    ${(d.photos&&d.photos.length)?`<div style="margin:8px 0 0;display:flex;gap:10px;flex-wrap:wrap">${d.photos.map(a=>`<a class="lnk" style="font-size:12px" onclick="viewProof('${encodeURIComponent(a.path)}')">${a.kind==='video'?'🎬':'📷'} ${esc(a.name||'unit photo')}</a>`).join('')}</div>`:''}
     <h3 style="font-size:13px;color:var(--accent);margin:16px 0 6px">Warranty ${warrantyBadge(w)}</h3>
     ${w.registered?`<div style="font-size:12px;color:var(--muted);margin:0 0 8px;line-height:1.7">
       Owner: <b style="color:var(--txt)">${esc(w.ownerName||'—')}</b>${w.source==='portal'?' <span class="badge b-buy" style="font-size:10px">portal</span>':''}<br>
