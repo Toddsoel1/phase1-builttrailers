@@ -51,6 +51,7 @@ import * as analytics from './analytics.js';
 import * as andon from './andon.js';
 import { runBackup } from './backup.js';
 import * as standup from './standup.js';
+import { myWork } from './mywork.js';
 
 // Crash fast if JWT_SECRET is unset in production — predictable fallback is a critical vuln
 if (!process.env.JWT_SECRET) {
@@ -1196,6 +1197,34 @@ app.post('/api/standup/task/:id/complete', authMiddleware, async (req, res) => {
   const mgr = req.user.role === 'admin' || titles.includes('Shop Manager') || titles.includes('General Manager');
   try { res.json(await standup.completeTask(Number(req.params.id), 'manual', req.user.id, mgr)); }
   catch (e) { res.status(400).json({ error: e.message }); }
+});
+// 📜 My Work — an employee's own completed-work record (trailers by step down to VIN, made
+// parts by part number, grouped tasks, hours) over any window. SM/GM/admin may view anyone's.
+app.get('/api/mywork', authMiddleware, async (req, res) => {
+  try {
+    let target = req.user.id;
+    if (req.query.userId && req.query.userId !== req.user.id) {
+      const titles = req.user.titles || [];
+      const mgr = req.user.role === 'admin' || titles.includes('Shop Manager') || titles.includes('General Manager');
+      if (!mgr) return res.status(403).json({ error: "You can only view your own work record." });
+      target = req.query.userId;
+    }
+    res.json(await myWork(target, req.query.from, req.query.to));
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+// Log made / sub-assembly parts built: adds them to stock AND records who built them — the
+// person-attributed record behind "parts built by part number" in My Work.
+app.post('/api/parts/:id/built', authMiddleware, requireTier('editor'), async (req, res) => {
+  const qty = Math.round(Number(req.body?.qty) || 0);
+  if (qty <= 0) return res.status(400).json({ error: 'How many did you build?' });
+  const cur = await one('SELECT * FROM part WHERE id=$1', [req.params.id]);
+  if (!cur) return res.status(404).json({ error: 'not found' });
+  if (cur.type !== 'M') return res.status(400).json({ error: 'Only Make (in-house) parts are logged as built — Buy parts arrive on POs.' });
+  await q('UPDATE part SET on_hand=on_hand+$1 WHERE id=$2', [qty, req.params.id]);
+  await q('INSERT INTO part_build_log(part_id, qty, user_id, note) VALUES ($1,$2,$3,$4)',
+    [req.params.id, qty, req.user.id, (req.body?.note || '').slice(0, 200) || null]);
+  await audit(req, 'part.built', `${req.params.id}: +${qty} by ${req.user.name}`);
+  res.json({ ok: true, onHand: cur.on_hand + qty });
 });
 // The 60-second end-of-day verification: confirm what actually got done (+ optional note).
 app.post('/api/standup/verify', authMiddleware, async (req, res) => {
@@ -2355,6 +2384,9 @@ await ensureSchema();
   // Daily Stand-Up: every title sees the screen — workers get My Day, managers run the plan.
   await q(`INSERT INTO role_section(role_name, section) SELECT name, 'standup' FROM role
              ON CONFLICT DO NOTHING`).catch(e => console.warn('standup section grant:', e.message));
+  // My Work: everyone sees their own record.
+  await q(`INSERT INTO role_section(role_name, section) SELECT name, 'mywork' FROM role
+             ON CONFLICT DO NOTHING`).catch(e => console.warn('mywork section grant:', e.message));
   // Workstation registry: seed from the model routing so every known station has a row (with
   // its stage), ready for admins to extend with Sub-Assembly / made-parts stations.
   await q(`INSERT INTO workstation(name, stage)

@@ -191,6 +191,11 @@ const colMigrations = [
   // Workstation registry — stations exist beyond what the model routing mentions (Sub-Assembly,
   // made-parts benches...). stage maps a station to the production stage its work belongs to.
   `CREATE TABLE IF NOT EXISTS workstation (name TEXT PRIMARY KEY, stage TEXT, active BOOLEAN NOT NULL DEFAULT true)`,
+  // Who built made/sub-assembly parts, when, how many — the person-attributed record behind
+  // "My Work" (parts by part number) that stock movements alone never captured.
+  `CREATE TABLE IF NOT EXISTS part_build_log (id SERIAL PRIMARY KEY, part_id TEXT NOT NULL,
+     qty NUMERIC(12,2) NOT NULL, user_id TEXT, note TEXT, built_at TIMESTAMPTZ NOT NULL DEFAULT now())`,
+  `CREATE INDEX IF NOT EXISTS idx_pbl_user ON part_build_log(user_id, built_at)`,
   `CREATE TABLE IF NOT EXISTS daily_task (id SERIAL PRIMARY KEY, plan_date DATE NOT NULL, user_id TEXT,
      order_id TEXT, stage TEXT, workstation TEXT, description TEXT NOT NULL,
      est_hours NUMERIC(8,2) NOT NULL DEFAULT 0, status TEXT NOT NULL DEFAULT 'proposed',

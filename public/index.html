@@ -215,7 +215,7 @@ $('liPass').addEventListener('keydown',e=>{if(e.key==='Enter')login();});
 })();
 
 // ---- nav/render ----
-const NAV=[['dashboard','📊 Dashboard'],['orders','🔨 Production Flow'],['standup','📣 Stand-Up'],['daily','📋 Daily Update'],['performance','📈 Performance'],['neworder','➕ New Order'],['customers','🏬 Customers & Dealers'],['parts','📦 Parts Master'],['predict','🤖 Predictive Ordering'],['pos','🧾 Purchase Orders'],['boms','🧩 BOMs & Cost'],['inventory','📈 Inventory Value'],['accounting','💵 Accounting'],['trailers','🚛 Trailers & Warranty'],['printcenter','🖨️ Print Center'],['boatadmin','🚤 Boat Builder'],['testdata','🧪 Test Data'],['team','👷 Team & Payroll'],['timeoff','📅 Schedule & Time Off'],['outcomes','🎯 Goals & Outcomes'],['wins','🎉 Wins'],['forecast','🔮 Forecasting & Planning'],['notify','💬 Notifications'],['support','🆘 Support'],['users','👤 Users & Roles']];
+const NAV=[['dashboard','📊 Dashboard'],['orders','🔨 Production Flow'],['standup','📣 Stand-Up'],['mywork','📜 My Work'],['daily','📋 Daily Update'],['performance','📈 Performance'],['neworder','➕ New Order'],['customers','🏬 Customers & Dealers'],['parts','📦 Parts Master'],['predict','🤖 Predictive Ordering'],['pos','🧾 Purchase Orders'],['boms','🧩 BOMs & Cost'],['inventory','📈 Inventory Value'],['accounting','💵 Accounting'],['trailers','🚛 Trailers & Warranty'],['printcenter','🖨️ Print Center'],['boatadmin','🚤 Boat Builder'],['testdata','🧪 Test Data'],['team','👷 Team & Payroll'],['timeoff','📅 Schedule & Time Off'],['outcomes','🎯 Goals & Outcomes'],['wins','🎉 Wins'],['forecast','🔮 Forecasting & Planning'],['notify','💬 Notifications'],['support','🆘 Support'],['users','👤 Users & Roles']];
 function canSee(section){
   if(isAdmin()) return true;
   if(!ME.sections) return true; // null = all sections (admin)
@@ -234,7 +234,7 @@ function navVisible(n){
 const NAV_LABEL = Object.fromEntries(NAV);
 const NAV_GROUPS = [
   ['', ['dashboard']],
-  ['Production', ['orders','standup','daily','performance','trailers','printcenter']],
+  ['Production', ['orders','standup','mywork','daily','performance','trailers','printcenter']],
   ['Sales', ['neworder','boatadmin','customers']],
   ['Inventory', ['parts','boms','inventory','predict','pos']],
   ['Finance', ['accounting','forecast']],
@@ -315,7 +315,7 @@ document.addEventListener('keydown',e=>{
 });
 async function render(){
   renderNav();
-  const map={dashboard:viewDash,orders:viewOrders,standup:viewStandup,daily:viewDaily,performance:viewPerformance,neworder:viewNewOrder,customers:viewCustomers,parts:viewParts,predict:viewPredict,pos:viewPOs,boms:viewBoms,inventory:viewInv,accounting:viewAccounting,trailers:viewTrailers,printcenter:viewPrintCenter,boatadmin:viewBoatAdmin,testdata:viewTestData,team:viewTeam,timeoff:viewTimeoff,outcomes:viewOutcomes,wins:viewWins,forecast:viewForecast,notify:viewNotify,support:viewSupport,users:viewUsers};
+  const map={dashboard:viewDash,orders:viewOrders,standup:viewStandup,mywork:viewMyWork,daily:viewDaily,performance:viewPerformance,neworder:viewNewOrder,customers:viewCustomers,parts:viewParts,predict:viewPredict,pos:viewPOs,boms:viewBoms,inventory:viewInv,accounting:viewAccounting,trailers:viewTrailers,printcenter:viewPrintCenter,boatadmin:viewBoatAdmin,testdata:viewTestData,team:viewTeam,timeoff:viewTimeoff,outcomes:viewOutcomes,wins:viewWins,forecast:viewForecast,notify:viewNotify,support:viewSupport,users:viewUsers};
   try{
     await (map[page]||viewDash)();
     const pa=$('pActions');
@@ -1238,7 +1238,8 @@ async function viewStandup(){
       ${o.units&&o.units.length?`<button class="btn sm" onclick="msComplete('${esc(o.units[0].id)}','${esc(o.id)}')">✓ Mark ${esc(station.stage)} complete</button>
       <button class="btn sm sec" onclick="msProblem('${esc(o.units[0].id)}','${esc(o.id)}')" title="report a problem">🚨</button>`:''}
     </div>`).join(''):`<p class="muted">Nothing waiting at your station. 🎉</p>`}
-    <p class="muted" style="font-size:11px;margin-top:8px">Completions are credited to your account and stamp the build log on every VIN in the order.</p>
+    <button class="btn sm sec" style="margin-top:10px" onclick="msLogParts()">🔩 Log made parts — sub-assembly / bench work</button>
+    <p class="muted" style="font-size:11px;margin-top:8px">Completions are credited to your account and stamp the build log on every VIN in the order. Logged parts go into stock under your name.</p>
   </div>`:'';
   let board='';
   if(isMgr&&plan){
@@ -1294,6 +1295,30 @@ function msProblem(unitId,orderId){
       <button class="btn sec" onclick="closeModal()">Cancel</button>
     </div>`);
 }
+async function msLogParts(){
+  let parts; try{ parts=(await api('/api/parts')).filter(p=>p.type==='M'&&p.active!==false); }catch(e){ return toast(e.message); }
+  if(!parts.length)return toast('No Make parts exist yet — add them in Parts Master');
+  modal('🔩 Log made parts',`
+    <p class="muted" style="font-size:12.5px">What you built goes into stock immediately and onto your My Work record by part number.</p>
+    <div class="field"><label>Part</label><select id="mpPart" class="inp">
+      ${parts.map(p=>`<option value="${esc(p.id)}">${esc(p.id)} — ${esc(p.name)}</option>`).join('')}
+    </select></div>
+    <div class="row">
+      <div class="field"><label>Quantity built</label><input id="mpQty" class="inp" type="number" min="1" value="1"></div>
+      <div class="field"><label>Note (optional)</label><input id="mpNote" class="inp" placeholder="e.g. for SO-1052"></div>
+    </div>
+    <div class="row" style="gap:8px;margin-top:8px">
+      <button class="btn" onclick="msLogPartsSend()">✓ Log it</button>
+      <button class="btn sec" onclick="closeModal()">Cancel</button>
+    </div>`);
+}
+async function msLogPartsSend(){
+  const id=$('mpPart').value, qty=Number($('mpQty').value)||0;
+  if(qty<1)return toast('How many did you build?');
+  try{ const r=await api('/api/parts/'+encodeURIComponent(id)+'/built',{method:'POST',body:JSON.stringify({qty,note:($('mpNote').value||'').trim()})});
+    closeModal(); toast('✓ '+qty+'× '+id+' logged — on hand now '+r.onHand); }
+  catch(e){ toast(e.message); }
+}
 async function msProblemSend(unitId){
   try{ await api('/u/'+unitId+'/problem',{method:'POST',body:JSON.stringify({reason:$('msReason').value,note:($('msNote').value||'').trim()})});
     closeModal(); toast('Reported — the Shop Manager has been alerted'); viewStandup(); }
@@ -1331,6 +1356,62 @@ async function suAdd(){
   const description=($('suNewDesc').value||'').trim(); if(!description)return toast('Describe the task');
   try{ await api('/api/standup/task',{method:'POST',body:JSON.stringify({date:window._suDate,description,estHours:$('suNewEst').value,userId:$('suNewWho').value||undefined})}); viewStandup(); }
   catch(e){ toast(e.message);}
+}
+
+// ── 📜 My Work — each person's own completed-work record over any window ──
+function mwRange(preset){
+  const t=new Date(); const iso=d=>`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+  if(preset==='week'){ const d=new Date(t); const dow=(d.getDay()+6)%7; d.setDate(d.getDate()-dow); return {from:iso(d),to:iso(t)}; } // Monday start
+  if(preset==='month') return {from:iso(t).slice(0,8)+'01',to:iso(t)};
+  return {from:iso(t).slice(0,4)+'-01-01',to:iso(t)}; // year
+}
+async function viewMyWork(){
+  $('pTitle').textContent='My Work';$('pSub').textContent='Everything you completed — trailers by step and VIN, made parts by part number, tasks — over any window';
+  const isMgr=isAdmin()||hasTitle('Shop Manager','General Manager');
+  if(!window._mwRange) window._mwRange=mwRange('week');
+  const r=window._mwRange, who=window._mwWho||'';
+  let d,users=[];
+  try{
+    [d,users]=await Promise.all([
+      api('/api/mywork?from='+r.from+'&to='+r.to+(who?'&userId='+encodeURIComponent(who):'')),
+      isMgr?api('/api/users').catch(()=>[]):Promise.resolve([]),
+    ]);
+  }catch(e){ $('content').innerHTML=`<div class="card"><p class="msg err">${esc(e.message)}</p></div>`; return; }
+  const preset=(p)=>`<button class="btn sm ${JSON.stringify(mwRange(p))===JSON.stringify(r)?'':'sec'}" onclick="window._mwRange=mwRange('${p}');viewMyWork()">${p==='week'?'This week':p==='month'?'This month':'This year'}</button>`;
+  $('pActions').innerHTML=`${isMgr?`<select onchange="window._mwWho=this.value;viewMyWork()" style="padding:6px 8px;border-radius:8px;border:1px solid var(--line);background:var(--panel2);color:var(--txt)">
+      <option value="">Me (${esc(ME.name)})</option>
+      ${users.filter(u=>u.active!==false&&u.id!==ME.id).map(u=>`<option value="${esc(u.id)}" ${who===u.id?'selected':''}>${esc(u.name)}</option>`).join('')}
+    </select> `:''}${preset('week')} ${preset('month')} ${preset('year')}
+    <input type="date" value="${r.from}" onchange="window._mwRange={from:this.value,to:window._mwRange.to};viewMyWork()" style="padding:5px 6px;border-radius:8px;border:1px solid var(--line);background:var(--panel2);color:var(--txt)">
+    <input type="date" value="${r.to}" onchange="window._mwRange={from:window._mwRange.from,to:this.value};viewMyWork()" style="padding:5px 6px;border-radius:8px;border:1px solid var(--line);background:var(--panel2);color:var(--txt)">`;
+  const T=d.totals;
+  const kpis=`<div class="grid g4" style="margin-bottom:16px">
+    ${kpi('Trailers touched',T.unitsTouched,T.stepStamps+' step completion(s)')}
+    ${kpi('Made parts built',T.partsQty,'by part number below')}
+    ${kpi('Tasks completed',T.tasksDone,'from the daily plans')}
+    ${kpi('Hours logged',T.hoursLogged,'Daily Update work logs')}
+  </div>`;
+  const stepCards=d.steps.length?d.steps.map(s=>`<div class="card" style="margin-bottom:16px">
+    <h3>${esc(s.label)} <span class="badge b-ok">${s.count}</span> ${csvBtn('mywork_'+s.step.toLowerCase(),s.items)}</h3>
+    <table><thead><tr><th>VIN</th><th>Model</th><th>Type</th><th>When</th></tr></thead><tbody>
+    ${s.items.map(i=>`<tr><td style="font-family:ui-monospace,monospace;font-size:11px"><b>${esc(i.vin||'(VIN pending)')}</b></td>
+      <td>${esc(i.model||'')}</td><td>${i.type?`<span class="badge b-buy">${esc(i.type)}</span>`:''}</td>
+      <td class="muted" style="font-size:12px">${new Date(i.at).toLocaleString([],{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'})}</td></tr>`).join('')}
+    </tbody></table></div>`).join(''):'';
+  const partsCard=`<div class="card" style="margin-bottom:16px"><h3>🔩 Made parts by part number ${csvBtn('mywork_parts',d.partsBuilt)}</h3>
+    ${d.partsBuilt.length?`<table><thead><tr><th>Part</th><th class="right">Qty built</th><th class="center">Sessions</th><th>Last</th></tr></thead><tbody>
+    ${d.partsBuilt.map(p=>`<tr><td><b>${esc(p.partId)}</b><br><span class="muted" style="font-size:11px">${esc(p.name||'')}</span></td>
+      <td class="right" style="font-weight:700">${p.qty}</td><td class="center">${p.times}</td>
+      <td class="muted" style="font-size:12px">${new Date(p.lastAt).toLocaleDateString()}</td></tr>`).join('')}
+    </tbody></table>`:'<p class="muted">No made parts logged in this window — use 🔩 Log made parts on Stand-Up → My Station.</p>'}</div>`;
+  const tasksCard=`<div class="card"><h3>✅ Completed tasks ${csvBtn('mywork_tasks',d.tasks)}</h3>
+    ${d.tasks.length?`<table><thead><tr><th>Task</th><th class="center">Times</th><th class="right">Est hrs</th><th>Last</th></tr></thead><tbody>
+    ${d.tasks.map(t=>`<tr><td>${esc(t.description)}</td><td class="center">${t.count}</td>
+      <td class="right">${t.estHours}</td><td class="muted" style="font-size:12px">${new Date(t.lastAt).toLocaleDateString()}</td></tr>`).join('')}
+    </tbody></table>`:'<p class="muted">No completed plan tasks in this window.</p>'}</div>`;
+  $('content').innerHTML=`<p class="muted" style="margin-bottom:10px;font-size:12.5px">${esc(d.user)} · ${esc(d.from)} → ${esc(d.to)}</p>`
+    +kpis+(stepCards||'<div class="card" style="margin-bottom:16px"><p class="muted">No trailer step completions in this window — they accrue automatically when you complete stages while signed in.</p></div>')
+    +partsCard+tasksCard;
 }
 
 // ── Performance — expectations vs actuals + generated areas for improvement ──

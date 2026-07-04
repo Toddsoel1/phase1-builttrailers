@@ -767,6 +767,43 @@ test('schedules drive the plan, 60-second day verification, and the workstation 
   await api('/api/users/' + maria.id, { method: 'PATCH', body: JSON.stringify({ workstation: prevWs }) }); // restore
 });
 
+test('my work: trailers by step + made parts by part number + tasks, over any window', async () => {
+  const users = await json(await api('/api/users'));
+  const maria = users.find(u => u.username === 'mchen');
+  const mr = await api('/api/auth/login', { method: 'POST', body: JSON.stringify({ username: 'mchen', password: 'built2026' }) });
+  const smh = { 'Content-Type': 'application/json', Authorization: 'Bearer ' + (await mr.json()).token };
+
+  // Log made parts: goes into stock AND onto her record by part number; Buy parts refused.
+  const part = await json(await api('/api/parts', { method: 'POST', body: JSON.stringify({ name: 'Bunkboard, Carpeted 8ft', cost: 22 }) }));
+  const before = (await json(await api('/api/parts'))).find(p => p.id === part.id).onHand;
+  const built = await fetch(BASE + '/api/parts/' + part.id + '/built', { method: 'POST', headers: smh, body: JSON.stringify({ qty: 3, note: 'bench run' }) });
+  assert.equal(built.status, 200);
+  assert.equal((await built.json()).onHand, before + 3, 'built parts entered stock');
+  const buyPart = (await json(await api('/api/parts'))).find(p => p.type === 'P');
+  assert.equal((await fetch(BASE + '/api/parts/' + buyPart.id + '/built', { method: 'POST', headers: smh, body: JSON.stringify({ qty: 1 }) })).status, 400, 'Buy parts are not "built"');
+
+  // Her record (year to date by default): step completions with VIN+model, the parts, her tasks.
+  const w = await json(await fetch(BASE + '/api/mywork', { headers: smh }));
+  assert.equal(w.user, 'Maria Chen');
+  const partsRow = w.partsBuilt.find(p => p.partId === part.id);
+  assert.ok(partsRow && partsRow.qty === 3, 'made parts grouped by part number');
+  const anyStep = w.steps.find(s => ['Parts', 'Bending'].includes(s.step));
+  assert.ok(anyStep && anyStep.items[0].vin, 'trailer step completions listed with VINs (from her My Station completion)');
+  assert.ok(w.totals.unitsTouched >= 1 && w.totals.tasksDone >= 1, 'totals aggregate steps and tasks');
+
+  // Windows are real: a future-only range shows nothing.
+  const tomorrow = new Date(Date.now() + 86400000).toISOString().slice(0, 10);
+  const empty = await json(await fetch(BASE + '/api/mywork?from=' + tomorrow + '&to=' + tomorrow, { headers: smh }));
+  assert.equal(empty.totals.partsQty + empty.totals.stepStamps + empty.totals.tasksDone, 0, 'range filters apply');
+
+  // Only SM/GM/admin may view someone else's record.
+  const sr = await api('/api/auth/login', { method: 'POST', body: JSON.stringify({ username: 'aruiz', password: 'built2026' }) });
+  const salesTok = (await sr.json()).token;
+  assert.equal((await fetch(BASE + '/api/mywork?userId=' + maria.id, { headers: { Authorization: 'Bearer ' + salesTok } })).status, 403, 'peers cannot browse each other');
+  const asMgr = await json(await fetch(BASE + '/api/mywork?userId=' + users.find(u => u.username === 'aruiz').id, { headers: smh }));
+  assert.equal(asMgr.user, 'Angela Ruiz', 'Shop Manager can review any employee');
+});
+
 test('order timeline: placed + stage completions with names and shop-floor initials', async () => {
   const unit = (await json(await api('/api/search?q=BLTTESTVIN0000099'))).units[0];
   const o = await json(await api('/api/orders/' + unit.orderId));
