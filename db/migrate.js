@@ -227,6 +227,13 @@ const colMigrations = [
   `ALTER TABLE model ADD COLUMN IF NOT EXISTS hitch_code TEXT`,
   `ALTER TABLE model ADD COLUMN IF NOT EXISTS body_code TEXT`,
   `ALTER TABLE model ADD COLUMN IF NOT EXISTS axles INT`,
+  // Reprint controls: a reprint requeues the job with a mandatory reason, and every event
+  // lands in a permanent register — an MSO is a title document, so duplicates must be traceable.
+  `ALTER TABLE print_job ADD COLUMN IF NOT EXISTS reprint_count INT NOT NULL DEFAULT 0`,
+  `ALTER TABLE print_job ADD COLUMN IF NOT EXISTS reprint_reason TEXT`,
+  `CREATE TABLE IF NOT EXISTS print_reprint (id SERIAL PRIMARY KEY, unit_id TEXT NOT NULL,
+     kind TEXT NOT NULL, reason TEXT NOT NULL, requested_by TEXT,
+     requested_at TIMESTAMPTZ NOT NULL DEFAULT now())`,
   // NHTSA vPIC verification per VIN: checked when, pass/fail, and what the decoder said.
   `ALTER TABLE trailer ADD COLUMN IF NOT EXISTS nhtsa_checked_at TIMESTAMPTZ`,
   `ALTER TABLE trailer ADD COLUMN IF NOT EXISTS nhtsa_ok BOOLEAN`,

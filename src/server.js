@@ -2177,6 +2177,22 @@ app.post('/api/print-queue/:id/printed', authMiddleware, requireVinAuthority, as
   try { const r = await trailers.markPrinted(Number(req.params.id), req.user); await audit(req, 'print.done', req.params.id); res.json(r); }
   catch (e) { res.status(400).json({ error: e.message }); }
 });
+// Guarded reprint: requeues the document with a mandatory reason; every request is registered
+// permanently (print_reprint + audit) — an MSO is a title document, duplicates must be traceable.
+app.post('/api/print-queue/reprint', authMiddleware, requireVinAuthority, async (req, res) => {
+  try {
+    const { unitId, kind, reason } = req.body || {};
+    const r = await trailers.requestReprint(unitId, kind, reason, req.user);
+    await audit(req, 'print.reprint', `${kind} ${unitId} — "${String(reason || '').slice(0, 120)}"${r.requeued ? ` (reprint #${r.reprintCount})` : ' (first print)'}`);
+    res.json(r);
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+// Print history for one unit (lookup by VIN or unit id) — what the reprint card shows first.
+app.get('/api/print/unit-history', authMiddleware, requireVinAuthority, async (req, res) => {
+  const h = await trailers.unitPrintHistory(req.query.q);
+  if (!h) return res.status(404).json({ error: 'No unit found with that VIN or unit id.' });
+  res.json(h);
+});
 // Per-model print specs — the numbers the federal VIN label and MSO carry.
 // (Own path, not /api/models/:id/..., so it can't collide with the models routes above.)
 app.get('/api/print-specs', authMiddleware, requireVinAuthority, async (_req, res) => {

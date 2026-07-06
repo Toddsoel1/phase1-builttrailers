@@ -335,6 +335,43 @@ test('VIN: print center + correction are restricted to OM/GM/Admin', async () =>
   assert.equal((await fetch(BASE + `/api/trailers/${vinUnitId}/vin`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + sales }, body: JSON.stringify({ vin: 'BLTHACKVIN0000001' }) })).status, 403, 'sales cannot change a VIN');
 });
 
+test('guarded reprints: reason required, permanent register, requeue with badge, MSO needs a buyer', async () => {
+  const sr = await api('/api/auth/login', { method: 'POST', body: JSON.stringify({ username: 'aruiz', password: 'built2026' }) });
+  const sales = (await sr.json()).token;
+  assert.equal((await fetch(BASE + '/api/print-queue/reprint', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + sales }, body: '{}' })).status, 403, 'sales cannot reprint');
+  assert.equal((await fetch(BASE + '/api/print/unit-history?q=x', { headers: { Authorization: 'Bearer ' + sales } })).status, 403, 'sales cannot read print history');
+  assert.equal((await api('/api/print/unit-history?q=NOPEVIN')).status, 404, 'unknown VIN 404s');
+
+  // The unit whose VIN label was printed earlier in the suite — look it up by VIN.
+  const h = await json(await api('/api/print/unit-history?q=BLTTESTVIN0000099'));
+  assert.equal(h.unitId, vinUnitId, 'history resolves the unit by VIN');
+  assert.ok(h.jobs.find(j => j.kind === 'vin' && j.status === 'printed'), 'VIN label shows as printed');
+
+  // Reason is mandatory; a real reason requeues the printed job and registers the event.
+  assert.equal((await api('/api/print-queue/reprint', { method: 'POST', body: JSON.stringify({ unitId: vinUnitId, kind: 'vin' }) })).status, 400, 'no reason -> refused');
+  assert.equal((await api('/api/print-queue/reprint', { method: 'POST', body: JSON.stringify({ unitId: vinUnitId, kind: 'vin', reason: 'x' }) })).status, 400, 'trivial reason -> refused');
+  const rp = await json(await api('/api/print-queue/reprint', { method: 'POST', body: JSON.stringify({ unitId: vinUnitId, kind: 'vin', reason: 'label damaged during install (smoke test)' }) }));
+  assert.equal(rp.requeued, true);
+  assert.equal(rp.reprintCount, 1);
+  const q1 = await json(await api('/api/print-queue?kind=vin'));
+  const job = q1.find(j => j.unitId === vinUnitId);
+  assert.ok(job, 'reprint is back in the queue');
+  assert.equal(job.reprintCount, 1, 'queue row carries the reprint badge count');
+  assert.match(job.reprintReason, /damaged/, 'queue row carries the reason');
+  assert.equal((await api('/api/print-queue/reprint', { method: 'POST', body: JSON.stringify({ unitId: vinUnitId, kind: 'vin', reason: 'double request should fail' }) })).status, 400, 'already queued -> refused');
+  const h2 = await json(await api('/api/print/unit-history?q=' + vinUnitId));
+  assert.ok(h2.reprints.length >= 1 && /damaged/.test(h2.reprints[0].reason), 'permanent reprint register records the event');
+  await api('/api/print-queue/' + job.jobId + '/printed', { method: 'POST' }); // leave the queue clean
+
+  // An MSO can never reprint for an unsold unit — it names the buyer.
+  const stock = await json(await api('/api/orders/stock', { method: 'POST', body: JSON.stringify({ modelId: 'UT7X16T', qty: 1 }) }));
+  await api('/api/orders/' + stock.id + '/stage', { method: 'PATCH', body: JSON.stringify({ stage: 'Build' }) });
+  const unit = (await json(await api('/api/trailers'))).registry.find(t => t.orderId === stock.id);
+  const denied = await api('/api/print-queue/reprint', { method: 'POST', body: JSON.stringify({ unitId: unit.id, kind: 'mso', reason: 'trying to reprint an unsold MSO' }) });
+  assert.equal(denied.status, 400);
+  assert.match((await denied.json()).error, /buyer/i, 'refusal explains the MSO names the buyer');
+});
+
 test('NHTSA vPIC verdict logic: clean, check-digit failure, unregistered WMI, wrong year', async () => {
   const { evaluateNhtsa } = await import('../src/vin.js');
   // vin position 10 = 'T' -> model year 2026

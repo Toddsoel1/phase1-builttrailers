@@ -2883,7 +2883,7 @@ async function viewPrintCenter(){
       ${kind==='vin'&&jobs.length?`<button class="btn sm sec" style="margin-left:10px" onclick='printVinLabelSheet(${ja(jobs.map(j=>j.unitId))})'>🖨️ Print all — one 15513 sheet</button>`:''}</h3>
     ${jobs.length?`<table><thead><tr><th>VIN</th><th>Model</th><th>Order</th><th>Customer</th><th>Queued</th><th></th></tr></thead><tbody>
       ${jobs.map(j=>`<tr>
-        <td><b style="font-family:ui-monospace,Menlo,monospace;letter-spacing:.5px">${esc(j.vin||'')}</b>${nhtsaBadge(j)}</td>
+        <td><b style="font-family:ui-monospace,Menlo,monospace;letter-spacing:.5px">${esc(j.vin||'')}</b>${nhtsaBadge(j)}${j.reprintCount?` <span class="badge b-below" title="${esc(j.reprintReason||'')}">♻️ REPRINT ×${j.reprintCount}</span>`:''}</td>
         <td>${esc(j.model||'')}${j.type?` <span class="badge b-buy">${esc(j.type)}</span>`:''}</td>
         <td>${esc(j.orderId||'')}</td><td>${esc(j.customer||'')}</td>
         <td class="muted" style="font-size:12px">${j.queuedAt?new Date(j.queuedAt).toLocaleDateString():''}</td>
@@ -2894,6 +2894,14 @@ async function viewPrintCenter(){
   $('content').innerHTML=
     queueCard('🏷️ VIN labels to print',vinQ,'vin','Nothing queued. VIN labels queue automatically when a trailer enters Paint.')+
     queueCard('📄 MSOs to print',msoQ,'mso','Nothing queued. MSOs queue when Paint is complete — held for stock trailers until sold.')+
+    `<div class="card" style="margin-bottom:16px"><h3>♻️ Reprint a VIN label or MSO</h3>
+      <p class="muted" style="font-size:12px;margin-bottom:10px">Damaged form, printer jam, lost before delivery. Look up the unit, state the reason, and the document requeues above with a ♻️ REPRINT badge. Every reprint is registered permanently with who, when, and why — an MSO is a title document, so the old copy must be voided first.</p>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px">
+        <input id="rpQ" placeholder="VIN or unit id (T-10001)" style="flex:1;min-width:220px;padding:8px;border-radius:8px;border:1px solid var(--line);background:var(--panel2);color:var(--txt);font-family:ui-monospace,monospace" onkeydown="if(event.key==='Enter')rpLookup()">
+        <button class="btn sm" onclick="rpLookup()">🔍 Look up</button>
+      </div>
+      <div id="rpBody"></div>
+    </div>`+
     `<div class="card" style="margin-bottom:16px"><h3>🛡️ NHTSA VIN verification</h3>
       <p class="muted" style="font-size:12px;margin-bottom:10px">Every VIN is double-checked against the federal vPIC decoder (<a class="lnk" href="https://vpic.nhtsa.dot.gov/decoder/" target="_blank" rel="noopener">vpic.nhtsa.dot.gov/decoder</a>): check digit, WMI/manufacturer registration, model year, and vehicle type. New VINs are checked automatically the moment they're assigned; use these to catch up or re-run.</p>
       <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px">
@@ -2940,6 +2948,57 @@ async function clearShopPin(){
 }
 function comingSoon(what){ toast(`${what} layout is coming soon — being finalized with your samples.`); }
 async function printJobDone(jobId){ try{ await api('/api/print-queue/'+jobId+'/printed',{method:'POST'}); toast('Marked printed'); viewPrintCenter(); }catch(e){ toast(e.message); } }
+
+// ── ♻️ Guarded reprints: look up → reason + void confirmation → requeue with a badge ──
+async function rpLookup(){
+  const b=$('rpBody'), qv=($('rpQ').value||'').trim();
+  if(!qv)return toast('Enter a VIN or unit id.');
+  b.innerHTML='<p class="muted">Looking up…</p>';
+  let h; try{ h=await api('/api/print/unit-history?q='+encodeURIComponent(qv)); }catch(e){ b.innerHTML='<p class="msg err">'+esc(e.message)+'</p>'; return; }
+  window._rpUnit=h;
+  const job=k=>h.jobs.find(j=>j.kind===k);
+  const line=(k,label)=>{
+    const j=job(k);
+    const state=!j?'<span class="muted">never printed</span>'
+      :j.status==='queued'?'<span class="badge b-low">in the queue now</span>'
+      :`printed ${j.printedAt?new Date(j.printedAt).toLocaleDateString():''}${j.printedBy?' by '+esc(j.printedBy):''}${j.reprintCount?` · <span class="badge b-below">♻️ reprinted ×${j.reprintCount}</span>`:''}`;
+    const canRp=!(j&&j.status==='queued')&&!(k==='mso'&&!h.customer);
+    return `<div style="display:flex;gap:10px;align-items:center;padding:7px 0;border-bottom:1px solid var(--line);flex-wrap:wrap">
+      <b style="min-width:80px">${label}</b><span style="flex:1;font-size:12.5px">${state}${k==='mso'&&!h.customer?' — <span class="muted">no buyer yet (MSO prints once sold)</span>':''}</span>
+      ${canRp?`<button class="btn sm sec" onclick="rpModal('${esc(k)}')">♻️ Reprint ${label}</button>`:''}
+    </div>`;
+  };
+  b.innerHTML=`<div style="font-size:13px;margin:4px 0 6px"><b style="font-family:ui-monospace,monospace">${esc(h.vin)}</b> — ${esc(h.model||'')}${h.customer?' · '+esc(h.customer):' · <span class="badge b-buy">stock</span>'} · order ${esc(h.orderId||'—')}
+      ${h.nhtsaOk===false?` <span class="badge b-below" title="${esc(h.nhtsaNote||'')}">NHTSA ⚠</span>`:h.nhtsaOk===true?' <span class="badge b-ok">NHTSA ✓</span>':''}</div>
+    ${line('vin','VIN label')}${line('mso','MSO')}
+    ${h.reprints.length?`<p class="muted" style="font-size:11.5px;margin:8px 0 2px"><b>Reprint register</b></p>
+      ${h.reprints.map(r=>`<div style="font-size:11.5px;color:var(--muted);padding:2px 0">♻️ ${r.kind==='mso'?'MSO':'VIN label'} — ${new Date(r.at).toLocaleString()}${r.by?' · '+esc(r.by):''} — “${esc(r.reason)}”</div>`).join('')}`:''}`;
+}
+function rpModal(kind){
+  const h=window._rpUnit; if(!h)return;
+  const label=kind==='mso'?'MSO':'VIN label';
+  const voidTxt=kind==='mso'
+    ?'I confirm the previously issued MSO for this VIN is void — destroyed or recovered — and no duplicate will circulate. (An MSO is a title document.)'
+    :'I confirm the old label (if recovered) will be destroyed — exactly one VIN label goes on the trailer.';
+  modal('♻️ Reprint '+label+' — '+esc(h.vin),`
+    <p class="muted" style="font-size:12.5px">This requeues the ${label} in the Print Center with a ♻️ REPRINT badge. The reason and your name go into the permanent reprint register and the audit log.</p>
+    <div class="field"><label>Why is a reprint needed? (required)</label>
+      <input id="rpReason" class="inp" placeholder="e.g. form jammed in printer / label damaged on install"></div>
+    <label style="display:flex;gap:9px;align-items:flex-start;font-size:12.5px;margin:10px 0;cursor:pointer">
+      <input type="checkbox" id="rpVoid" style="margin-top:2px;width:16px;height:16px;flex:0 0 auto"><span>${voidTxt}</span></label>
+    <div class="row" style="gap:8px;margin-top:8px">
+      <button class="btn" onclick="rpSend('${esc(kind)}')">♻️ Requeue for reprint</button>
+      <button class="btn sec" onclick="closeModal()">Cancel</button>
+    </div>`);
+}
+async function rpSend(kind){
+  const h=window._rpUnit, reason=($('rpReason').value||'').trim();
+  if(reason.length<5)return toast('Say what happened to the original — the register requires a reason.');
+  if(!$('rpVoid').checked)return toast('Tick the confirmation — the old copy must be voided/destroyed first.');
+  try{ const r=await api('/api/print-queue/reprint',{method:'POST',body:JSON.stringify({unitId:h.unitId,kind,reason})});
+    closeModal(); toast('♻️ '+(kind==='mso'?'MSO':'VIN label')+' requeued'+(r.requeued?' — reprint #'+r.reprintCount:'')); viewPrintCenter();
+  }catch(e){ toast(e.message); }
+}
 
 // ── 🛡️ NHTSA vPIC verification ──
 async function loadNhtsaFailures(){
