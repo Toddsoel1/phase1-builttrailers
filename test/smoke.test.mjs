@@ -335,6 +335,33 @@ test('VIN: print center + correction are restricted to OM/GM/Admin', async () =>
   assert.equal((await fetch(BASE + `/api/trailers/${vinUnitId}/vin`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + sales }, body: JSON.stringify({ vin: 'BLTHACKVIN0000001' }) })).status, 403, 'sales cannot change a VIN');
 });
 
+test('print specs + print-data: the numbers the VIN label and MSO carry', async () => {
+  const sr = await api('/api/auth/login', { method: 'POST', body: JSON.stringify({ username: 'aruiz', password: 'built2026' }) });
+  const sales = (await sr.json()).token;
+  assert.equal((await fetch(BASE + '/api/print-specs', { headers: { Authorization: 'Bearer ' + sales } })).status, 403, 'specs are OM/GM/Admin only');
+
+  const specs = await json(await api('/api/print-specs'));
+  assert.ok(specs.length >= 1 && specs[0].id, 'every model listed');
+  const unit = await json(await api('/api/trailers/' + vinUnitId + '/print-data'));
+  const modelId = unit.modelId;
+  assert.equal((await api('/api/models/' + encodeURIComponent(modelId) + '/specs', { method: 'PATCH',
+    body: JSON.stringify({ gvwrLbs: 10500, emptyWeightLbs: 2000, tire: '255', rim: 'R18', tirePsi: 80, lengthFt: 19 }) })).status, 200);
+  const after = (await json(await api('/api/print-specs'))).find(m => m.id === modelId);
+  assert.equal(after.gvwrLbs, 10500);
+  assert.equal(after.lengthFt, 19);
+
+  const pd = await json(await api('/api/trailers/' + vinUnitId + '/print-data'));
+  assert.equal(pd.vin, 'BLTTESTVIN0000099');
+  assert.equal(pd.gvwrLbs, 10500);
+  assert.equal(pd.cargoMaxLbs, 8500, 'cargo max = GVWR - empty weight');
+  assert.equal(pd.tire, '255');
+  assert.equal(pd.tirePsi, 80);
+  assert.ok(Number.isInteger(pd.year) && pd.year >= 2010, 'model year decoded from the VIN');
+  assert.ok(pd.dealer && pd.dealer.name, 'MSO buyer block resolves from the order');
+  assert.equal((await api('/api/trailers/NOPE/print-data')).status, 404, 'unknown unit 404s');
+  assert.equal((await api('/api/models/NOPE/specs', { method: 'PATCH', body: '{}' })).status, 404, 'unknown model 404s');
+});
+
 test('staff users: any user can set their OWN email without admin (self-service)', async () => {
   const sr = await api('/api/auth/login', { method: 'POST', body: JSON.stringify({ username: 'aruiz', password: 'built2026' }) });
   const sales = (await sr.json()).token; // Angela Ruiz — Sales, editor tier, NOT admin

@@ -2174,6 +2174,50 @@ app.post('/api/print-queue/:id/printed', authMiddleware, requireVinAuthority, as
   try { const r = await trailers.markPrinted(Number(req.params.id), req.user); await audit(req, 'print.done', req.params.id); res.json(r); }
   catch (e) { res.status(400).json({ error: e.message }); }
 });
+// Per-model print specs — the numbers the federal VIN label and MSO carry.
+// (Own path, not /api/models/:id/..., so it can't collide with the models routes above.)
+app.get('/api/print-specs', authMiddleware, requireVinAuthority, async (_req, res) => {
+  res.json((await all(`SELECT id, name, gvwr_lbs, empty_weight_lbs, tire, rim, tire_psi, length_ft FROM model ORDER BY category, id`, []))
+    .map(m => ({ id: m.id, name: m.name, gvwrLbs: m.gvwr_lbs, emptyWeightLbs: m.empty_weight_lbs,
+      tire: m.tire, rim: m.rim, tirePsi: m.tire_psi, lengthFt: m.length_ft != null ? Number(m.length_ft) : null })));
+});
+app.patch('/api/models/:id/specs', authMiddleware, requireVinAuthority, async (req, res) => {
+  const m = await one('SELECT id FROM model WHERE id=$1', [req.params.id]);
+  if (!m) return res.status(404).json({ error: 'model not found' });
+  const b = req.body || {};
+  const num = v => (v === '' || v == null) ? null : Number(v);
+  await q(`UPDATE model SET gvwr_lbs=$1, empty_weight_lbs=$2, tire=$3, rim=$4, tire_psi=$5, length_ft=$6 WHERE id=$7`,
+    [num(b.gvwrLbs), num(b.emptyWeightLbs), String(b.tire || '').trim() || null, String(b.rim || '').trim() || null,
+     num(b.tirePsi), num(b.lengthFt), req.params.id]);
+  await audit(req, 'model.specs', `${req.params.id}: GVWR ${b.gvwrLbs || '—'}, empty ${b.emptyWeightLbs || '—'}`);
+  res.json({ ok: true });
+});
+// Everything a VIN label or MSO print needs for one unit, straight from the database.
+const VIN_YEAR_MAP = 'ABCDEFGHJKLMNPRSTVWXY'; // pos 10, A=2010 (mirrors vin.js yearCode)
+app.get('/api/trailers/:id/print-data', authMiddleware, requireVinAuthority, async (req, res) => {
+  const t = await one(`SELECT t.id, t.vin, t.serial, t.order_id, m.id AS model_id, m.name AS model_name, m.category,
+                              m.gvwr_lbs, m.empty_weight_lbs, m.tire, m.rim, m.tire_psi, m.length_ft,
+                              c.name AS dealer, c.address, c.city, c.state, c.zip
+                         FROM trailer t
+                         LEFT JOIN model m ON m.id = t.model_id
+                         LEFT JOIN sales_order o ON o.id = t.order_id
+                         LEFT JOIN customer c ON c.id = COALESCE(t.customer_id, o.customer_id)
+                        WHERE t.id=$1`, [req.params.id]);
+  if (!t) return res.status(404).json({ error: 'unit not found' });
+  const yi = VIN_YEAR_MAP.indexOf(String(t.vin || '')[9]);
+  const gvwr = t.gvwr_lbs != null ? Number(t.gvwr_lbs) : null;
+  const empty = t.empty_weight_lbs != null ? Number(t.empty_weight_lbs) : null;
+  res.json({
+    unitId: t.id, vin: t.vin, serial: t.serial, orderId: t.order_id,
+    modelId: t.model_id, model: t.model_name, type: t.category,
+    year: yi >= 0 ? 2010 + yi : new Date().getFullYear(),
+    gvwrLbs: gvwr, emptyWeightLbs: empty,
+    cargoMaxLbs: gvwr != null && empty != null ? gvwr - empty : null,
+    tire: t.tire, rim: t.rim, tirePsi: t.tire_psi != null ? Number(t.tire_psi) : null,
+    lengthFt: t.length_ft != null ? Number(t.length_ft) : null,
+    dealer: t.dealer ? { name: t.dealer, address: t.address, city: t.city, state: t.state, zip: t.zip } : null,
+  });
+});
 // Correct an assigned VIN after the fact (e.g. crossed stickers). Build history stays with the unit.
 app.post('/api/trailers/:id/vin', authMiddleware, requireVinAuthority, async (req, res) => {
   try {

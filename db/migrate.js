@@ -215,6 +215,14 @@ const colMigrations = [
      source TEXT NOT NULL DEFAULT 'auto', assigned_by TEXT, approved_at TIMESTAMPTZ,
      completed_at TIMESTAMPTZ, completed_via TEXT, created_at TIMESTAMPTZ NOT NULL DEFAULT now())`,
   `CREATE INDEX IF NOT EXISTS idx_dtask_date ON daily_task(plan_date, user_id)`,
+  // Per-model print specs for the federal VIN label + MSO (from the office's physical samples):
+  // GVWR, empty/shipping weight (cargo max = GVWR - empty), tire/rim/PSI, overall length.
+  `ALTER TABLE model ADD COLUMN IF NOT EXISTS gvwr_lbs INT`,
+  `ALTER TABLE model ADD COLUMN IF NOT EXISTS empty_weight_lbs INT`,
+  `ALTER TABLE model ADD COLUMN IF NOT EXISTS tire TEXT`,
+  `ALTER TABLE model ADD COLUMN IF NOT EXISTS rim TEXT`,
+  `ALTER TABLE model ADD COLUMN IF NOT EXISTS tire_psi INT`,
+  `ALTER TABLE model ADD COLUMN IF NOT EXISTS length_ft NUMERIC(5,1)`,
   // A dealer's "I'll take that one" on an unsold stock build — staff approve (which sells the
   // order via the existing assign-customer path) or decline; competing requests auto-decline.
   `CREATE TABLE IF NOT EXISTS stock_request (id SERIAL PRIMARY KEY, order_id TEXT NOT NULL,
