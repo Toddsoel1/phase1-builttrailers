@@ -223,6 +223,10 @@ const colMigrations = [
   `ALTER TABLE model ADD COLUMN IF NOT EXISTS rim TEXT`,
   `ALTER TABLE model ADD COLUMN IF NOT EXISTS tire_psi INT`,
   `ALTER TABLE model ADD COLUMN IF NOT EXISTS length_ft NUMERIC(5,1)`,
+  // VIN positions 4-8 per the filed Part 565 scheme: hitch, body type, (length above), axles.
+  `ALTER TABLE model ADD COLUMN IF NOT EXISTS hitch_code TEXT`,
+  `ALTER TABLE model ADD COLUMN IF NOT EXISTS body_code TEXT`,
+  `ALTER TABLE model ADD COLUMN IF NOT EXISTS axles INT`,
   // NHTSA vPIC verification per VIN: checked when, pass/fail, and what the decoder said.
   `ALTER TABLE trailer ADD COLUMN IF NOT EXISTS nhtsa_checked_at TIMESTAMPTZ`,
   `ALTER TABLE trailer ADD COLUMN IF NOT EXISTS nhtsa_ok BOOLEAN`,

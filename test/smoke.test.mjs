@@ -382,6 +382,45 @@ test('VIN settings: serial counter is settable but forward-only (no collision wi
   assert.equal((await api('/api/trailers/config', { method: 'PUT', body: JSON.stringify({ nextSerial: 10000000 }) })).status, 400, 'out-of-range serial refused');
 });
 
+test('VIN generation follows the filed Part 565 scheme: VDS, per-year serial, check digit', async () => {
+  const { computeCheckDigit, vinYear } = await import('../src/vin.js');
+  // UT7X16T carries the known-real specs from the seed (Utility, 19 ft, tandem) — the same
+  // numbers as the physical MSO sample (7XJBU19*2*...).
+  const cust = await json(await api('/api/customers', { method: 'POST', body: JSON.stringify({ name: 'VIN Scheme Test Co', kind: 'Dealership', allowed: ['Utility'] }) }));
+  const o = await json(await api('/api/orders', { method: 'POST', body: JSON.stringify({ customerId: cust.id, modelId: 'UT7X16T', qty: 2, due: '2026-12-15' }) }));
+  const before = (await json(await api('/api/trailers'))).config.nextSerial;
+  await api('/api/orders/' + o.id + '/stage', { method: 'PATCH', body: JSON.stringify({ stage: 'Build' }) }); // entering Build issues VINs
+  const units = (await json(await api('/api/trailers'))).registry.filter(t => t.orderId === o.id);
+  assert.equal(units.length, 2, 'both units got VINs');
+  const year = new Date().getFullYear();
+  for (const u of units) {
+    const v = u.vin;
+    assert.equal(v.length, 17);
+    assert.equal(v.slice(0, 3), 'BLT', 'WMI (test placeholder)');
+    assert.equal(v[3], 'B', 'pos 4: ball hitch');
+    assert.equal(v[4], 'U', 'pos 5: utility body');
+    assert.equal(v.slice(5, 7), '19', 'pos 6-7: 19 ft exactly like the MSO sample');
+    assert.equal(v[7], '2', 'pos 8: tandem = 2 axles');
+    assert.equal(v[8], computeCheckDigit(v), 'pos 9: check digit verifies independently');
+    assert.equal(vinYear(v), year, 'pos 10: current model year');
+    assert.equal(v[10], 'A', 'pos 11: plant (test placeholder)');
+    assert.match(v.slice(11), /^\d{6}$/, 'pos 12-17: six-digit serial');
+  }
+  const serials = units.map(u => Number(u.vin.slice(11))).sort((a, b) => a - b);
+  assert.equal(serials[1], serials[0] + 1, 'serials are sequential');
+  assert.equal((await json(await api('/api/trailers'))).config.nextSerial, before + 2, 'per-year counter advanced by 2');
+
+  // A model missing its Length cannot get a VIN — the error says exactly what to fill in.
+  await api('/api/models/BBQ1/specs', { method: 'PATCH', body: JSON.stringify({ hitchCode: 'B', bodyCode: 'G', axles: 1, lengthFt: '' }) });
+  const cust2 = await json(await api('/api/customers', { method: 'POST', body: JSON.stringify({ name: 'VIN Scheme BBQ Co', kind: 'Dealership', allowed: ['BBQ'] }) }));
+  const o2 = await json(await api('/api/orders', { method: 'POST', body: JSON.stringify({ customerId: cust2.id, modelId: 'BBQ1', qty: 1 }) }));
+  const r = await api('/api/trailers/assign', { method: 'POST', body: JSON.stringify({ orderId: o2.id }) });
+  assert.equal(r.status, 400, 'VIN refused while specs are incomplete');
+  assert.match((await r.json()).error, /Length.*print specs/i, 'error names the missing field and where to fix it');
+  await api('/api/models/BBQ1/specs', { method: 'PATCH', body: JSON.stringify({ hitchCode: 'B', bodyCode: 'G', axles: 1, lengthFt: 12 }) });
+  assert.equal((await api('/api/trailers/assign', { method: 'POST', body: JSON.stringify({ orderId: o2.id }) })).status, 200, 'VIN issues once the spec is filled');
+});
+
 test('print specs + print-data: the numbers the VIN label and MSO carry', async () => {
   const sr = await api('/api/auth/login', { method: 'POST', body: JSON.stringify({ username: 'aruiz', password: 'built2026' }) });
   const sales = (await sr.json()).token;

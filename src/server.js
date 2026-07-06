@@ -48,7 +48,7 @@ import { geocodeAddress } from './geocode.js';
 import { emailConfigured } from './email.js';
 import { runReminders } from './reminders.js';
 import { sendWeeklyDigest } from './digest.js';
-import { nhtsaCheckUnits } from './vin.js';
+import { nhtsaCheckUnits, vinYear } from './vin.js';
 import * as analytics from './analytics.js';
 import * as andon from './andon.js';
 import { runBackup } from './backup.js';
@@ -2180,23 +2180,26 @@ app.post('/api/print-queue/:id/printed', authMiddleware, requireVinAuthority, as
 // Per-model print specs — the numbers the federal VIN label and MSO carry.
 // (Own path, not /api/models/:id/..., so it can't collide with the models routes above.)
 app.get('/api/print-specs', authMiddleware, requireVinAuthority, async (_req, res) => {
-  res.json((await all(`SELECT id, name, gvwr_lbs, empty_weight_lbs, tire, rim, tire_psi, length_ft FROM model ORDER BY category, id`, []))
-    .map(m => ({ id: m.id, name: m.name, gvwrLbs: m.gvwr_lbs, emptyWeightLbs: m.empty_weight_lbs,
-      tire: m.tire, rim: m.rim, tirePsi: m.tire_psi, lengthFt: m.length_ft != null ? Number(m.length_ft) : null })));
+  res.json((await all(`SELECT id, name, category, axle, gvwr_lbs, empty_weight_lbs, tire, rim, tire_psi, length_ft, hitch_code, body_code, axles FROM model ORDER BY category, id`, []))
+    .map(m => ({ id: m.id, name: m.name, category: m.category, gvwrLbs: m.gvwr_lbs, emptyWeightLbs: m.empty_weight_lbs,
+      tire: m.tire, rim: m.rim, tirePsi: m.tire_psi, lengthFt: m.length_ft != null ? Number(m.length_ft) : null,
+      hitchCode: m.hitch_code, bodyCode: m.body_code,
+      axles: m.axles != null ? Number(m.axles) : (/tri/i.test(m.axle || '') ? 3 : /tand/i.test(m.axle || '') ? 2 : /sing/i.test(m.axle || '') ? 1 : null) })));
 });
 app.patch('/api/models/:id/specs', authMiddleware, requireVinAuthority, async (req, res) => {
   const m = await one('SELECT id FROM model WHERE id=$1', [req.params.id]);
   if (!m) return res.status(404).json({ error: 'model not found' });
   const b = req.body || {};
   const num = v => (v === '' || v == null) ? null : Number(v);
-  await q(`UPDATE model SET gvwr_lbs=$1, empty_weight_lbs=$2, tire=$3, rim=$4, tire_psi=$5, length_ft=$6 WHERE id=$7`,
+  const code = v => String(v || '').trim().toUpperCase() || null;
+  await q(`UPDATE model SET gvwr_lbs=$1, empty_weight_lbs=$2, tire=$3, rim=$4, tire_psi=$5, length_ft=$6,
+                            hitch_code=$7, body_code=$8, axles=$9 WHERE id=$10`,
     [num(b.gvwrLbs), num(b.emptyWeightLbs), String(b.tire || '').trim() || null, String(b.rim || '').trim() || null,
-     num(b.tirePsi), num(b.lengthFt), req.params.id]);
-  await audit(req, 'model.specs', `${req.params.id}: GVWR ${b.gvwrLbs || '—'}, empty ${b.emptyWeightLbs || '—'}`);
+     num(b.tirePsi), num(b.lengthFt), code(b.hitchCode), code(b.bodyCode), num(b.axles), req.params.id]);
+  await audit(req, 'model.specs', `${req.params.id}: GVWR ${b.gvwrLbs || '—'}, ${b.lengthFt || '—'}ft, VDS ${code(b.hitchCode) || 'B'}${code(b.bodyCode) || '?'}/${b.axles || '?'}ax`);
   res.json({ ok: true });
 });
 // Everything a VIN label or MSO print needs for one unit, straight from the database.
-const VIN_YEAR_MAP = 'ABCDEFGHJKLMNPRSTVWXY'; // pos 10, A=2010 (mirrors vin.js yearCode)
 app.get('/api/trailers/:id/print-data', authMiddleware, requireVinAuthority, async (req, res) => {
   const t = await one(`SELECT t.id, t.vin, t.serial, t.order_id, m.id AS model_id, m.name AS model_name, m.category,
                               m.gvwr_lbs, m.empty_weight_lbs, m.tire, m.rim, m.tire_psi, m.length_ft,
@@ -2207,13 +2210,12 @@ app.get('/api/trailers/:id/print-data', authMiddleware, requireVinAuthority, asy
                          LEFT JOIN customer c ON c.id = COALESCE(t.customer_id, o.customer_id)
                         WHERE t.id=$1`, [req.params.id]);
   if (!t) return res.status(404).json({ error: 'unit not found' });
-  const yi = VIN_YEAR_MAP.indexOf(String(t.vin || '')[9]);
   const gvwr = t.gvwr_lbs != null ? Number(t.gvwr_lbs) : null;
   const empty = t.empty_weight_lbs != null ? Number(t.empty_weight_lbs) : null;
   res.json({
     unitId: t.id, vin: t.vin, serial: t.serial, orderId: t.order_id,
     modelId: t.model_id, model: t.model_name, type: t.category,
-    year: yi >= 0 ? 2010 + yi : new Date().getFullYear(),
+    year: vinYear(t.vin) ?? new Date().getFullYear(),
     gvwrLbs: gvwr, emptyWeightLbs: empty,
     cargoMaxLbs: gvwr != null && empty != null ? gvwr - empty : null,
     tire: t.tire, rim: t.rim, tirePsi: t.tire_psi != null ? Number(t.tire_psi) : null,

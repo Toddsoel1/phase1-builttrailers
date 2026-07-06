@@ -134,10 +134,25 @@ async function run() {
       [p.id, p.name, p.type, p.vendor || 'INT', p.uom || '', p.spec || '',
        p.cost || 0, p.onHand || 0, p.reorder || 0, p.cushion || 0, p.lot || 1]);
   }
-  // models + bom + labor
+  // models + bom + labor. VIN/print specs are derived so a fresh (dev/test) database can issue
+  // scheme-compliant VINs out of the box; production models carry their real numbers via the
+  // Model print specs card. Known-real values: UT7X16T is 19 ft overall (per the MSO sample)
+  // and P25TR is 32 ft / 3 axles (decoded from the physical VIN label sample).
+  const axlesOf = a => /tri/i.test(a || '') ? 3 : /tand/i.test(a || '') ? 2 : 1;
+  const bodyOf = c => ({ boat: 'B', watercraft: 'B', utility: 'U', landscape: 'R', bbq: 'G' })[String(c || '').toLowerCase()] || 'U';
+  const lengthOf = m => {
+    if (m.id === 'P25TR') return 32;
+    let mm = /(\d+)\s*ft/i.exec(m.name || ''); if (mm) return Number(mm[1]);
+    mm = /\d+\s*[xX](\d+)/.exec(m.id || '') || /\d+\s*[xX]\s*(\d+)/.exec(m.name || '');
+    if (mm) return Number(mm[1]) + 3;                       // box length + tongue
+    const c = String(m.cat || '').toLowerCase();
+    return c === 'boat' ? 30 : c === 'watercraft' ? 15 : 12;
+  };
   for (const m of catalog.models) {
-    await q('INSERT INTO model(id,name,category,axle,price,cap) VALUES ($1,$2,$3,$4,$5,$6)',
-      [m.id, m.name, m.cat || '', m.axle || '', m.price || 0, m.cap || 0]);
+    await q(`INSERT INTO model(id,name,category,axle,price,cap,length_ft,axles,hitch_code,body_code)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'B',$9)`,
+      [m.id, m.name, m.cat || '', m.axle || '', m.price || 0, m.cap || 0,
+       lengthOf(m), axlesOf(m.axle), bodyOf(m.cat)]);
     for (const b of m.bom) await q('INSERT INTO bom_line(model_id,part_id,qty) VALUES ($1,$2,$3)', [m.id, b.p, b.q]);
     for (const l of (m.labor || [])) await q('INSERT INTO model_labor(model_id,ws,hours) VALUES ($1,$2,$3)', [m.id, l.ws, l.h]);
   }

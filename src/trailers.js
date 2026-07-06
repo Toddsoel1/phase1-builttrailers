@@ -62,7 +62,7 @@ export async function assignVinsForOrder(orderId, user) {
   const assigned = [];
   for (const u of units) {
     if (u.vin) continue;
-    const { vin, serial } = await generateVin({ modelId: o.model_id, category: o.category });
+    const { vin, serial } = await generateVin(o.model_id);
     await q(`UPDATE trailer SET vin=$1, serial=$2, status='VIN Assigned', vin_assigned_at=now(), vin_assigned_by=$3 WHERE id=$4`,
       [vin, serial, user?.id || null, u.id]);
     assigned.push({ id: u.id, vin });

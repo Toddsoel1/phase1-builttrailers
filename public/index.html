@@ -643,9 +643,9 @@ const HELP={
       <li>VIN assignment requires <strong>Accounting</strong> access. Everyone with Trailers access can view the registry.</li>
     </ol>
     <h4 style="color:var(--accent);margin:14px 0 6px">VIN format</h4>
-    <p>Each VIN is a standard 17 characters: your WMI (manufacturer code) + a model descriptor + a calculated check digit + the model-year code + plant code + a sequential serial. The check digit is computed automatically so every VIN validates.</p>
+    <p>VINs follow the filed 49 CFR Part 565 scheme exactly: <strong>WMI</strong> (7XJ) + <strong>hitch type</strong> + <strong>body type</strong> + <strong>length in feet</strong> (2 digits) + <strong>axle count</strong> + calculated <strong>check digit</strong> + <strong>model-year code</strong> + <strong>plant</strong> (S = Saint George) + a 6-digit serial that <strong>restarts at 000001 each model year</strong>. Positions 4–8 come from each model's specs (Print Center → Model print specs) — a VIN can't be issued until Length and Axles are set. Every new VIN is auto-verified against the NHTSA vPIC decoder.</p>
     <h4 style="color:var(--accent);margin:14px 0 6px">VIN Settings</h4>
-    <p>Click <strong>⚙ VIN Settings</strong> (Accounting only) to set your <strong>WMI</strong> — the 3-character manufacturer code NHTSA assigns you — and your plant code. Set the real WMI before issuing live VINs; it defaults to a placeholder.</p>
+    <p>Click <strong>⚙ VIN Settings</strong> (Accounting only) to set your <strong>WMI</strong> (7XJ), <strong>plant code</strong> (S), and this model year's <strong>next serial</strong> — set it past the highest serial already issued on paper so the app can never repeat a VIN.</p>
     <h4 style="color:var(--accent);margin:14px 0 6px">Build history (per trailer)</h4>
     <p>Open a trailer and log each major step — <strong>parts built, metal bent, painted, finished, QC passed</strong> — recording who did it. The date &amp; time stamp automatically. This is your accountability trail: if a claim comes in, you can see exactly who built that trailer.</p>
     <h4 style="color:var(--accent);margin:14px 0 6px">Warranty registration</h4>
@@ -2963,26 +2963,35 @@ async function runNhtsaCheck(recheck){
   }catch(e){ toast(e.message); }
 }
 
-// ── 📐 Model print specs (GVWR / weights / tire / rim / PSI / length) ──
+// ── 📐 Model print specs (GVWR / weights / tire / rim / PSI) + VIN positions 4-8 ──
+const VIN_HITCH={B:'Ball',P:'Pintle',G:'Gooseneck',K:'Kingpin'};
+const VIN_BODY={A:'Auto/Equip hauler',B:'Boat/Watercraft',C:'Camper/Tiny home',D:'Dolly',E:'Enclosed',F:'Flat bed',G:'Cooking/Concession',H:'Deck over',J:'Low boy',K:'Container',L:'Livestock',M:'Open',N:'Dump',P:'Pump',R:'Landscape',S:'Open',T:'Tank',U:'Utility',V:'Roll-off',W:'Tilt bed',X:'Equipment',Y:'Reel',Z:'Drop deck'};
 async function loadSpecs(){
   let rows; try{ rows=await api('/api/print-specs'); }catch(e){ const b=$('specsBody'); if(b)b.innerHTML='<p class="msg err">'+esc(e.message)+'</p>'; return; }
   const b=$('specsBody'); if(!b)return;
   const inp=(id,f,v,w,ph)=>`<input id="sp_${f}_${id}" value="${v==null?'':esc(String(v))}" placeholder="${ph}" style="width:${w}px;padding:5px;border-radius:6px;border:1px solid var(--line);background:var(--panel2);color:var(--txt);font-size:12px">`;
-  b.innerHTML=`<table><thead><tr><th>Model</th><th>GVWR lbs</th><th>Empty lbs</th><th>Tire</th><th>Rim</th><th>PSI</th><th>Length ft</th><th></th></tr></thead><tbody>
+  const sel=(id,f,v,opts)=>`<select id="sp_${f}_${id}" style="padding:5px;border-radius:6px;border:1px solid var(--line);background:var(--panel2);color:var(--txt);font-size:12px">
+    ${Object.entries(opts).map(([k,lbl])=>`<option value="${k}" ${v===k?'selected':''}>${k} — ${lbl}</option>`).join('')}</select>`;
+  b.innerHTML=`<p class="muted" style="font-size:11.5px;margin-bottom:8px">Hitch, Body, <b>Length</b>, and <b>Axles</b> become VIN positions 4–8 per the filed Part 565 scheme — a VIN can't be issued until they're set. GVWR/empty/tire/rim/PSI print on the label and MSO.</p>
+  <table><thead><tr><th>Model</th><th>Hitch</th><th>Body</th><th>Length ft</th><th>Axles</th><th>GVWR lbs</th><th>Empty lbs</th><th>Tire</th><th>Rim</th><th>PSI</th><th></th></tr></thead><tbody>
     ${rows.map(m=>`<tr><td><b>${esc(m.id)}</b><br><span class="muted" style="font-size:11px">${esc(m.name)}</span></td>
-      <td>${inp(m.id,'gvwr',m.gvwrLbs,70,'10500')}</td>
-      <td>${inp(m.id,'empty',m.emptyWeightLbs,70,'2000')}</td>
-      <td>${inp(m.id,'tire',m.tire,60,'255')}</td>
-      <td>${inp(m.id,'rim',m.rim,55,'R18')}</td>
-      <td>${inp(m.id,'psi',m.tirePsi,45,'80')}</td>
-      <td>${inp(m.id,'len',m.lengthFt,55,'19')}</td>
+      <td>${sel(m.id,'hitch',m.hitchCode||'B',VIN_HITCH)}</td>
+      <td>${sel(m.id,'body',m.bodyCode||'',{'':'— pick —',...VIN_BODY})}</td>
+      <td>${inp(m.id,'len',m.lengthFt,52,'19')}</td>
+      <td>${inp(m.id,'axles',m.axles,42,'2')}</td>
+      <td>${inp(m.id,'gvwr',m.gvwrLbs,66,'10500')}</td>
+      <td>${inp(m.id,'empty',m.emptyWeightLbs,62,'2000')}</td>
+      <td>${inp(m.id,'tire',m.tire,54,'255')}</td>
+      <td>${inp(m.id,'rim',m.rim,50,'R18')}</td>
+      <td>${inp(m.id,'psi',m.tirePsi,42,'80')}</td>
       <td><button class="btn sm" onclick="saveSpecs('${esc(m.id)}')">Save</button></td></tr>`).join('')}
   </tbody></table>`;
 }
 async function saveSpecs(id){
   const g=f=>($('sp_'+f+'_'+id).value||'').trim();
   try{ await api('/api/models/'+encodeURIComponent(id)+'/specs',{method:'PATCH',body:JSON.stringify({
-      gvwrLbs:g('gvwr'),emptyWeightLbs:g('empty'),tire:g('tire'),rim:g('rim'),tirePsi:g('psi'),lengthFt:g('len')})});
+      gvwrLbs:g('gvwr'),emptyWeightLbs:g('empty'),tire:g('tire'),rim:g('rim'),tirePsi:g('psi'),lengthFt:g('len'),
+      hitchCode:g('hitch'),bodyCode:g('body'),axles:g('axles')})});
     toast('✓ '+id+' specs saved'); }
   catch(e){ toast(e.message); }
 }
@@ -3387,11 +3396,11 @@ async function assignVins(orderId,needed){
 async function vinSettings(){
   const {config}=await api('/api/trailers');
   modal('VIN Settings',`
-    <p class="muted" style="font-size:12px;margin-bottom:12px">Controls how VINs are generated. The <b>WMI</b> is your NHTSA-assigned 3-character manufacturer code (e.g. <b>7XJ</b>) and the plant code follows it at position 11. <b>Next serial</b> is where the sequence continues — set it past the highest serial you've already issued on paper so the app can never repeat a VIN. It only moves forward.</p>
+    <p class="muted" style="font-size:12px;margin-bottom:12px">Per the filed Part 565 scheme: <b>WMI</b> is your SAE-assigned code (<b>7XJ</b>), the plant code is position 11 (<b>S</b> = Saint George), and the serial (positions 12–17) <b>restarts at 000001 each model year</b>. Set the ${esc(String(config.year||''))} counter past the highest serial already issued on paper this year — it only moves forward. Positions 4–8 come from each model's specs on the Print Center.</p>
     <div class="row">
       <div class="field"><label>WMI (3 characters)</label><input id="vsWmi" maxlength="3" value="${esc(config.wmi)}" style="text-transform:uppercase;font-family:ui-monospace,monospace"></div>
       <div class="field"><label>Plant code (1 char)</label><input id="vsPlant" maxlength="1" value="${esc(config.plant)}" style="text-transform:uppercase;font-family:ui-monospace,monospace"></div>
-      <div class="field"><label>Next serial (pos 12–17)</label><input id="vsSeq" type="number" min="1" max="999999" value="${esc(String(config.nextSerial||1))}" style="font-family:ui-monospace,monospace"></div>
+      <div class="field"><label>Next ${esc(String(config.year||''))} serial</label><input id="vsSeq" type="number" min="1" max="999999" value="${esc(String(config.nextSerial||1))}" style="font-family:ui-monospace,monospace"></div>
     </div>
     <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:8px">
       <button class="btn sec" onclick="$('modalBg').remove()">Cancel</button>
