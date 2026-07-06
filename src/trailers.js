@@ -2,7 +2,7 @@
 // units). Holds the assigned VIN and is the anchor that the warranty module
 // (build log, registration, claims) will hang off of.
 import { all, one, q } from './db.js';
-import { generateVin, vinConfig, setVinConfig } from './vin.js';
+import { generateVin, vinConfig, setVinConfig, nhtsaCheckUnits } from './vin.js';
 
 async function nextTrailerId() {
   const n = (await all('SELECT id FROM trailer', [])).length;
@@ -67,6 +67,12 @@ export async function assignVinsForOrder(orderId, user) {
       [vin, serial, user?.id || null, u.id]);
     assigned.push({ id: u.id, vin });
   }
+  // Every new VIN gets verified against the NHTSA vPIC decoder, off the critical path —
+  // a network hiccup must never block a stage move. Failures surface in the Print Center.
+  if (assigned.length)
+    nhtsaCheckUnits({ unitIds: assigned.map(a => a.id) })
+      .then(r => { if (r.failed) console.warn(`NHTSA: ${r.failed}/${r.checked} new VIN(s) failed vPIC verification`); })
+      .catch(e => console.warn('NHTSA check:', e.message));
   return assigned;
 }
 
@@ -110,7 +116,7 @@ export async function releaseMsosIfPaintDone(orderId) {
 export async function printQueue(kind) {
   const rows = await all(
     `SELECT pj.id, pj.kind, pj.queued_at, t.id AS unit_id, t.vin, t.serial, t.order_id,
-            m.name AS model, m.category AS type, m.axle, c.name AS customer
+            t.nhtsa_ok, t.nhtsa_note, m.name AS model, m.category AS type, m.axle, c.name AS customer
        FROM print_job pj
        JOIN trailer t ON t.id = pj.unit_id
        LEFT JOIN model m ON m.id = t.model_id
@@ -118,7 +124,8 @@ export async function printQueue(kind) {
       WHERE pj.status='queued'${kind ? ' AND pj.kind=$1' : ''}
       ORDER BY pj.queued_at`, kind ? [kind] : []);
   return rows.map(r => ({ jobId: r.id, kind: r.kind, queuedAt: r.queued_at, unitId: r.unit_id,
-    vin: r.vin, serial: r.serial, orderId: r.order_id, model: r.model, type: r.type, axle: r.axle, customer: r.customer }));
+    vin: r.vin, serial: r.serial, orderId: r.order_id, model: r.model, type: r.type, axle: r.axle, customer: r.customer,
+    nhtsaOk: r.nhtsa_ok, nhtsaNote: r.nhtsa_note }));
 }
 
 export async function markPrinted(jobId, user) {
@@ -136,7 +143,9 @@ export async function correctVin(unitId, newVin) {
   const vin = String(newVin || '').trim().toUpperCase();
   if (vin.length !== 17) throw new Error('A VIN must be exactly 17 characters.');
   if (await one('SELECT id FROM trailer WHERE upper(vin)=$1 AND id<>$2', [vin, unitId])) throw new Error('That VIN is already assigned to another unit.');
-  await q('UPDATE trailer SET vin=$1 WHERE id=$2', [vin, unitId]);
+  // A corrected VIN invalidates the old NHTSA result — clear it and re-verify in the background.
+  await q('UPDATE trailer SET vin=$1, nhtsa_checked_at=NULL, nhtsa_ok=NULL, nhtsa_note=NULL WHERE id=$2', [vin, unitId]);
+  nhtsaCheckUnits({ unitIds: [unitId] }).catch(e => console.warn('NHTSA check:', e.message));
   return { unitId, oldVin: u.vin, newVin: vin };
 }
 

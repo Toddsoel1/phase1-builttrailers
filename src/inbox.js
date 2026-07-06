@@ -65,6 +65,13 @@ export async function actionItemsFor(user) {
       label: `${plural(n, 'dealer stock request')} awaiting a yes/no`, count: n, link: 'orders' });
   }
 
+  // 3c. VINs that failed NHTSA vPIC verification — a compliance problem for the office.
+  if (isAdmin || holds('Office Manager', 'General Manager')) {
+    const n = await count(`SELECT COUNT(*)::int AS n FROM trailer WHERE nhtsa_ok = false`);
+    if (n) items.push({ key: 'nhtsa_fail', icon: '🛑',
+      label: `${plural(n, 'VIN')} failed the NHTSA check — fix before labels/MSOs print`, count: n, link: 'printcenter' });
+  }
+
   // 4. Replenishment — never run out of what the scheduled orders need.
   //    Shop Specialist / Shop Manager (and admins) get the targeted MRP push with specifics:
   //    ORDER NOW / BUILD NOW when a part will run out before replenishment can land.

@@ -7,7 +7,7 @@
 //   pos 12-17 sequential serial
 // WMI and plant are stored in app_config so Accounting can set the real
 // NHTSA-assigned values before any live VINs are issued.
-import { one, q } from './db.js';
+import { all, one, q } from './db.js';
 
 const DEFAULTS = { wmi: 'BLT', plant: 'A' };
 
@@ -26,11 +26,21 @@ function sanitize(s, len, pad = '0') {
 }
 
 export async function vinConfig() {
-  return { wmi: await getCfg('vin_wmi', DEFAULTS.wmi), plant: await getCfg('vin_plant', DEFAULTS.plant) };
+  return { wmi: await getCfg('vin_wmi', DEFAULTS.wmi), plant: await getCfg('vin_plant', DEFAULTS.plant),
+    nextSerial: Number(await getCfg('vin_seq', '1')) || 1 };
 }
-export async function setVinConfig({ wmi, plant }) {
+export async function setVinConfig({ wmi, plant, nextSerial }) {
   if (wmi != null && wmi !== '') await setCfg('vin_wmi', sanitize(wmi, 3));
   if (plant != null && plant !== '') await setCfg('vin_plant', sanitize(plant, 1));
+  // Where the sequence continues from — set past the highest serial already issued on paper,
+  // so app VINs can never collide with pre-app trailers. Forward-only: never rewind the counter.
+  if (nextSerial != null && nextSerial !== '') {
+    const n = Math.floor(Number(nextSerial));
+    if (!Number.isFinite(n) || n < 1 || n > 999999) throw new Error('Next serial must be between 1 and 999999.');
+    const cur = Number(await getCfg('vin_seq', '1')) || 1;
+    if (n < cur) throw new Error(`The serial counter is already at ${cur} — it can only move forward.`);
+    await setCfg('vin_seq', n);
+  }
   return vinConfig();
 }
 
@@ -78,4 +88,70 @@ export async function generateVin({ modelId, category }) {
   const provisional = wmi3 + vds + '0' + yr + plant1 + serial6; // '0' placeholder at pos 9 (weight 0)
   const vin = wmi3 + vds + checkDigit(provisional) + yr + plant1 + serial6;
   return { vin, serial };
+}
+
+// ---- NHTSA vPIC verification ----
+// Every issued VIN is double-checked against the federal decoder (the API behind
+// https://vpic.nhtsa.dot.gov/decoder/): check digit, WMI/manufacturer registration,
+// model year, and vehicle type. Results are stored on the trailer so the office sees
+// pass/fail in the Print Center without re-querying NHTSA.
+const VPIC = 'https://vpic.nhtsa.dot.gov/api/vehicles';
+const YEAR_MAP = 'ABCDEFGHJKLMNPRSTVWXY';
+const vinYear = vin => { const i = YEAR_MAP.indexOf(String(vin || '')[9]); return i >= 0 ? 2010 + i : null; };
+
+// Judge one vPIC DecodeVinValues row. Pure — unit-tested with fixture payloads.
+export function evaluateNhtsa(row, vin) {
+  const issues = [];
+  const codes = String(row.ErrorCode ?? '').split(/[,;]/).map(s => s.trim()).filter(Boolean);
+  if (!codes.every(c => c === '0'))
+    issues.push(String(row.ErrorText || `vPIC error ${row.ErrorCode}`).split(';')[0].trim());
+  const mfr = String(row.Manufacturer || row.Make || '').trim();
+  if (!mfr) issues.push('Manufacturer not recognized — is the WMI registered with NHTSA?');
+  else if (!/BUILT/i.test(mfr)) issues.push(`Manufacturer decodes as "${mfr}" — expected Built Manufacturing`);
+  const expectYear = vinYear(vin);
+  if (row.ModelYear && expectYear && Number(row.ModelYear) !== expectYear)
+    issues.push(`Model year decodes as ${row.ModelYear} — this VIN was issued for ${expectYear}`);
+  const vt = String(row.VehicleType || '').trim();
+  if (vt && !/TRAILER/i.test(vt)) issues.push(`Vehicle type decodes as "${vt}" — expected TRAILER`);
+  return { ok: issues.length === 0, note: issues.join(' · ') || 'VIN decoded clean' };
+}
+
+// Decode up to 50 VINs in one vPIC batch call. Returns { VIN -> vPIC row }.
+async function vpicBatch(vins) {
+  const r = await fetch(`${VPIC}/DecodeVINValuesBatch/`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: `format=json&data=${encodeURIComponent(vins.join(';'))}`,
+  });
+  if (!r.ok) throw new Error(`vPIC ${r.status}`);
+  const data = await r.json();
+  const map = {};
+  for (const row of data.Results || []) if (row.VIN) map[String(row.VIN).toUpperCase()] = row;
+  return map;
+}
+
+// Check the given units (or every VIN'd unit with `all: true`) and stamp the results.
+// Network failure marks nothing — units stay "unchecked" and the error is reported.
+export async function nhtsaCheckUnits({ unitIds, checkAll, recheck } = {}) {
+  if (['1', 'true'].includes(String(process.env.NHTSA_DISABLED))) return { skipped: 'NHTSA checks disabled' };
+  let units;
+  if (checkAll) units = await all(`SELECT id, vin FROM trailer WHERE vin IS NOT NULL${recheck ? '' : ' AND nhtsa_checked_at IS NULL'} ORDER BY id`, []);
+  else units = await all(`SELECT id, vin FROM trailer WHERE id = ANY($1) AND vin IS NOT NULL`, [unitIds || []]);
+  if (!units.length) return { checked: 0, passed: 0, failed: 0, results: [] };
+  const results = [];
+  let passed = 0, failed = 0;
+  for (let i = 0; i < units.length; i += 50) {
+    const batch = units.slice(i, i + 50);
+    let rows;
+    try { rows = await vpicBatch(batch.map(u => u.vin)); }
+    catch (e) { return { checked: results.length, passed, failed, results, error: `NHTSA vPIC unreachable (${e.message}) — nothing marked; try again later.` }; }
+    for (const u of batch) {
+      const row = rows[String(u.vin).toUpperCase()];
+      const v = row ? evaluateNhtsa(row, u.vin) : { ok: false, note: 'vPIC returned no result for this VIN' };
+      await q(`UPDATE trailer SET nhtsa_checked_at=now(), nhtsa_ok=$1, nhtsa_note=$2 WHERE id=$3`, [v.ok, v.note.slice(0, 400), u.id]);
+      results.push({ unitId: u.id, vin: u.vin, ...v });
+      if (v.ok) passed++; else failed++;
+    }
+  }
+  return { checked: results.length, passed, failed, results };
 }

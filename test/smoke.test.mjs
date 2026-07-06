@@ -15,7 +15,7 @@ const BASE = `http://localhost:${PORT}`;
 // real external service regardless of what's in .env.
 const HERMETIC = { PORT: String(PORT), ACCOUNTING_MODE: 'simulated', SMS_ENABLED: '0',
   QBO_CLIENT_ID: '', QBO_CLIENT_SECRET: '', JWT_SECRET: 'test-secret-smoke',
-  LOGIN_RATE_MAX: '100000', PORTAL_RATE_MAX: '100000', DEALER_FEED_TOKEN: 'test-feed-token', GEOCODE_DISABLED: '1',
+  LOGIN_RATE_MAX: '100000', PORTAL_RATE_MAX: '100000', DEALER_FEED_TOKEN: 'test-feed-token', GEOCODE_DISABLED: '1', NHTSA_DISABLED: '1',
   BACKUP_DIR: path.join(tmpdir(), 'bt-smoke-backups'), TIME_SURVEY_MIN_ITEMS: '3' };
 
 let server, dbDir, token, orderId, modelId;
@@ -333,6 +333,53 @@ test('VIN: print center + correction are restricted to OM/GM/Admin', async () =>
   const h = { headers: { Authorization: 'Bearer ' + sales } };
   assert.equal((await fetch(BASE + '/api/print-queue', h)).status, 403, 'sales cannot open the print center');
   assert.equal((await fetch(BASE + `/api/trailers/${vinUnitId}/vin`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + sales }, body: JSON.stringify({ vin: 'BLTHACKVIN0000001' }) })).status, 403, 'sales cannot change a VIN');
+});
+
+test('NHTSA vPIC verdict logic: clean, check-digit failure, unregistered WMI, wrong year', async () => {
+  const { evaluateNhtsa } = await import('../src/vin.js');
+  // vin position 10 = 'T' -> model year 2026
+  const vin = '7XJBB3236TS001714';
+  const clean = evaluateNhtsa({ ErrorCode: '0', ErrorText: '0 - VIN decoded clean. Check Digit (9th position) is correct',
+    Make: 'BUILT', Manufacturer: 'BUILT MANUFACTURING LLC', ModelYear: '2026', VehicleType: 'TRAILER' }, vin);
+  assert.equal(clean.ok, true);
+  assert.match(clean.note, /clean/i);
+  const badDigit = evaluateNhtsa({ ErrorCode: '1', ErrorText: '1 - Check Digit (9th position) does not calculate properly',
+    Manufacturer: 'BUILT MANUFACTURING LLC', ModelYear: '2026', VehicleType: 'TRAILER' }, vin);
+  assert.equal(badDigit.ok, false);
+  assert.match(badDigit.note, /check digit/i);
+  const unregistered = evaluateNhtsa({ ErrorCode: '7', ErrorText: '7 - Manufacturer is not registered', Manufacturer: '', ModelYear: '' }, vin);
+  assert.equal(unregistered.ok, false);
+  assert.match(unregistered.note, /WMI registered with NHTSA/i);
+  const wrongYear = evaluateNhtsa({ ErrorCode: '0', ErrorText: '0 - VIN decoded clean',
+    Manufacturer: 'BUILT MANUFACTURING LLC', ModelYear: '2024', VehicleType: 'TRAILER' }, vin);
+  assert.equal(wrongYear.ok, false);
+  assert.match(wrongYear.note, /2024.*2026/);
+  const wrongType = evaluateNhtsa({ ErrorCode: '0', ErrorText: '0 - VIN decoded clean',
+    Manufacturer: 'BUILT MANUFACTURING LLC', ModelYear: '2026', VehicleType: 'PASSENGER CAR' }, vin);
+  assert.equal(wrongType.ok, false);
+  assert.match(wrongType.note, /TRAILER/);
+});
+
+test('NHTSA endpoints: OM/GM/Admin only; disabled cleanly in hermetic env', async () => {
+  const sr = await api('/api/auth/login', { method: 'POST', body: JSON.stringify({ username: 'aruiz', password: 'built2026' }) });
+  const sales = (await sr.json()).token;
+  assert.equal((await fetch(BASE + '/api/vin/nhtsa-check', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + sales }, body: '{}' })).status, 403, 'sales cannot run NHTSA checks');
+  assert.equal((await fetch(BASE + '/api/vin/nhtsa-failures', { headers: { Authorization: 'Bearer ' + sales } })).status, 403, 'sales cannot read failures');
+  const r = await json(await api('/api/vin/nhtsa-check', { method: 'POST', body: JSON.stringify({ all: true }) }));
+  assert.equal(r.skipped, 'NHTSA checks disabled', 'NHTSA_DISABLED short-circuits (no network in tests)');
+  const failures = await json(await api('/api/vin/nhtsa-failures'));
+  assert.ok(Array.isArray(failures), 'failures list is an array');
+  const q = await json(await api('/api/print-queue?kind=vin'));
+  for (const j of q) assert.ok('nhtsaOk' in j, 'queue rows carry the NHTSA verdict');
+});
+
+test('VIN settings: serial counter is settable but forward-only (no collision with paper VINs)', async () => {
+  const cur = (await json(await api('/api/trailers'))).config;
+  assert.ok(cur.nextSerial >= 1, 'config exposes the next serial');
+  const bumped = await json(await api('/api/trailers/config', { method: 'PUT', body: JSON.stringify({ nextSerial: cur.nextSerial + 4000 }) }));
+  assert.equal(bumped.nextSerial, cur.nextSerial + 4000, 'serial jumps forward');
+  assert.equal((await api('/api/trailers/config', { method: 'PUT', body: JSON.stringify({ nextSerial: 1 }) })).status, 400, 'rewinding the counter is refused');
+  assert.equal((await api('/api/trailers/config', { method: 'PUT', body: JSON.stringify({ nextSerial: 10000000 }) })).status, 400, 'out-of-range serial refused');
 });
 
 test('print specs + print-data: the numbers the VIN label and MSO carry', async () => {

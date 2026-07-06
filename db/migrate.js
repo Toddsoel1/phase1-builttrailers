@@ -223,6 +223,10 @@ const colMigrations = [
   `ALTER TABLE model ADD COLUMN IF NOT EXISTS rim TEXT`,
   `ALTER TABLE model ADD COLUMN IF NOT EXISTS tire_psi INT`,
   `ALTER TABLE model ADD COLUMN IF NOT EXISTS length_ft NUMERIC(5,1)`,
+  // NHTSA vPIC verification per VIN: checked when, pass/fail, and what the decoder said.
+  `ALTER TABLE trailer ADD COLUMN IF NOT EXISTS nhtsa_checked_at TIMESTAMPTZ`,
+  `ALTER TABLE trailer ADD COLUMN IF NOT EXISTS nhtsa_ok BOOLEAN`,
+  `ALTER TABLE trailer ADD COLUMN IF NOT EXISTS nhtsa_note TEXT`,
   // A dealer's "I'll take that one" on an unsold stock build — staff approve (which sells the
   // order via the existing assign-customer path) or decline; competing requests auto-decline.
   `CREATE TABLE IF NOT EXISTS stock_request (id SERIAL PRIMARY KEY, order_id TEXT NOT NULL,

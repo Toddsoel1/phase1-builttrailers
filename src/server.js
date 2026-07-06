@@ -48,6 +48,7 @@ import { geocodeAddress } from './geocode.js';
 import { emailConfigured } from './email.js';
 import { runReminders } from './reminders.js';
 import { sendWeeklyDigest } from './digest.js';
+import { nhtsaCheckUnits } from './vin.js';
 import * as analytics from './analytics.js';
 import * as andon from './andon.js';
 import { runBackup } from './backup.js';
@@ -2140,9 +2141,11 @@ app.post('/api/trailers/assign', authMiddleware, requireSection('accounting'), a
   } catch (e) { res.status(400).json({ error: e.message }); }
 });
 app.put('/api/trailers/config', authMiddleware, requireSection('accounting'), async (req, res) => {
-  const cfg = await trailers.setVinConfig(req.body || {});
-  await audit(req, 'vin.config', JSON.stringify(cfg));
-  res.json(cfg);
+  try {
+    const cfg = await trailers.setVinConfig(req.body || {});
+    await audit(req, 'vin.config', JSON.stringify(cfg));
+    res.json(cfg);
+  } catch (e) { res.status(400).json({ error: e.message }); }
 });
 
 // Only the Office Manager, General Manager, or an Admin may run the VIN/MSO print center or
@@ -2217,6 +2220,19 @@ app.get('/api/trailers/:id/print-data', authMiddleware, requireVinAuthority, asy
     lengthFt: t.length_ft != null ? Number(t.length_ft) : null,
     dealer: t.dealer ? { name: t.dealer, address: t.address, city: t.city, state: t.state, zip: t.zip } : null,
   });
+});
+// Verify VINs against the NHTSA vPIC decoder — on demand from the Print Center.
+// {unitIds:[...]} for specific units, {all:true} for every unchecked VIN, {all:true,recheck:true} for everything.
+app.post('/api/vin/nhtsa-check', authMiddleware, requireVinAuthority, async (req, res) => {
+  const b = req.body || {};
+  const r = await nhtsaCheckUnits({ unitIds: b.unitIds, checkAll: !!b.all, recheck: !!b.recheck });
+  if (!r.skipped) await audit(req, 'vin.nhtsa', `checked ${r.checked ?? 0}: ${r.passed ?? 0} ok, ${r.failed ?? 0} failed${r.error ? ' — ' + r.error : ''}`);
+  res.json(r);
+});
+// Stored NHTSA failures — what the Print Center's shield card lists.
+app.get('/api/vin/nhtsa-failures', authMiddleware, requireVinAuthority, async (_req, res) => {
+  res.json(await all(`SELECT t.id AS unit_id, t.vin, t.nhtsa_note, t.nhtsa_checked_at, t.order_id
+                        FROM trailer t WHERE t.nhtsa_ok = false ORDER BY t.nhtsa_checked_at DESC`, []));
 });
 // Correct an assigned VIN after the fact (e.g. crossed stickers). Build history stays with the unit.
 app.post('/api/trailers/:id/vin', authMiddleware, requireVinAuthority, async (req, res) => {
