@@ -528,6 +528,55 @@ test('section grants unlock print center, boat admin, and order entry — the ma
   assert.equal((await fetch(BASE + '/api/orders', { method: 'POST', headers: printH, body: JSON.stringify({ customerId: cust.id, modelId: model.id, qty: 1 }) })).status, 403, 'no neworder grant -> still cannot sell');
 });
 
+test('bill-to vs ship-to: MSO + invoices bill the parent entity; the BOL ships to the lot with its window', async () => {
+  // Only Accounting / Sales / GM (or admin) may set billing — an ordinary editor title cannot.
+  await api('/api/roles', { method: 'POST', body: JSON.stringify({ name: 'Yard Hand', tier: 'editor', sections: ['orders'] }) });
+  const yh = await json(await api('/api/users', { method: 'POST', body: JSON.stringify({ name: 'Yard Hand Person', titles: ['Yard Hand'], password: 'yardPw123' }) }));
+  const yl = await json(await fetch(BASE + '/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: yh.username, password: 'yardPw123' }) }));
+  const cust = await json(await api('/api/customers', { method: 'POST', body: JSON.stringify({ name: 'Ship Lot Powersports', kind: 'Dealership', allowed: ['Utility'] }) }));
+  await api('/api/customers/' + cust.id, { method: 'PATCH', body: JSON.stringify({ address: '500 Lake Rd', city: 'Provo', state: 'UT', zip: '84601' }) });
+  assert.equal((await fetch(BASE + '/api/customers/' + cust.id + '/billing', { method: 'PATCH', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + yl.token }, body: '{}' })).status, 403, 'a plain editor title cannot set billing');
+  assert.equal((await api('/api/customers/' + cust.id + '/billing', { method: 'PATCH', body: JSON.stringify({
+    billName: 'Ship Lot Holdings LLC', billAddress: '1 Corporate Way', billCity: 'Salt Lake City', billState: 'ut', billZip: '84101',
+    deliveryDays: [2, 4], deliveryStart: '07:30', deliveryEnd: '15:00', deliveryNote: 'call ahead 30 min' }) })).status, 200);
+  const c2 = (await json(await api('/api/customers'))).find(c => c.id === cust.id);
+  assert.equal(c2.billName, 'Ship Lot Holdings LLC');
+  assert.equal(c2.billState, 'UT', 'state uppercased');
+  assert.deepEqual(c2.deliveryWindow.days, [2, 4]);
+  assert.equal(c2.deliveryWindow.note, 'call ahead 30 min');
+
+  // Build an order so a unit exists, then check every document picks the right entity.
+  const o = await json(await api('/api/orders', { method: 'POST', body: JSON.stringify({ customerId: cust.id, modelId: 'UT7X16T', qty: 1 }) }));
+  await api('/api/orders/' + o.id + '/stage', { method: 'PATCH', body: JSON.stringify({ stage: 'Build' }) });
+  const unit = (await json(await api('/api/trailers'))).registry.find(t => t.orderId === o.id);
+  const pd = await json(await api('/api/trailers/' + unit.id + '/print-data'));
+  assert.equal(pd.billTo.name, 'Ship Lot Holdings LLC', 'MSO Sold-to = billing entity');
+  assert.equal(pd.dealer.name, 'Ship Lot Holdings LLC', 'print layout key carries the bill-to');
+  assert.equal(pd.shipTo.name, 'Ship Lot Powersports', 'ship-to stays the lot');
+
+  const bol = await json(await api('/api/orders/' + o.id + '/bol'));
+  assert.match(bol.shipper.name, /Built Manufacturing/);
+  assert.equal(bol.shipTo.name, 'Ship Lot Powersports');
+  assert.equal(bol.shipTo.address, '500 Lake Rd');
+  assert.equal(bol.billTo.name, 'Ship Lot Holdings LLC');
+  assert.deepEqual(bol.deliveryWindow.days, [2, 4], 'BOL carries the receiving window');
+  assert.equal(bol.units.length, 1);
+  assert.ok(bol.units[0].vin, 'BOL lists the VIN');
+
+  // Invoice bills the parent: pass QC, move to Ready, invoice, check the ledger party.
+  await api('/api/trailers/' + unit.id + '/qc', { method: 'POST', body: JSON.stringify({ confirmed: true }) });
+  await api('/api/orders/' + o.id + '/stage', { method: 'PATCH', body: JSON.stringify({ stage: 'Ready' }) });
+  assert.equal((await api('/api/orders/' + o.id + '/invoice', { method: 'POST' })).status, 200);
+  const ev = (await json(await api('/api/accounting'))).events.find(e => e.kind === 'invoice' && e.ref === o.id);
+  assert.equal(ev.party, 'Ship Lot Holdings LLC', 'the invoice bills the parent company');
+
+  // A stock order has no destination — the BOL refuses.
+  const stock = await json(await api('/api/orders/stock', { method: 'POST', body: JSON.stringify({ modelId: 'UT7X16T', qty: 1 }) }));
+  const noBol = await api('/api/orders/' + stock.id + '/bol');
+  assert.equal(noBol.status, 400);
+  assert.match((await noBol.json()).error, /destination/i);
+});
+
 test('guarded reprints: reason required, permanent register, requeue with badge, MSO needs a buyer', async () => {
   const sr = await api('/api/auth/login', { method: 'POST', body: JSON.stringify({ username: 'aruiz', password: 'built2026' }) });
   const sales = (await sr.json()).token;

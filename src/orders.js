@@ -32,6 +32,9 @@ export async function customersWithTypes() {
     smsConsent: !!c.sms_consent, smsConsentAt: c.sms_consent_at || null,
     address: c.address || null, city: c.city || null, state: c.state || null, zip: c.zip || null,
     lat: c.lat == null ? null : Number(c.lat), lng: c.lng == null ? null : Number(c.lng),
+    billName: c.bill_name || null, billAddress: c.bill_address || null, billCity: c.bill_city || null,
+    billState: c.bill_state || null, billZip: c.bill_zip || null,
+    deliveryWindow: (() => { try { return c.delivery_window ? JSON.parse(c.delivery_window) : null; } catch { return null; } })(),
     allowed: allowed.filter(a => a.customer_id === c.id).map(a => a.type)
   }));
 }
@@ -86,7 +89,8 @@ export async function consumeInventory(orderId, userId) {
   // Bill once (idempotent on `billed`), independent of consume. Skipped if billed as part of
   // an invoice batch (invoice_batch_id) so a trailer is never invoiced twice.
   if (!o.invoice_batch_id && !o.billed) {
-    const info = await one(`SELECT m.id AS model_id, m.name AS model, m.price, c.name AS customer FROM sales_order o
+    const info = await one(`SELECT m.id AS model_id, m.name AS model, m.price,
+                                   COALESCE(c.bill_name, c.name) AS customer FROM sales_order o
                               LEFT JOIN model m ON m.id=o.model_id
                               LEFT JOIN customer c ON c.id=o.customer_id WHERE o.id=$1`, [orderId]);
     if (info) {

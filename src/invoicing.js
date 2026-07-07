@@ -142,7 +142,9 @@ export async function postBatchInvoice(batchId, user) {
     description: `${li.model || 'Trailer'}${li.vin ? ' — VIN ' + li.vin : ''}`,
     amount: li.amount,
   }));
-  await postInvoice(batchId, b.customer_name || 'Dealer', total, user?.id || null, lines);
+  // Invoices bill the BILL-TO entity (corporate/parent office when one exists).
+  const billName = (await one('SELECT COALESCE(bill_name, name) AS n FROM customer WHERE id=$1', [b.customer_id]))?.n;
+  await postInvoice(batchId, billName || b.customer_name || 'Dealer', total, user?.id || null, lines);
   // The cost side — same as a single-order invoice: catch up any unconsumed stages, then
   // relieve each order's accumulated WIP into COGS. (consumeInventory skips its own billing
   // for batched orders, so nothing double-invoices.)

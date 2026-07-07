@@ -217,6 +217,8 @@ const hasTitle = (...names) => myTitles().some(t=>names.includes(t));
 // Section grants from the Job Titles matrix count too (editor tier or above) — mirrors the server.
 const sectionGrant = s => ME && ME.role!=='viewer' && Array.isArray(ME.sections) && ME.sections.includes(s);
 const canSell = () => ME && (ME.role==='admin' || hasTitle('Sales','Rep Specialist','General Manager') || sectionGrant('neworder'));
+// Bill-to + delivery windows are decided by Accounting (Office Manager), Sales, or the GM.
+const canBillShip = () => ME && (ME.role==='admin' || hasTitle('Sales','Rep Specialist','Office Manager','General Manager'));
 
 // ---- login ----
 async function login(){
@@ -2273,10 +2275,11 @@ async function orderDetail(id){
     <table><thead><tr><th>Part</th><th class="right">Need</th><th class="right">On hand</th><th class="center">Status</th></tr></thead><tbody>
     ${o.bom.map(p=>`<tr><td>${esc(p.name)}</td><td class="right">${p.need}</td><td class="right">${p.onHand}</td><td class="center">${p.short?'<span class="badge b-below">short</span>':'<span class="badge b-ok">ok</span>'}</td></tr>`).join('')}
     </tbody></table>
-    ${canSell()?`<div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--line);display:flex;gap:8px;flex-wrap:wrap">
-      ${o.stage==='Cancelled'
+    ${canSell()||o.customer?`<div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--line);display:flex;gap:8px;flex-wrap:wrap">
+      ${o.customer&&o.stage!=='Cancelled'?`<button class="btn sec" onclick="printBOL('${o.id}')" title="Printable Bill of Lading for delivery — ship-to, VINs, weights, and the destination's receiving hours">🚚 Bill of Lading</button>`:''}
+      ${canSell()?o.stage==='Cancelled'
         ?`<button class="btn sec" onclick="restoreOrder('${o.id}')">↩️ Restore order</button>`
-        :`<button class="btn sec" onclick="editOrderModal('${o.id}')">✏️ Edit details</button>${!o.billed?`<button class="btn sec" style="color:#e57373" onclick="rejectOrder('${o.id}')">🚫 Reject</button>`:''}${o.stage==='Ready'&&!o.billed?`<button class="btn" onclick="invoiceOrder('${o.id}')">🧾 Invoice &amp; close</button>`:''}`}
+        :`<button class="btn sec" onclick="editOrderModal('${o.id}')">✏️ Edit details</button>${!o.billed?`<button class="btn sec" style="color:#e57373" onclick="rejectOrder('${o.id}')">🚫 Reject</button>`:''}${o.stage==='Ready'&&!o.billed?`<button class="btn" onclick="invoiceOrder('${o.id}')">🧾 Invoice &amp; close</button>`:''}`:''}
     </div>`:''}`);
 }
 function rejectOrder(id){
@@ -2389,6 +2392,7 @@ async function viewCustomers(){
   const [custs,types]=await Promise.all([api('/api/customers'),api('/api/trailer-types')]);
   window._custTypes=types;
   const active=custs.filter(c=>c.active!==false), inactive=custs.filter(c=>c.active===false);
+  const showActs=canSell()||canBillShip();
   const row=c=>{const off=c.active===false;return `<tr style="${off?'opacity:0.5':''}">
      <td><b>${esc(c.name)}</b>${off?' <span class="pill" style="background:#888;font-size:10px">Inactive</span>':''}${c.kind==='Dealership'?(c.lat!=null?' <span title="On the dealer map">📍</span>':' <span class="badge b-low" style="font-size:9px">no map</span>'):''}<br><span class="muted" style="font-size:11px">${esc(c.contact||'')}</span></td>
      <td>${canSell()?`<select onchange="setCustomerKind('${c.id}',this.value)" style="padding:3px 6px;border-radius:6px;border:1px solid var(--line);background:var(--panel2);color:var(--txt);font-size:12px"><option value="Dealership" ${c.kind==='Dealership'?'selected':''}>Dealership</option><option value="Customer" ${c.kind!=='Dealership'?'selected':''}>Customer</option></select>`:`<span class="badge ${c.kind==='Dealership'?'b-buy':'b-low'}">${esc(c.kind)}</span>`}</td>
@@ -2396,12 +2400,12 @@ async function viewCustomers(){
      <td style="font-size:12px">${c.smsConsent?'<span style="color:#4caf50">✓ Consented</span>':'<span class="muted">—</span>'}</td>
      <td class="muted" style="font-size:12px">${esc(c.rep||'—')}</td>
      <td>${types.map((t,i)=>{const on=c.allowed.includes(t);return `<span class="chip" onclick="${canSell()?`toggleType('${c.id}',${i},${!on})`:''}" style="cursor:${canSell()?'pointer':'default'};border-color:${on?'var(--accent)':'var(--line)'};color:${on?'#ffb347':'var(--muted)'}">${on?'✓ ':''}${esc(t)}</span>`;}).join('')}</td>
-     ${canSell()?`<td style="white-space:nowrap">${c.kind==='Dealership'?`<button class="btn sm sec" onclick="editAddress('${c.id}')">📍 Address</button> <button class="btn sm sec" onclick="viewDealerAccounts('${c.id}','${esc(c.name)}')">🔑 Logins</button> `:''}${isAdmin()?`<button class="btn sm sec" onclick="mergeCustomer('${c.id}')" title="Fold this duplicate into another customer">⇄ Merge</button> `:''}${off?`<button class="btn sm" onclick="setCustomerActive('${c.id}',true)">Reactivate</button>`:`<button class="btn sm sec" onclick="setCustomerActive('${c.id}',false)">Inactivate</button>`}</td>`:''}
+     ${showActs?`<td style="white-space:nowrap">${c.kind==='Dealership'?`${canSell()?`<button class="btn sm sec" onclick="editAddress('${c.id}')">📍 Address</button> `:''}${canBillShip()?`<button class="btn sm sec" onclick="billShipModal('${c.id}')" title="${c.billName?'Bills to '+esc(c.billName):'Bill-to = the dealership itself'}">🧾 Bill-to${c.billName?' ✓':''}</button> `:''}${canSell()?`<button class="btn sm sec" onclick="viewDealerAccounts('${c.id}','${esc(c.name)}')">🔑 Logins</button> `:''}`:''}${isAdmin()?`<button class="btn sm sec" onclick="mergeCustomer('${c.id}')" title="Fold this duplicate into another customer">⇄ Merge</button> `:''}${canSell()?off?`<button class="btn sm" onclick="setCustomerActive('${c.id}',true)">Reactivate</button>`:`<button class="btn sm sec" onclick="setCustomerActive('${c.id}',false)">Inactivate</button>`:''}</td>`:''}
    </tr>`;};
   $('content').innerHTML=`<div class="card"><h3>Customers &amp; dealers — authorized trailer types</h3>
-   <table><thead><tr><th>Account</th><th>Type</th><th>Phone</th><th>SMS</th><th>Rep</th><th>Authorized trailer types</th>${canSell()?'<th></th>':''}</tr></thead><tbody>
+   <table><thead><tr><th>Account</th><th>Type</th><th>Phone</th><th>SMS</th><th>Rep</th><th>Authorized trailer types</th>${showActs?'<th></th>':''}</tr></thead><tbody>
    ${active.map(row).join('')}
-   ${inactive.length?`<tr><td colspan="${canSell()?7:6}" style="padding:16px 8px 4px"><span class="muted" style="font-size:11px;text-transform:uppercase;letter-spacing:.5px">Inactive (${inactive.length}) — hidden from New Order</span></td></tr>${inactive.map(row).join('')}`:''}
+   ${inactive.length?`<tr><td colspan="${showActs?7:6}" style="padding:16px 8px 4px"><span class="muted" style="font-size:11px;text-transform:uppercase;letter-spacing:.5px">Inactive (${inactive.length}) — hidden from New Order</span></td></tr>${inactive.map(row).join('')}`:''}
    </tbody></table>
    <p class="muted" style="font-size:12px;margin-top:8px">Click the trailer-type chips to toggle what each account may order (these drive the New Order form). Use <b>Type</b> to mark an account as a Dealership or Customer, and <b>Inactivate</b> accounts you no longer work with — they stay in records but disappear from New Order.</p></div>`;
 }
@@ -2429,6 +2433,93 @@ async function saveAddress(id){
   try{ const r=await api('/api/customers/'+id,{method:'PATCH',body:JSON.stringify(body)});
     closeModal(); toast(r.geocoded?'Saved — placed on the dealer map':'Saved, but no coordinates yet — add them manually or check the address'); viewCustomers(); }
   catch(e){ toast(e.message); }
+}
+// ── 🧾 Bill-to (corporate/parent office) + 🚚 delivery window per dealership ──
+const DOW=['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
+async function billShipModal(id){
+  const c=(await api('/api/customers')).find(x=>x.id===id); if(!c)return toast('Customer not found');
+  const w=c.deliveryWindow||{};
+  modal('🧾 Billing & delivery — '+esc(c.name),`
+    <h3 style="font-size:13px;color:var(--accent);margin:2px 0 6px">Bill to</h3>
+    <p class="muted" style="font-size:12px;margin-bottom:8px">The MSO's <b>Sold to</b> and every invoice go to this entity — a corporate office or parent company. <b>Leave blank to bill the dealership itself.</b></p>
+    <div class="field"><label>Billing entity name</label><input id="bsName" class="inp" value="${esc(c.billName||'')}" placeholder="e.g. Prime Powersports Holdings LLC"></div>
+    <div class="field"><label>Street address</label><input id="bsAddr" class="inp" value="${esc(c.billAddress||'')}"></div>
+    <div class="row">
+      <div class="field"><label>City</label><input id="bsCity" class="inp" value="${esc(c.billCity||'')}"></div>
+      <div class="field" style="max-width:84px"><label>State</label><input id="bsState" class="inp" value="${esc(c.billState||'')}" maxlength="2" style="text-transform:uppercase"></div>
+      <div class="field" style="max-width:120px"><label>ZIP</label><input id="bsZip" class="inp" value="${esc(c.billZip||'')}"></div>
+    </div>
+    <h3 style="font-size:13px;color:var(--accent);margin:14px 0 6px">Delivery window <span class="muted" style="text-transform:none;letter-spacing:0">— when the ship-to location can receive</span></h3>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px">
+      ${DOW.map((d,i)=>`<label style="display:flex;gap:5px;align-items:center;font-size:12.5px;cursor:pointer"><input type="checkbox" class="bsDay" value="${i+1}" ${(w.days||[]).includes(i+1)?'checked':''}>${d}</label>`).join('')}
+    </div>
+    <div class="row">
+      <div class="field"><label>From</label><input id="bsStart" class="inp" type="time" value="${esc(w.start||'08:00')}"></div>
+      <div class="field"><label>Until</label><input id="bsEnd" class="inp" type="time" value="${esc(w.end||'16:00')}"></div>
+    </div>
+    <div class="field"><label>Delivery note (optional)</label><input id="bsNote" class="inp" value="${esc(w.note||'')}" placeholder="e.g. call ahead 30 min, deliver to rear lot"></div>
+    <p class="muted" style="font-size:11.5px">Prints on every Bill of Lading for this dealer's deliveries.</p>
+    <div class="row" style="gap:8px;margin-top:8px">
+      <button class="btn" onclick="saveBillShip('${esc(id)}')">Save</button>
+      <button class="btn sec" onclick="closeModal()">Cancel</button>
+    </div>`);
+}
+async function saveBillShip(id){
+  const days=[...document.querySelectorAll('.bsDay:checked')].map(i=>Number(i.value));
+  const body={billName:$('bsName').value,billAddress:$('bsAddr').value,billCity:$('bsCity').value,billState:$('bsState').value,billZip:$('bsZip').value};
+  if(days.length||($('bsNote').value||'').trim()){ body.deliveryDays=days; body.deliveryStart=$('bsStart').value; body.deliveryEnd=$('bsEnd').value; body.deliveryNote=$('bsNote').value; }
+  try{ await api('/api/customers/'+id+'/billing',{method:'PATCH',body:JSON.stringify(body)});
+    closeModal(); toast('✓ Billing & delivery saved'); viewCustomers(); }
+  catch(e){ toast(e.message); }
+}
+// ── 🚚 Bill of Lading: printable for delivered trailer orders ──
+async function printBOL(orderId){
+  let d; try{ d=await api('/api/orders/'+encodeURIComponent(orderId)+'/bol'); }catch(e){ return toast(e.message); }
+  const blk=(t,b)=>`<div class="blk"><div class="cap">${t}</div>${b}</div>`;
+  const addr=a=>`<b>${esc(a.name||'')}</b><br>${esc(a.address||'')}<br>${[a.city,a.state].filter(Boolean).map(esc).join(', ')} ${esc(a.zip||'')}${a.phone?`<br>${esc(a.phone)}`:''}${a.contact?`<br>Attn: ${esc(a.contact)}`:''}`;
+  const w=d.deliveryWindow;
+  const dows=['','Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
+  const winTxt=w&&(w.days||[]).length?`${w.days.map(x=>dows[x]).join(', ')} ${esc(w.start||'')}–${esc(w.end||'')}${w.note?' — '+esc(w.note):''}`:(w&&w.note?esc(w.note):'—');
+  const unitW=d.unitWeightLbs, totalW=unitW!=null?unitW*d.units.length:null;
+  const rows=d.units.length?d.units.map((u,i)=>`<tr><td>${i+1}</td><td>1</td><td>New trailer — ${esc(d.model||d.modelId)}${d.lengthFt?` (${d.lengthFt} ft)`:''}</td><td class="mono">${esc(u.vin||'VIN pending')}</td><td class="r">${unitW!=null?unitW.toLocaleString()+' lbs':'—'}</td></tr>`).join('')
+    :`<tr><td>1</td><td>${d.qty}</td><td>New trailer — ${esc(d.model||d.modelId)}</td><td class="mono">VINs pending</td><td class="r">${totalW!=null?totalW.toLocaleString()+' lbs':'—'}</td></tr>`;
+  const html=`<!doctype html><html><head><meta charset="utf-8"><title>BOL ${esc(d.orderId)}</title><style>
+    @page{size:letter;margin:.55in} body{font-family:Arial,Helvetica,sans-serif;color:#111;margin:0;font-size:12px}
+    h1{font-size:20px;letter-spacing:2px;margin:0} .hd{display:flex;justify-content:space-between;align-items:flex-start;border-bottom:3px solid #000;padding-bottom:8px}
+    .hd .sub{font-size:11px;color:#444;text-align:right}
+    .cols{display:flex;gap:14px;margin:12px 0}
+    .blk{flex:1;border:1px solid #000;padding:8px;min-height:78px}
+    .cap{font-size:9px;text-transform:uppercase;letter-spacing:.8px;color:#444;margin-bottom:4px;font-weight:bold}
+    table{width:100%;border-collapse:collapse;margin:6px 0} th{border:1px solid #000;background:#eee;font-size:10px;text-transform:uppercase;padding:5px;text-align:left}
+    td{border:1px solid #000;padding:6px} .r{text-align:right} .mono{font-family:'Courier New',monospace;letter-spacing:1px}
+    .win{border:2px solid #000;padding:8px;margin:8px 0;font-size:12.5px}
+    .sigs{display:flex;gap:14px;margin-top:22px} .sig{flex:1} .sig .ln{border-bottom:1px solid #000;height:34px}
+    .sig .lbl{font-size:9px;text-transform:uppercase;letter-spacing:.6px;color:#444;margin-top:3px}
+    .fine{font-size:9px;color:#555;margin-top:10px;line-height:1.4}
+    .bar{position:sticky;top:0;background:#1a2230;color:#fff;padding:10px 14px;font-size:13px;margin:-0in -0in 10px}
+    @media print{.bar{display:none}}
+  </style></head><body>
+    <div class="bar">🚚 Bill of Lading — ${esc(d.orderId)}. Print, then sign at pickup/delivery. <button onclick="window.print()" style="padding:5px 14px;font-weight:bold;cursor:pointer">🖨️ Print</button></div>
+    <div class="hd"><div><h1>BILL OF LADING</h1><div style="font-size:12px;margin-top:2px">Not negotiable</div></div>
+      <div class="sub"><b>BOL / Order:</b> ${esc(d.orderId)}<br><b>Date:</b> ${new Date().toLocaleDateString()}<br><b>Requested delivery:</b> ${d.due?String(d.due).slice(0,10):'—'}</div></div>
+    <div class="cols">
+      ${blk('Shipper (from)',addr(d.shipper))}
+      ${blk('Ship to / consignee',addr(d.shipTo))}
+      ${blk('Bill to',addr(d.billTo))}
+    </div>
+    <div class="win"><b>⏰ Receiving window at destination:</b> ${winTxt}</div>
+    <table><thead><tr><th style="width:26px">#</th><th style="width:40px">Qty</th><th>Description</th><th style="width:170px">VIN</th><th style="width:90px">Weight</th></tr></thead>
+      <tbody>${rows}
+      <tr><td colspan="2"><b>${d.units.length||d.qty} unit(s)</b></td><td></td><td class="r"><b>Total</b></td><td class="r"><b>${totalW!=null?totalW.toLocaleString()+' lbs':'—'}</b></td></tr></tbody></table>
+    <div class="fine">Freight described above received in apparent good order except as noted. Consignee to inspect units on delivery and note any damage on this document before signing. New trailers — no hazardous materials.</div>
+    <div class="sigs">
+      <div class="sig"><div class="ln"></div><div class="lbl">Shipper signature / date</div></div>
+      <div class="sig"><div class="ln"></div><div class="lbl">Carrier / driver signature / date</div></div>
+      <div class="sig"><div class="ln"></div><div class="lbl">Received by (consignee) / date</div></div>
+    </div>
+  </body></html>`;
+  const win2=window.open('','_blank','width=900,height=1000'); if(!win2)return toast('Pop-up blocked — allow pop-ups to print.');
+  win2.document.write(html); win2.document.close();
 }
 async function mergeCustomer(dupId){
   const custs=await api('/api/customers');

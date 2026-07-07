@@ -1383,6 +1383,27 @@ app.patch('/api/customers/:id/types', authMiddleware, requireSales, async (req, 
   res.json({ ok: true });
 });
 // Update a customer/dealer: soft-active (app use), kind (Dealership/Customer), or details.
+// Bill-to + delivery window — Accounting (Office Manager), Sales, or the GM decide this.
+function requireBillShip(req, res, next) {
+  const ok = req.user.role === 'admin'
+    || (req.user.titles || []).some(t => ['Sales', 'Rep Specialist', 'Office Manager', 'General Manager'].includes(t));
+  if (!ok) return res.status(403).json({ error: 'Billing and delivery settings are for Accounting, Sales, or the General Manager.' });
+  next();
+}
+app.patch('/api/customers/:id/billing', authMiddleware, requireBillShip, async (req, res) => {
+  const cur = await one('SELECT id, name FROM customer WHERE id=$1', [req.params.id]);
+  if (!cur) return res.status(404).json({ error: 'not found' });
+  const b = req.body || {};
+  const s = v => String(v ?? '').trim() || null;
+  const days = (Array.isArray(b.deliveryDays) ? b.deliveryDays : []).map(Number).filter(d => d >= 1 && d <= 7);
+  const win = (days.length || s(b.deliveryStart) || s(b.deliveryEnd) || s(b.deliveryNote))
+    ? JSON.stringify({ days, start: s(b.deliveryStart) || '08:00', end: s(b.deliveryEnd) || '16:00', note: s(b.deliveryNote) || undefined })
+    : null;
+  await q(`UPDATE customer SET bill_name=$1, bill_address=$2, bill_city=$3, bill_state=$4, bill_zip=$5, delivery_window=$6 WHERE id=$7`,
+    [s(b.billName), s(b.billAddress), s(b.billCity), s(b.billState)?.toUpperCase().slice(0, 2) || null, s(b.billZip), win, req.params.id]);
+  await audit(req, 'customer.billing', `${cur.name}: bill-to ${s(b.billName) || '(same as dealership)'}${win ? ' + delivery window' : ''}`);
+  res.json({ ok: true });
+});
 app.patch('/api/customers/:id', authMiddleware, requireSales, async (req, res) => {
   const { active, kind, name, contact, phone, address, city, state, zip, lat, lng } = req.body || {};
   const cur = await one('SELECT * FROM customer WHERE id=$1', [req.params.id]);
@@ -2270,7 +2291,8 @@ app.patch('/api/models/:id/specs', authMiddleware, requireVinAuthority, async (r
 app.get('/api/trailers/:id/print-data', authMiddleware, requireVinAuthority, async (req, res) => {
   const t = await one(`SELECT t.id, t.vin, t.serial, t.order_id, m.id AS model_id, m.name AS model_name, m.category,
                               m.gvwr_lbs, m.empty_weight_lbs, m.tire, m.rim, m.tire_psi, m.length_ft,
-                              c.name AS dealer, c.address, c.city, c.state, c.zip
+                              c.name AS dealer, c.address, c.city, c.state, c.zip,
+                              c.bill_name, c.bill_address, c.bill_city, c.bill_state, c.bill_zip
                          FROM trailer t
                          LEFT JOIN model m ON m.id = t.model_id
                          LEFT JOIN sales_order o ON o.id = t.order_id
@@ -2279,6 +2301,11 @@ app.get('/api/trailers/:id/print-data', authMiddleware, requireVinAuthority, asy
   if (!t) return res.status(404).json({ error: 'unit not found' });
   const gvwr = t.gvwr_lbs != null ? Number(t.gvwr_lbs) : null;
   const empty = t.empty_weight_lbs != null ? Number(t.empty_weight_lbs) : null;
+  const shipTo = t.dealer ? { name: t.dealer, address: t.address, city: t.city, state: t.state, zip: t.zip } : null;
+  // The MSO's Sold-to is the BILLING entity (corporate/parent when one exists); ship-to is the lot.
+  const billTo = t.dealer ? (t.bill_name
+    ? { name: t.bill_name, address: t.bill_address, city: t.bill_city, state: t.bill_state, zip: t.bill_zip }
+    : shipTo) : null;
   res.json({
     unitId: t.id, vin: t.vin, serial: t.serial, orderId: t.order_id,
     modelId: t.model_id, model: t.model_name, type: t.category,
@@ -2287,7 +2314,32 @@ app.get('/api/trailers/:id/print-data', authMiddleware, requireVinAuthority, asy
     cargoMaxLbs: gvwr != null && empty != null ? gvwr - empty : null,
     tire: t.tire, rim: t.rim, tirePsi: t.tire_psi != null ? Number(t.tire_psi) : null,
     lengthFt: t.length_ft != null ? Number(t.length_ft) : null,
-    dealer: t.dealer ? { name: t.dealer, address: t.address, city: t.city, state: t.state, zip: t.zip } : null,
+    dealer: billTo, // what the MSO prints as Sold-to (kept under the old key for the print layout)
+    shipTo, billTo,
+  });
+});
+// Everything a Bill of Lading needs for one order: shipper, consignee (ship-to), bill-to,
+// the units with VINs + weights, and the destination's receiving window.
+app.get('/api/orders/:id/bol', authMiddleware, requireSection('orders'), async (req, res) => {
+  const o = await one(`SELECT o.id, o.qty, o.due, o.stage, m.id AS model_id, m.name AS model, m.empty_weight_lbs, m.length_ft,
+                              c.name AS customer, c.address, c.city, c.state, c.zip, c.phone, c.contact,
+                              c.bill_name, c.bill_address, c.bill_city, c.bill_state, c.bill_zip, c.delivery_window
+                         FROM sales_order o LEFT JOIN model m ON m.id=o.model_id
+                         LEFT JOIN customer c ON c.id=o.customer_id WHERE o.id=$1`, [req.params.id]);
+  if (!o) return res.status(404).json({ error: 'order not found' });
+  if (!o.customer) return res.status(400).json({ error: 'This order has no customer — a BOL needs a destination.' });
+  const units = await all('SELECT id, vin FROM trailer WHERE order_id=$1 ORDER BY serial', [req.params.id]);
+  const win = (() => { try { return o.delivery_window ? JSON.parse(o.delivery_window) : null; } catch { return null; } })();
+  res.json({
+    orderId: o.id, model: o.model, modelId: o.model_id, qty: o.qty, due: o.due, stage: o.stage,
+    unitWeightLbs: o.empty_weight_lbs != null ? Number(o.empty_weight_lbs) : null,
+    lengthFt: o.length_ft != null ? Number(o.length_ft) : null,
+    shipper: { name: 'Built Manufacturing LLC dba Built Trailers', address: '871 E Commerce Dr', city: 'St George', state: 'UT', zip: '84790' },
+    shipTo: { name: o.customer, address: o.address, city: o.city, state: o.state, zip: o.zip, phone: o.phone, contact: o.contact },
+    billTo: o.bill_name ? { name: o.bill_name, address: o.bill_address, city: o.bill_city, state: o.bill_state, zip: o.bill_zip }
+                        : { name: o.customer, address: o.address, city: o.city, state: o.state, zip: o.zip },
+    deliveryWindow: win,
+    units: units.map(u => ({ id: u.id, vin: u.vin })),
   });
 });
 // Verify VINs against the NHTSA vPIC decoder — on demand from the Print Center.

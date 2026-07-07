@@ -227,6 +227,16 @@ const colMigrations = [
   `ALTER TABLE model ADD COLUMN IF NOT EXISTS hitch_code TEXT`,
   `ALTER TABLE model ADD COLUMN IF NOT EXISTS body_code TEXT`,
   `ALTER TABLE model ADD COLUMN IF NOT EXISTS axles INT`,
+  // Bill-to vs ship-to per dealership: some dealers bill through a corporate/parent entity.
+  // Blank bill_name = bill the dealership itself. The MSO's Sold-to and every invoice use the
+  // bill-to; the Bill of Lading and deliveries use the dealership's own (ship-to) address.
+  `ALTER TABLE customer ADD COLUMN IF NOT EXISTS bill_name TEXT`,
+  `ALTER TABLE customer ADD COLUMN IF NOT EXISTS bill_address TEXT`,
+  `ALTER TABLE customer ADD COLUMN IF NOT EXISTS bill_city TEXT`,
+  `ALTER TABLE customer ADD COLUMN IF NOT EXISTS bill_state TEXT`,
+  `ALTER TABLE customer ADD COLUMN IF NOT EXISTS bill_zip TEXT`,
+  // When the ship-to location can take deliveries: JSON {days:[1..7], start, end, note}.
+  `ALTER TABLE customer ADD COLUMN IF NOT EXISTS delivery_window TEXT`,
   // Landed-cost receiving: a vendor invoice covers one or more POs; its shipping/tax/other
   // charges allocate across the lines so parts carry FULLY LANDED cost, and the one bill
   // posted to the books equals the invoice bottom line exactly.
