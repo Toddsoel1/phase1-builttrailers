@@ -2570,6 +2570,71 @@ async function sendPO(partId){
   const vendorId=$('poVendor').value||undefined;
   try{const r=await api('/api/po',{method:'POST',body:JSON.stringify({partId,qty,vendorId})});closeModal();toast(r.id+(r.status==='Pending Approval'?' created — pending approval':' created'));viewPredict();}catch(e){toast(e.message);}
 }
+// ── 📥 Receive a vendor invoice: pick its POs, enter freight/tax, see the landed allocation ──
+async function receiveInvoiceModal(){
+  let pos; try{ pos=await api('/api/po'); }catch(e){ return toast(e.message); }
+  const open=pos.filter(p=>p.status==='Open'&&p.vendorId);
+  if(!open.length)return toast('No open POs to receive against.');
+  const vendors={}; open.forEach(p=>{ (vendors[p.vendorId]=vendors[p.vendorId]||{name:p.vendor,pos:[]}).pos.push(p); });
+  window._ri={vendors,open,sel:new Set()};
+  modal('📥 Receive a vendor invoice',`
+    <p class="muted" style="font-size:12.5px">Check the POs this invoice covers, then enter its shipping / sales tax / other charges. They allocate across the lines by value so every part lands at its <b>fully landed cost</b> — and the one bill posted to the books equals the invoice bottom line, to the penny.</p>
+    <div class="field"><label>Vendor</label><select id="riVendor" class="inp" onchange="riVendorPick()">
+      <option value="">— pick the vendor —</option>
+      ${Object.entries(vendors).map(([id,v])=>`<option value="${esc(id)}">${esc(v.name)} (${v.pos.length} open PO${v.pos.length>1?'s':''})</option>`).join('')}
+    </select></div>
+    <div id="riPos"></div>
+    <div class="row">
+      <div class="field"><label>Invoice #</label><input id="riNo" class="inp" placeholder="from the paper — becomes the QB doc number"></div>
+      <div class="field"><label>Invoice date</label><input id="riDate" class="inp" type="date" value="${new Date().toISOString().slice(0,10)}"></div>
+    </div>
+    <div class="row">
+      <div class="field"><label>Shipping / freight</label><input id="riShip" class="inp" type="number" min="0" step="0.01" value="0" oninput="riPreview()"></div>
+      <div class="field"><label>Sales tax</label><input id="riTax" class="inp" type="number" min="0" step="0.01" value="0" oninput="riPreview()"></div>
+      <div class="field"><label>Other</label><input id="riOther" class="inp" type="number" min="0" step="0.01" value="0" oninput="riPreview()"></div>
+    </div>
+    <div class="field"><label>Other charge label (optional)</label><input id="riOtherLbl" class="inp" placeholder="e.g. fuel surcharge"></div>
+    <div id="riPrev" style="margin:8px 0"></div>
+    <div class="row" style="gap:8px">
+      <button class="btn" id="riGo" onclick="riSend()">📥 Receive — post the bill</button>
+      <button class="btn sec" onclick="closeModal()">Cancel</button>
+    </div>`);
+}
+function riVendorPick(){
+  const st=window._ri; st.sel=new Set();
+  const v=st.vendors[$('riVendor').value], box=$('riPos');
+  box.innerHTML=v?`<div style="max-height:200px;overflow-y:auto;border:1px solid var(--line);border-radius:8px;padding:2px 10px;margin-bottom:6px">${v.pos.map(p=>`
+    <label style="display:flex;gap:8px;align-items:center;padding:5px 0;border-bottom:1px solid var(--line);cursor:pointer;font-size:12.5px">
+      <input type="checkbox" onchange="riToggle(${ja(p.id)},this.checked)">
+      <b>${esc(p.id)}</b><span style="flex:1">${p.qty}× ${esc(p.part||p.partId)}</span><span>${money(p.total)}</span>
+    </label>`).join('')}</div>`:'';
+  riPreview();
+}
+function riToggle(id,on){ if(on)window._ri.sel.add(id); else window._ri.sel.delete(id); riPreview(); }
+function riPreview(){
+  const st=window._ri; if(!st)return; const box=$('riPrev'); if(!box)return;
+  const rows=st.open.filter(p=>st.sel.has(p.id));
+  if(!rows.length){ box.innerHTML=''; return; }
+  const parts=rows.reduce((a,p)=>a+p.total,0);
+  const extras=(Number($('riShip').value)||0)+(Number($('riTax').value)||0)+(Number($('riOther').value)||0);
+  box.innerHTML=`<table><thead><tr><th>PO</th><th class="right">Line</th><th class="right">+ Allocated</th><th class="right">Landed / unit</th></tr></thead><tbody>
+    ${rows.map(p=>{const share=parts>0?extras*(p.total/parts):0;return `<tr><td>${esc(p.id)} <span class="muted" style="font-size:11px">${p.qty}× ${esc(p.part||'')}</span></td>
+      <td class="right">${money(p.total)}</td><td class="right">${money(share)}</td><td class="right"><b>${money2((p.total+share)/p.qty)}</b></td></tr>`;}).join('')}
+    <tr><td><b>Invoice total</b></td><td class="right">${money(parts)}</td><td class="right">${money(extras)}</td><td class="right"><b>${money(parts+extras)}</b></td></tr>
+  </tbody></table>`;
+}
+async function riSend(){
+  const st=window._ri, vid=$('riVendor').value;
+  if(!vid)return toast('Pick the vendor.');
+  const poIds=[...st.sel]; if(!poIds.length)return toast('Check at least one PO covered by the invoice.');
+  const btn=$('riGo'); btn.disabled=true;
+  try{
+    const r=await api('/api/vendor-invoices/receive',{method:'POST',body:JSON.stringify({
+      vendorId:vid,invoiceNo:($('riNo').value||'').trim(),invoiceDate:$('riDate').value||undefined,poIds,
+      shipping:Number($('riShip').value)||0,tax:Number($('riTax').value)||0,other:Number($('riOther').value)||0,otherLabel:($('riOtherLbl').value||'').trim()})});
+    closeModal(); toast('📥 '+r.id+' received — bill '+money(r.total)+' ('+r.lines.length+' PO'+(r.lines.length>1?'s':'')+', extras '+money(r.extras)+')'); viewPOs();
+  }catch(e){ btn.disabled=false; toast(e.message); }
+}
 async function autoPO(){
   try{const r=await api('/api/mrp/auto',{method:'POST'});toast('⚡ Generated '+r.created+' purchase orders');page='pos';render();}catch(e){toast(e.message);}
 }
@@ -2580,7 +2645,7 @@ async function adoptVendorLead(id,name,days){
 }
 async function viewPOs(){
   $('pTitle').textContent='Purchase Orders';$('pSub').textContent='Generated for vendors as quantities dictate — receive to add stock';
-  $('pActions').innerHTML=canEdit()?`<button class="btn" onclick="showNewVendor()">+ Vendor</button>&nbsp;<button class="btn sec" onclick="go('predict')">🤖 Predictive POs</button>`:'';
+  $('pActions').innerHTML=canEdit()?`<button class="btn" onclick="receiveInvoiceModal()">📥 Receive an invoice</button>&nbsp;<button class="btn sec" onclick="showNewVendor()">+ Vendor</button>&nbsp;<button class="btn sec" onclick="go('predict')">🤖 Predictive POs</button>`:'';
   const [pos,myPending,rules,users,vsc]=await Promise.all([
     api('/api/po'),api('/api/approvals/pending'),
     ME.role==='admin'?api('/api/approval-rules'):Promise.resolve([]),

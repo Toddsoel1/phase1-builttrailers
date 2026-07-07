@@ -170,6 +170,41 @@ test('multi-vendor buys: a PO can go to an alternate vendor; the primary stays f
   assert.equal((await api('/api/po', { method: 'POST', body: JSON.stringify({ partId: part.id, qty: 1, vendorId: 'nope' }) })).status, 400, 'unknown alternate vendor rejected');
 });
 
+test('landed-cost receiving: extras allocate by value, parts land at weighted cost, the bill equals the invoice', async () => {
+  const vendors = (await json(await api('/api/vendors'))).filter(v => v.status !== 'pending' && v.status !== 'rejected');
+  const vendor = vendors[0];
+  // Two parts with the vendor as primary; B starts with stock so the weighted average is proven.
+  const A = await json(await api('/api/parts', { method: 'POST', body: JSON.stringify({ name: 'Landed A', cost: 10 }) }));
+  const B = await json(await api('/api/parts', { method: 'POST', body: JSON.stringify({ name: 'Landed B', cost: 30 }) }));
+  await api('/api/parts/' + A.id, { method: 'PATCH', body: JSON.stringify({ vendorId: vendor.id }) });
+  await api('/api/parts/' + B.id, { method: 'PATCH', body: JSON.stringify({ vendorId: vendor.id }) });
+  await api('/api/parts/' + B.id + '/adjust', { method: 'POST', body: JSON.stringify({ onHand: 10, reason: 'landed test pre-stock' }) });
+
+  const poA = await json(await api('/api/po', { method: 'POST', body: JSON.stringify({ partId: A.id, qty: 4 }) })); // 4 × $10 = $40
+  const poB = await json(await api('/api/po', { method: 'POST', body: JSON.stringify({ partId: B.id, qty: 2 }) })); // 2 × $30 = $60
+  // Invoice: parts $100 + shipping $20 + tax $5 = $125.
+  // Value shares: A 40% → $10 → landed (40+10)/4 = $12.50; B 60% → $15 → landed (60+15)/2 = $37.50.
+  // Weighted costs: A → 12.50 (no prior stock); B → (10×30 + 2×37.50)/12 = 31.25.
+  const r = await json(await api('/api/vendor-invoices/receive', { method: 'POST', body: JSON.stringify({
+    vendorId: vendor.id, invoiceNo: 'INV-7788', poIds: [poA.id, poB.id], shipping: 20, tax: 5 }) }));
+  assert.equal(r.total, 125, 'bottom line = parts + shipping + tax');
+  assert.equal(r.extras, 25);
+  const parts = await json(await api('/api/parts'));
+  const a = parts.find(p => p.id === A.id), b = parts.find(p => p.id === B.id);
+  assert.equal(a.onHand, 4);
+  assert.equal(a.cost, 12.5, 'A carries its fully landed unit cost');
+  assert.equal(b.onHand, 12);
+  assert.equal(b.cost, 31.25, 'B is a weighted average of old stock and the landed receipt');
+  const rows = await json(await api('/api/po'));
+  assert.equal(rows.find(p => p.id === poA.id).status, 'Received');
+  assert.equal(rows.find(p => p.id === poB.id).status, 'Received');
+  const bill = (await json(await api('/api/accounting'))).events.find(e => e.kind === 'bill' && e.ref === 'INV-7788');
+  assert.ok(bill, 'ONE bill carrying the vendor invoice number');
+  assert.equal(bill.amount, 125, 'the bill equals the invoice bottom line, to the penny');
+  assert.equal((await api('/api/vendor-invoices/receive', { method: 'POST', body: JSON.stringify({ vendorId: vendor.id, poIds: [poA.id] }) })).status, 400, 'already-received PO refused');
+  for (const id of [A.id, B.id]) await api('/api/parts/' + id + '/adjust', { method: 'POST', body: JSON.stringify({ onHand: 0, reason: 'landed test cleanup' }) });
+});
+
 test('inventory valuation exposes the raw / make / WIP / finished buckets', async () => {
   const v = await json(await api('/api/inventory/summary'));
   for (const k of ['rawPurchased', 'makeParts', 'wipValue', 'finishedValue', 'totalValue'])

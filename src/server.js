@@ -21,7 +21,7 @@ import jwt from 'jsonwebtoken';
 import { modelRollup, modelsSummary, inventoryValuation } from './cost.js';
 import { STAGES, canSell, canReorderProduction, trailerTypes, customersWithTypes, allowedTypesFor, ordersFull, consumeInventory, setProductionOrder } from './orders.js';
 import { logWork, dailyReport, wipReport, consumptionByWorkstation, workstations, stageForWorkstation, qcMissing } from './wip.js';
-import { mrp, poList, createPO, receivePO, vendorScorecard, vendorActualLeads } from './mrp.js';
+import { mrp, poList, createPO, receivePO, receiveInvoice, vendorScorecard, vendorActualLeads } from './mrp.js';
 import { accountingMode, qboConfigured, ledger, totals, sync, scanInvoice, invoiceList } from './accounting.js';
 import { getAuthUrl, exchangeCode, syncCustomersFromQBO, syncItemsFromQBO, syncInvoicesFromQBO, syncVendorsFromQBO, previewItemsFromQBO, QBOAuthError, QBOFeatureError, qboErrorLog, getRefreshTokenInfo, disconnectQBO, getRealmInfo, getQBItems, updateItemCost } from './qbo.js';
 import * as people from './people.js';
@@ -1747,6 +1747,15 @@ app.post('/api/po', authMiddleware, requireTier('editor'), async (req, res) => {
     const result = await createPO(partId, Math.max(1, Math.round(Number(qty) || 0)), req.user.id, vendorId || undefined);
     res.json(result);
   } catch (e) { res.status(400).json({ error: String(e.message || e) }); }
+});
+// Receive a vendor invoice covering one or more POs, with landed-cost allocation — the
+// bill posted to the books equals the invoice bottom line exactly.
+app.post('/api/vendor-invoices/receive', authMiddleware, requireTier('editor'), async (req, res) => {
+  try {
+    const r = await receiveInvoice(req.body || {}, req.user.id);
+    await audit(req, 'invoice.landed', `${r.id}: $${r.total} across ${r.lines.length} PO(s), extras $${r.extras}`);
+    res.json(r);
+  } catch (e) { res.status(400).json({ error: e.message }); }
 });
 app.post('/api/po/:id/receive', authMiddleware, requireTier('editor'), async (req, res) => {
   try { const ok = await receivePO(req.params.id, req.user.id); res.json({ ok }); }

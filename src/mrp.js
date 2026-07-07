@@ -156,6 +156,65 @@ export async function createPO(partId, qty, userId, vendorId) {
   return { id, status, approvalCount: requests.length };
 }
 
+// Receive one VENDOR INVOICE covering one or more POs, with landed-cost allocation:
+// shipping / sales tax / other charges spread across the lines proportionally to line value
+// (the last line absorbs rounding so the shares sum exactly). Each part's cost becomes a
+// weighted average of existing stock and the FULLY LANDED unit cost of this receipt, and ONE
+// bill posts for the invoice bottom line — so the books match the paper to the penny.
+export async function receiveInvoice({ vendorId, invoiceNo, invoiceDate, poIds, shipping, tax, other, otherLabel }, userId) {
+  const cents = x => Math.round((Number(x) || 0) * 100) / 100;
+  const ids = [...new Set((Array.isArray(poIds) ? poIds : []).filter(Boolean))];
+  if (!ids.length) throw new Error('Pick at least one PO covered by this invoice.');
+  const v = await one('SELECT * FROM vendor WHERE id=$1', [vendorId]);
+  if (!v) throw new Error('Vendor not found.');
+  const pos = [];
+  for (const id of ids) {
+    const po = await one('SELECT * FROM purchase_order WHERE id=$1', [id]);
+    if (!po) throw new Error(`${id} not found.`);
+    if (po.vendor_id !== vendorId) throw new Error(`${id} belongs to a different vendor.`);
+    if (po.status === 'Received') throw new Error(`${id} is already received.`);
+    if (po.status !== 'Open') throw new Error(`${id} is ${po.status} — only Open POs can be received.`);
+    pos.push(po);
+  }
+  const ship = cents(shipping), taxAmt = cents(tax), oth = cents(other);
+  if (ship < 0 || taxAmt < 0 || oth < 0) throw new Error('Shipping, tax, and other charges cannot be negative.');
+  const partsTotal = cents(pos.reduce((a, po) => a + Number(po.qty) * Number(po.unit_cost), 0));
+  const extras = cents(ship + taxAmt + oth);
+  if (extras > 0 && partsTotal <= 0) throw new Error('Cannot allocate charges across zero-value lines.');
+  const total = cents(partsTotal + extras);
+
+  const invId = 'VI-' + Date.now().toString(36).toUpperCase();
+  let allocated = 0;
+  const lines = [];
+  for (let i = 0; i < pos.length; i++) {
+    const po = pos[i];
+    const lineValue = Number(po.qty) * Number(po.unit_cost);
+    const share = i === pos.length - 1 ? cents(extras - allocated) : cents(extras * (partsTotal > 0 ? lineValue / partsTotal : 0));
+    allocated = cents(allocated + share);
+    const landedUnit = (lineValue + share) / Number(po.qty);
+    const part = await one('SELECT on_hand, cost FROM part WHERE id=$1', [po.part_id]);
+    const prevQty = Math.max(0, Number(part?.on_hand) || 0); // negative stock can't drag the average
+    const prevCost = Number(part?.cost) || 0;
+    const newCost = cents((prevQty * prevCost + Number(po.qty) * landedUnit) / (prevQty + Number(po.qty)));
+    await q('UPDATE part SET on_hand = on_hand + $1, cost = $2 WHERE id=$3', [po.qty, newCost, po.part_id]);
+    await q(`UPDATE purchase_order SET status='Received', received_at=now(), invoice_id=$1, landed_extra=$2 WHERE id=$3`,
+      [invId, share, po.id]);
+    await q('INSERT INTO audit_log(user_id,action,detail) VALUES ($1,$2,$3)',
+      [userId || null, 'po.receive', `${po.id}: +${po.qty} ${po.part_id} landed $${cents(landedUnit)}/ea (+$${share} allocated) — cost ${prevCost} -> ${newCost}`]);
+    lines.push({ poId: po.id, partId: po.part_id, qty: Number(po.qty), share, landedUnit: cents(landedUnit), newCost });
+  }
+  await q(`INSERT INTO vendor_invoice(id,vendor_id,number,invoice_date,total,lines,status,created_by,shipping,tax,other,other_label,parts_total)
+           VALUES ($1,$2,$3,$4,$5,$6,'Applied',$7,$8,$9,$10,$11,$12)`,
+    [invId, vendorId, String(invoiceNo || '').trim() || invId, invoiceDate || new Date().toISOString().slice(0, 10),
+     total, pos.length, userId || null, ship, taxAmt, oth, String(otherLabel || '').trim() || null, partsTotal]);
+  // One bill for the whole invoice — DocNumber carries the vendor's real invoice number so
+  // reconciling against QuickBooks is a straight match. (receivePO's per-PO bill is skipped.)
+  await postBill(String(invoiceNo || '').trim() || invId, v.name, total, userId);
+  await q('INSERT INTO audit_log(user_id,action,detail) VALUES ($1,$2,$3)',
+    [userId || null, 'invoice.receive', `${invId} ${v.name} #${invoiceNo || '—'}: parts $${partsTotal} + ship $${ship} + tax $${taxAmt} + other $${oth} = $${total} (${pos.length} PO(s))`]);
+  return { id: invId, total, partsTotal, extras, lines };
+}
+
 export async function receivePO(poId, userId) {
   const po = await one('SELECT * FROM purchase_order WHERE id=$1', [poId]);
   if (!po || po.status === 'Received') return false;

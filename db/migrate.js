@@ -227,6 +227,16 @@ const colMigrations = [
   `ALTER TABLE model ADD COLUMN IF NOT EXISTS hitch_code TEXT`,
   `ALTER TABLE model ADD COLUMN IF NOT EXISTS body_code TEXT`,
   `ALTER TABLE model ADD COLUMN IF NOT EXISTS axles INT`,
+  // Landed-cost receiving: a vendor invoice covers one or more POs; its shipping/tax/other
+  // charges allocate across the lines so parts carry FULLY LANDED cost, and the one bill
+  // posted to the books equals the invoice bottom line exactly.
+  `ALTER TABLE vendor_invoice ADD COLUMN IF NOT EXISTS shipping NUMERIC(12,2) NOT NULL DEFAULT 0`,
+  `ALTER TABLE vendor_invoice ADD COLUMN IF NOT EXISTS tax NUMERIC(12,2) NOT NULL DEFAULT 0`,
+  `ALTER TABLE vendor_invoice ADD COLUMN IF NOT EXISTS other NUMERIC(12,2) NOT NULL DEFAULT 0`,
+  `ALTER TABLE vendor_invoice ADD COLUMN IF NOT EXISTS other_label TEXT`,
+  `ALTER TABLE vendor_invoice ADD COLUMN IF NOT EXISTS parts_total NUMERIC(12,2) NOT NULL DEFAULT 0`,
+  `ALTER TABLE purchase_order ADD COLUMN IF NOT EXISTS invoice_id TEXT`,
+  `ALTER TABLE purchase_order ADD COLUMN IF NOT EXISTS landed_extra NUMERIC(12,2) NOT NULL DEFAULT 0`,
   // Opening/baseline counts: set on-hand as the starting truth WITHOUT posting a QuickBooks
   // variance — the clean-start tool for the initial wall-to-wall count (QBO gets one manual
   // accountant journal instead of a giant "variance" that would double-count two years of books).
