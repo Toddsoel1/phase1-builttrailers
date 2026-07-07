@@ -2178,9 +2178,14 @@ app.put('/api/trailers/config', authMiddleware, requireSection('accounting'), as
 
 // Only the Office Manager, General Manager, or an Admin may run the VIN/MSO print center or
 // correct an assigned VIN.
+// A section grant from the Job Titles matrix counts too (editor tier or above) — the same
+// pattern as the 'users' grant, so the checkbox actually does what it says.
+const sectionGrant = (req, section) => req.user.role !== 'viewer' && Array.isArray(req.user.sections) && req.user.sections.includes(section);
 function requireVinAuthority(req, res, next) {
-  const ok = req.user.role === 'admin' || (req.user.titles || []).some(t => ['Office Manager', 'General Manager'].includes(t));
-  if (!ok) return res.status(403).json({ error: 'Only the Office Manager, General Manager, or an Admin can do this.' });
+  const ok = req.user.role === 'admin'
+    || (req.user.titles || []).some(t => ['Office Manager', 'General Manager'].includes(t))
+    || sectionGrant(req, 'printcenter');
+  if (!ok) return res.status(403).json({ error: "Requires the Office Manager / General Manager title, an admin, or a title granted the 'printcenter' section." });
   next();
 }
 const hasTitle = (req, names) => req.user.role === 'admin' || (req.user.titles || []).some(t => names.includes(t));
@@ -2325,8 +2330,8 @@ app.post('/api/boat-build/submit', authMiddleware, requireStockCreator, async (r
 
 // ---- Boat Trailer Builder admin (the office): option pricing, new-part costs, boat catalog ----
 function requireBoatAdmin(req, res, next) {
-  if (hasTitle(req, ['Office Manager', 'General Manager'])) return next(); // hasTitle passes admin too
-  return res.status(403).json({ error: 'Boat Builder settings are for the office managers or admin.' });
+  if (hasTitle(req, ['Office Manager', 'General Manager']) || sectionGrant(req, 'boatadmin')) return next(); // hasTitle passes admin too
+  return res.status(403).json({ error: "Boat Builder settings are for the office managers, an admin, or a title granted the 'boatadmin' section." });
 }
 app.get('/api/boat-admin/catalog', authMiddleware, requireBoatAdmin, async (_req, res) => {
   const cat = await boatbuilder.getCatalog();

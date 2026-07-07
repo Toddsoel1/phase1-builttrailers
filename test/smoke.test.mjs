@@ -369,6 +369,34 @@ test("users section grant: a non-admin title with 'users' manages accounts but c
   assert.equal((await fetch(BASE + '/api/users', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + sales }, body: JSON.stringify({ name: 'Nope', titles: ['Sales'] }) })).status, 403, 'no users grant -> still locked out');
 });
 
+test('section grants unlock print center, boat admin, and order entry — the matrix checkboxes work everywhere', async () => {
+  for (const [name, tier, sections] of [
+    ['Print Desk', 'editor', ['printcenter']], ['Boat Desk', 'editor', ['boatadmin']],
+    ['Order Desk', 'editor', ['neworder', 'orders']], ['Read Desk', 'viewer', ['printcenter']],
+  ]) await api('/api/roles', { method: 'POST', body: JSON.stringify({ name, tier, sections }) });
+  const mk = async title => {
+    const u = await json(await api('/api/users', { method: 'POST', body: JSON.stringify({ name: title + ' Person', titles: [title], password: 'deskPw123' }) }));
+    const l = await json(await fetch(BASE + '/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: u.username, password: 'deskPw123' }) }));
+    return { 'Content-Type': 'application/json', Authorization: 'Bearer ' + l.token };
+  };
+  const printH = await mk('Print Desk'), boatH = await mk('Boat Desk'), orderH = await mk('Order Desk'), readH = await mk('Read Desk');
+
+  assert.equal((await fetch(BASE + '/api/print-queue', { headers: printH })).status, 200, 'printcenter grant opens the print center');
+  assert.equal((await fetch(BASE + '/api/print-specs', { headers: printH })).status, 200, 'printcenter grant covers specs too');
+  assert.equal((await fetch(BASE + '/api/boat-admin/catalog', { headers: boatH })).status, 200, 'boatadmin grant opens boat settings');
+  assert.equal((await fetch(BASE + '/api/print-queue', { headers: boatH })).status, 403, 'grants do not bleed across sections');
+  assert.equal((await fetch(BASE + '/api/boat-admin/catalog', { headers: printH })).status, 403, 'grants do not bleed the other way either');
+  assert.equal((await fetch(BASE + '/api/print-queue', { headers: readH })).status, 403, 'a viewer-tier title cannot use a mutation-capable grant');
+
+  const custs = (await json(await api('/api/customers'))).filter(c => c.active !== false && c.allowed?.length);
+  const models = await json(await api('/api/models'));
+  let cust, model;
+  for (const c of custs) { const m = models.find(mm => c.allowed.includes(mm.category)); if (m) { cust = c; model = m; break; } }
+  const sold = await fetch(BASE + '/api/orders', { method: 'POST', headers: orderH, body: JSON.stringify({ customerId: cust.id, modelId: model.id, qty: 1, due: '2026-12-20' }) });
+  assert.equal(sold.status, 200, 'neworder grant lets an editor-tier title create orders');
+  assert.equal((await fetch(BASE + '/api/orders', { method: 'POST', headers: printH, body: JSON.stringify({ customerId: cust.id, modelId: model.id, qty: 1 }) })).status, 403, 'no neworder grant -> still cannot sell');
+});
+
 test('guarded reprints: reason required, permanent register, requeue with badge, MSO needs a buyer', async () => {
   const sr = await api('/api/auth/login', { method: 'POST', body: JSON.stringify({ username: 'aruiz', password: 'built2026' }) });
   const sales = (await sr.json()).token;

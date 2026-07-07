@@ -10,7 +10,10 @@ const SALES_TITLES = ['Sales', 'Rep Specialist', 'General Manager'];
 const PRODUCTION_TITLES = ['Sales', 'Rep Specialist', 'General Manager', 'Shop Manager', 'Office Manager'];
 
 export function canSell(user) {
-  return !!user && (user.role === 'admin' || userHasTitle(user, SALES_TITLES));
+  // Sales titles sell; so does any editor-or-above title granted the 'neworder' section in the
+  // Job Titles matrix — so the checkbox works instead of silently requiring a hard-coded title.
+  return !!user && (user.role === 'admin' || userHasTitle(user, SALES_TITLES)
+    || (user.role !== 'viewer' && Array.isArray(user.sections) && user.sections.includes('neworder')));
 }
 export function canReorderProduction(user) {
   return !!user && (user.role === 'admin' || userHasTitle(user, PRODUCTION_TITLES));

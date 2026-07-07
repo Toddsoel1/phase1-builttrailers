@@ -214,7 +214,9 @@ const isAdmin = () => ME && ME.role==='admin';
 // All job titles the signed-in user holds (multi-role), with fallback to the primary title.
 const myTitles = () => (ME && (ME.titles&&ME.titles.length?ME.titles:(ME.title?[ME.title]:[]))) || [];
 const hasTitle = (...names) => myTitles().some(t=>names.includes(t));
-const canSell = () => ME && (ME.role==='admin' || hasTitle('Sales','Rep Specialist','General Manager'));
+// Section grants from the Job Titles matrix count too (editor tier or above) — mirrors the server.
+const sectionGrant = s => ME && ME.role!=='viewer' && Array.isArray(ME.sections) && ME.sections.includes(s);
+const canSell = () => ME && (ME.role==='admin' || hasTitle('Sales','Rep Specialist','General Manager') || sectionGrant('neworder'));
 
 // ---- login ----
 async function login(){
@@ -254,8 +256,8 @@ const pickableRoles=rs=>isAdmin()?rs:rs.filter(r=>r.tier!=='admin'); // non-admi
 function navVisible(n){
   if(n[0]==='users') return canManageUsers();
   if(n[0]==='neworder') return canSell()&&canSee('neworder');
-  if(n[0]==='printcenter') return hasTitle('Office Manager','General Manager')||isAdmin();
-  if(n[0]==='boatadmin') return hasTitle('Office Manager','General Manager')||isAdmin();
+  if(n[0]==='printcenter') return hasTitle('Office Manager','General Manager')||isAdmin()||sectionGrant('printcenter');
+  if(n[0]==='boatadmin') return hasTitle('Office Manager','General Manager')||isAdmin()||sectionGrant('boatadmin');
   if(n[0]==='testdata') return isAdmin();
   return canSee(n[0]);
 }
