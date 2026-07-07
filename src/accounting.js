@@ -5,7 +5,7 @@
 // set ACCOUNTING_MODE=quickbooks and provide QBO credentials — the marked hook below is
 // where the real QuickBooks Online API calls plug in.
 import { q, all, one } from './db.js';
-import { qboConfigured as qboReady, createInvoice as qboInvoice, createBill as qboBill, createJournalEntry as qboJournal, ensureVendor as qboEnsureVendor, QBOFeatureError } from './qbo.js';
+import { qboConfigured as qboReady, createInvoice as qboInvoice, createBill as qboBill, createJournalEntry as qboJournal, createCOGSJournal as qboCogs, ensureVendor as qboEnsureVendor, QBOFeatureError } from './qbo.js';
 
 export function accountingMode() {
   return process.env.ACCOUNTING_MODE === 'quickbooks' ? 'quickbooks' : 'simulated';
@@ -15,13 +15,15 @@ export function qboConfigured() { return qboReady(); }
 async function record(kind, ref, party, amount, userId, lines) {
   const mode = accountingMode();
   let status = 'posted', external = null;
-  // Invoices, bills, and cycle-count inventory adjustments push to QuickBooks. COGS records to
-  // the local ledger only (a QB push can layer on later without changing callers).
-  if (mode === 'quickbooks' && (kind === 'invoice' || kind === 'bill' || kind === 'inventory-adjust')) {
+  // Invoices, bills, cycle-count adjustments, AND the COGS relief all push to QuickBooks —
+  // the COGS journal (Dr COGS / Cr Inventory asset) is what makes the QBO P&L show real
+  // gross margin the moment an order is invoiced, with no manual month-end journals.
+  if (mode === 'quickbooks' && (kind === 'invoice' || kind === 'bill' || kind === 'inventory-adjust' || kind === 'cogs')) {
     try {
       if (!qboReady()) throw new Error('QBO not configured');
       external = (kind === 'invoice') ? await qboInvoice({ customer: party, amount, ref, lines })
                : (kind === 'bill')    ? await qboBill({ vendor: party, amount, ref })
+               : (kind === 'cogs')    ? await qboCogs({ ref, amount, memo: `COGS relief — ${ref} (built cost out of inventory)` })
                : await qboJournal({ ref, amount, memo: `Cycle count adjustment ${ref}` });
       status = 'synced';
     } catch (e) {

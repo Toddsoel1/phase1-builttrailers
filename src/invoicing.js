@@ -6,8 +6,10 @@
 // ship-time per-order invoice (orders.js) skips orders that are batch-billed, so a
 // trailer is never invoiced twice. Lifecycle: Draft -> Invoiced -> Paid.
 import { all, one, q } from './db.js';
-import { postInvoice } from './accounting.js';
+import { postInvoice, postCOGS } from './accounting.js';
 import { assignVinsForOrder } from './trailers.js';
+import { consumeInventory } from './orders.js';
+import { orderWip } from './wip.js';
 
 async function nextBatchId() {
   const n = (await all('SELECT id FROM invoice_batch', [])).length;
@@ -58,7 +60,7 @@ export async function getBatch(id) {
   const b = await one('SELECT * FROM invoice_batch WHERE id=$1', [id]);
   if (!b) return null;
   const orders = await all(
-    `SELECT o.id, o.qty, o.stage, o.due, m.name AS model, m.category AS type, m.price
+    `SELECT o.id, o.qty, o.stage, o.due, o.model_id, m.name AS model, m.category AS type, m.price
        FROM sales_order o LEFT JOIN model m ON m.id = o.model_id
       WHERE o.invoice_batch_id = $1 ORDER BY o.id`, [id]);
   // One invoice line per physical trailer, each carrying its VIN (or null if not
@@ -68,7 +70,7 @@ export async function getBatch(id) {
     const vins = await all('SELECT vin FROM trailer WHERE order_id=$1 AND vin IS NOT NULL ORDER BY serial', [o.id]);
     const unit = Number(o.price || 0);
     for (let i = 0; i < o.qty; i++) {
-      lineItems.push({ orderId: o.id, model: o.model, type: o.type, vin: vins[i] ? vins[i].vin : null, amount: unit });
+      lineItems.push({ orderId: o.id, modelId: o.model_id, model: o.model, type: o.type, vin: vins[i] ? vins[i].vin : null, amount: unit });
     }
   }
   return {
@@ -132,13 +134,25 @@ export async function postBatchInvoice(batchId, user) {
     try { await assignVinsForOrder(o.id, user); } catch { /* non-fatal: invoice still posts */ }
   }
   const total = await batchTotal(batchId);
-  // One QuickBooks line per trailer, with its VIN in the description.
+  // One QuickBooks line per trailer, with its VIN in the description, booked against the
+  // model's own Product/Service (resolved by SKU = the app's model id).
   const { lineItems } = await getBatch(batchId);
   const lines = lineItems.map(li => ({
+    modelId: li.modelId, model: li.model, qty: 1,
     description: `${li.model || 'Trailer'}${li.vin ? ' — VIN ' + li.vin : ''}`,
     amount: li.amount,
   }));
   await postInvoice(batchId, b.customer_name || 'Dealer', total, user?.id || null, lines);
+  // The cost side — same as a single-order invoice: catch up any unconsumed stages, then
+  // relieve each order's accumulated WIP into COGS. (consumeInventory skips its own billing
+  // for batched orders, so nothing double-invoices.)
+  for (const o of orders) {
+    try {
+      await consumeInventory(o.id, user?.id || null);
+      const cogs = await orderWip(o.id);
+      if (cogs > 0) await postCOGS(o.id, cogs, user?.id || null);
+    } catch (e) { console.warn(`batch ${batchId} COGS for ${o.id}:`, e.message); }
+  }
   await q(`UPDATE sales_order SET billed=true WHERE invoice_batch_id=$1`, [batchId]);
   await q(`UPDATE invoice_batch SET status='Invoiced', total=$1, invoiced_at=now() WHERE id=$2`, [total, batchId]);
   return getBatch(batchId);

@@ -309,6 +309,25 @@ async function anyItemId() {
   if (!items || !items[0]) throw new Error('No QBO Item found — create a Service item (e.g. "Trailer") in QuickBooks first.');
   return items[0].Id;
 }
+// Resolve the QBO Product/Service for a trailer model: SKU (= the app's model id) first, then
+// exact name (the id or the display name), else the generic fallback item — revenue books per
+// model once the office sets the items up, and the invoice still posts before they have.
+async function itemIdForModel(modelId, modelName) {
+  const esc = s => String(s).replace(/'/g, "\\'");
+  if (modelId) {
+    try {
+      const bySku = (await query(`select Id from Item where Sku = '${esc(modelId)}' maxresults 1`)).Item;
+      if (bySku && bySku[0]) return bySku[0].Id;
+    } catch { /* Sku not queryable on some realms — fall through to name matching */ }
+    const byId = (await query(`select Id from Item where Name = '${esc(modelId)}' maxresults 1`)).Item;
+    if (byId && byId[0]) return byId[0].Id;
+  }
+  if (modelName) {
+    const byName = (await query(`select Id from Item where Name = '${esc(modelName)}' maxresults 1`)).Item;
+    if (byName && byName[0]) return byName[0].Id;
+  }
+  return anyItemId();
+}
 async function anyExpenseAccountId() {
   const a = (await query(`select Id from Account where AccountType = 'Cost of Goods Sold' maxresults 1`)).Account
          || (await query(`select Id from Account where Classification = 'Expense' maxresults 1`)).Account;
@@ -316,22 +335,31 @@ async function anyExpenseAccountId() {
   return a[0].Id;
 }
 
-// ---- the two operations accounting.js calls ----
+// ---- the operations accounting.js calls ----
 export async function createInvoice({ customer, amount, ref, lines }) {
   const customerId = await ensureCustomer(customer || 'Customer');
-  const itemId = await anyItemId();
   // One line per trailer (with VIN in the description) when provided; else a single line.
-  const Line = (Array.isArray(lines) && lines.length)
-    ? lines.map(l => ({
-        DetailType: 'SalesItemLineDetail', Amount: Number(l.amount),
-        Description: (l.description || `Built Trailers order ${ref || ''}`).toString().slice(0, 1000).trim(),
-        SalesItemLineDetail: { ItemRef: { value: itemId }, Qty: 1, UnitPrice: Number(l.amount) },
-      }))
-    : [{
-        DetailType: 'SalesItemLineDetail', Amount: Number(amount),
-        Description: `Built Trailers order ${ref || ''}`.trim(),
-        SalesItemLineDetail: { ItemRef: { value: itemId }, Qty: 1, UnitPrice: Number(amount) },
-      }];
+  // Each line books against its model's Product/Service (resolved once per model per invoice).
+  const itemCache = new Map();
+  const itemFor = async l => {
+    const key = l?.modelId || l?.model || '';
+    if (!itemCache.has(key)) itemCache.set(key, await itemIdForModel(l?.modelId, l?.model));
+    return itemCache.get(key);
+  };
+  const Line = [];
+  if (Array.isArray(lines) && lines.length) {
+    for (const l of lines) Line.push({
+      DetailType: 'SalesItemLineDetail', Amount: Number(l.amount),
+      Description: (l.description || `Built Trailers order ${ref || ''}`).toString().slice(0, 1000).trim(),
+      SalesItemLineDetail: { ItemRef: { value: await itemFor(l) }, Qty: Number(l.qty) || 1, UnitPrice: Number(l.amount) / (Number(l.qty) || 1) },
+    });
+  } else {
+    Line.push({
+      DetailType: 'SalesItemLineDetail', Amount: Number(amount),
+      Description: `Built Trailers order ${ref || ''}`.trim(),
+      SalesItemLineDetail: { ItemRef: { value: await anyItemId() }, Qty: 1, UnitPrice: Number(amount) },
+    });
+  }
   const inv = await call('POST', `invoice?minorversion=${MINOR}`, {
     CustomerRef: { value: customerId },
     DocNumber: (ref || '').slice(0, 21) || undefined,
@@ -376,6 +404,24 @@ export async function createJournalEntry({ ref, amount, memo }) {
   const je = await call('POST', `journalentry?minorversion=${MINOR}`, {
     DocNumber: (ref || '').slice(0, 21) || undefined, PrivateNote: memo,
     Line: [line(gained ? 'Debit' : 'Credit', assetId), line(gained ? 'Credit' : 'Debit', adjId)],
+  });
+  return je.JournalEntry.Id;
+}
+
+// Relieve an invoiced order's built cost out of inventory: Dr Cost of Goods Sold,
+// Cr Inventory asset — so the QBO P&L shows true gross margin without manual journals.
+export async function createCOGSJournal({ ref, amount, memo }) {
+  const amt = Math.round((Number(amount) || 0) * 100) / 100;
+  if (amt < 0.005) return null;
+  const assetId = await inventoryAssetAccountId();
+  const cogsId = await anyExpenseAccountId(); // prefers an account of type 'Cost of Goods Sold'
+  const line = (postingType, accountId) => ({
+    Amount: amt, DetailType: 'JournalEntryLineDetail', Description: (memo || '').slice(0, 1000),
+    JournalEntryLineDetail: { PostingType: postingType, AccountRef: { value: accountId } },
+  });
+  const je = await call('POST', `journalentry?minorversion=${MINOR}`, {
+    DocNumber: ('COGS-' + (ref || '')).slice(0, 21), PrivateNote: memo,
+    Line: [line('Debit', cogsId), line('Credit', assetId)],
   });
   return je.JournalEntry.Id;
 }

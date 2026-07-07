@@ -108,6 +108,32 @@ test('invoice consumes remaining stages, bills once, and blocks a re-invoice', a
   assert.ok(!stillWip, 'invoiced order left WIP');
 });
 
+test('invoicing relieves COGS to the ledger for single orders AND batches', async () => {
+  // The single-order invoice from the test above left a cogs event (its Build stage consumed
+  // real material, so WIP > 0) — this is what pushes to QBO as Dr COGS / Cr Inventory.
+  const acct = await json(await api('/api/accounting'));
+  const single = acct.events.find(e => e.kind === 'cogs' && e.ref === orderId);
+  assert.ok(single, 'single-order invoice posted a cogs event');
+  assert.ok(single.amount > 0, 'cogs carries the consumed WIP value');
+
+  // Batch path: two orders, batched, posted — each order gets consumed + its own cogs relief.
+  const custs = (await json(await api('/api/customers'))).filter(c => c.active !== false && c.allowed?.length);
+  const models = await json(await api('/api/models'));
+  let cust, model;
+  for (const c of custs) { const m = models.find(mm => c.allowed.includes(mm.category)); if (m) { cust = c; model = m; break; } }
+  const o1 = await json(await api('/api/orders', { method: 'POST', body: JSON.stringify({ customerId: cust.id, modelId: model.id, qty: 1 }) }));
+  const o2 = await json(await api('/api/orders', { method: 'POST', body: JSON.stringify({ customerId: cust.id, modelId: model.id, qty: 1 }) }));
+  const batch = await json(await api('/api/invoice-batches', { method: 'POST', body: JSON.stringify({ customerId: cust.id, orderIds: [o1.id, o2.id] }) }));
+  assert.equal((await api('/api/invoice-batches/' + batch.id + '/post', { method: 'POST' })).status, 200, 'batch posts');
+  const after = await json(await api('/api/accounting'));
+  for (const oid of [o1.id, o2.id]) {
+    const ev = after.events.find(e => e.kind === 'cogs' && e.ref === oid);
+    assert.ok(ev, `batch order ${oid} relieved COGS`);
+    assert.ok(ev.amount > 0, `batch order ${oid} cogs carries the consumed value`);
+  }
+  assert.ok(after.events.find(e => e.kind === 'invoice' && e.ref === batch.id), 'one combined invoice for the batch');
+});
+
 test('inventory valuation exposes the raw / make / WIP / finished buckets', async () => {
   const v = await json(await api('/api/inventory/summary'));
   for (const k of ['rawPurchased', 'makeParts', 'wipValue', 'finishedValue', 'totalValue'])

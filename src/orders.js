@@ -86,10 +86,20 @@ export async function consumeInventory(orderId, userId) {
   // Bill once (idempotent on `billed`), independent of consume. Skipped if billed as part of
   // an invoice batch (invoice_batch_id) so a trailer is never invoiced twice.
   if (!o.invoice_batch_id && !o.billed) {
-    const info = await one(`SELECT m.price, c.name AS customer FROM sales_order o
+    const info = await one(`SELECT m.id AS model_id, m.name AS model, m.price, c.name AS customer FROM sales_order o
                               LEFT JOIN model m ON m.id=o.model_id
                               LEFT JOIN customer c ON c.id=o.customer_id WHERE o.id=$1`, [orderId]);
-    if (info) await postInvoice(orderId, info.customer || 'Customer', Number(info.price || 0) * o.qty, userId);
+    if (info) {
+      // One QuickBooks line per trailer (with its VIN), booked against the model's own
+      // Product/Service — so QBO income reports split by what was actually sold.
+      const unit = Number(info.price || 0);
+      const vins = await all('SELECT vin FROM trailer WHERE order_id=$1 AND vin IS NOT NULL ORDER BY serial', [orderId]);
+      const lines = Array.from({ length: o.qty }, (_, i) => ({
+        modelId: info.model_id, model: info.model, qty: 1, amount: unit,
+        description: `${info.model || 'Trailer'}${vins[i] ? ' — VIN ' + vins[i].vin : ''} (order ${orderId})`,
+      }));
+      await postInvoice(orderId, info.customer || 'Customer', unit * o.qty, userId, lines);
+    }
     // Relieve the accumulated WIP cost into COGS.
     const cogs = await orderWip(orderId);
     if (cogs > 0) await postCOGS(orderId, cogs, userId);
