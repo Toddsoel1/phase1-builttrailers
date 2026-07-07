@@ -227,6 +227,15 @@ const colMigrations = [
   `ALTER TABLE model ADD COLUMN IF NOT EXISTS hitch_code TEXT`,
   `ALTER TABLE model ADD COLUMN IF NOT EXISTS body_code TEXT`,
   `ALTER TABLE model ADD COLUMN IF NOT EXISTS axles INT`,
+  // Over-the-counter part sales: one action deducts stock, invoices the buyer, and relieves
+  // COGS — so selling a spare fender never means stepping outside the app.
+  `CREATE TABLE IF NOT EXISTS part_sale (id SERIAL PRIMARY KEY, customer_id TEXT, party TEXT NOT NULL,
+     total NUMERIC(12,2) NOT NULL DEFAULT 0, cost_total NUMERIC(12,2) NOT NULL DEFAULT 0,
+     note TEXT, sold_by TEXT, sold_at TIMESTAMPTZ NOT NULL DEFAULT now())`,
+  `CREATE TABLE IF NOT EXISTS part_sale_line (id SERIAL PRIMARY KEY, sale_id INT NOT NULL,
+     part_id TEXT NOT NULL, qty NUMERIC(12,2) NOT NULL, unit_price NUMERIC(12,2) NOT NULL DEFAULT 0,
+     unit_cost NUMERIC(12,2) NOT NULL DEFAULT 0)`,
+  `CREATE INDEX IF NOT EXISTS idx_psl_sale ON part_sale_line(sale_id)`,
   // Reprint controls: a reprint requeues the job with a mandatory reason, and every event
   // lands in a permanent register — an MSO is a title document, so duplicates must be traceable.
   `ALTER TABLE print_job ADD COLUMN IF NOT EXISTS reprint_count INT NOT NULL DEFAULT 0`,

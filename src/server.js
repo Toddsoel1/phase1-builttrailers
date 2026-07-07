@@ -49,6 +49,7 @@ import { emailConfigured } from './email.js';
 import { runReminders } from './reminders.js';
 import { sendWeeklyDigest } from './digest.js';
 import { nhtsaCheckUnits, vinYear } from './vin.js';
+import * as partsales from './partsales.js';
 import * as analytics from './analytics.js';
 import * as andon from './andon.js';
 import { runBackup } from './backup.js';
@@ -963,6 +964,14 @@ app.post('/api/parts/:id/adjust', authMiddleware, requireTier('editor'), async (
   await q('UPDATE part SET on_hand=$1 WHERE id=$2', [to, req.params.id]);
   await audit(req, 'part.adjust', `${req.params.id}: ${cur.on_hand} -> ${to} (${req.body?.reason || ''})`);
   res.json({ ok: true });
+});
+// ---- Over-the-counter part sales: stock down + invoice + COGS relief in one action ----
+app.post('/api/parts/sell', authMiddleware, requireSales, async (req, res) => {
+  try { res.json(await partsales.sellParts(req.body || {}, req.user)); }
+  catch (e) { res.status(400).json({ error: e.message }); }
+});
+app.get('/api/parts/sales', authMiddleware, requireSection('parts'), async (_req, res) => {
+  res.json({ markup: Number(process.env.PARTS_MARKUP || 1.5), sales: await partsales.listSales() });
 });
 // ---- Cycle counts: operations specialist records; OM/GM approves before on-hand + QB post ----
 app.post('/api/cycle-counts', authMiddleware, requireOpsCount, async (req, res) => {

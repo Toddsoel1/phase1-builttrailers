@@ -160,6 +160,40 @@ test('create an app-only Make part', async () => {
   assert.ok(p && p.type === 'M', 'Make part created with type M');
 });
 
+test('sell parts over the counter: stock down, invoice + COGS posted, oversell needs confirmation', async () => {
+  // A dedicated part so the sale never disturbs the MRP/replenishment assertions elsewhere.
+  const made = await json(await api('/api/parts', { method: 'POST', body: JSON.stringify({ name: 'Sale Test Fender', cost: 40 }) }));
+  await api('/api/parts/' + made.id + '/adjust', { method: 'POST', body: JSON.stringify({ onHand: 10, reason: 'stock for sale test' }) });
+
+  assert.equal((await api('/api/parts/sell', { method: 'POST', body: JSON.stringify({ customerName: 'X', lines: [] }) })).status, 400, 'empty sale refused');
+  assert.equal((await api('/api/parts/sell', { method: 'POST', body: JSON.stringify({ lines: [{ partId: made.id, qty: 1, unitPrice: 60 }] }) })).status, 400, 'needs a customer or walk-in name');
+
+  const sale = await json(await api('/api/parts/sell', { method: 'POST', body: JSON.stringify({ customerName: 'Walk-in Wally', lines: [{ partId: made.id, qty: 2, unitPrice: 60 }], note: 'smoke sale' }) }));
+  assert.match(sale.ref, /^PS-\d+$/);
+  assert.equal(sale.total, 120);
+  assert.equal(sale.costTotal, 80, 'cost side captured from the part');
+  assert.equal(sale.margin, 40);
+  const after = (await json(await api('/api/parts'))).find(p => p.id === made.id);
+  assert.equal(after.onHand, 8, 'stock deducted');
+  const acct = await json(await api('/api/accounting'));
+  assert.ok(acct.events.find(e => e.kind === 'invoice' && e.ref === sale.ref), 'invoice posted for the sale');
+  assert.ok(acct.events.find(e => e.kind === 'cogs' && e.ref === sale.ref && e.amount === 80), 'COGS relieved at part cost');
+
+  // Overselling requires the explicit confirmation flag; stock then goes honestly negative.
+  const over = await api('/api/parts/sell', { method: 'POST', body: JSON.stringify({ customerName: 'Wally', lines: [{ partId: made.id, qty: 12, unitPrice: 50 }] }) });
+  assert.equal(over.status, 400);
+  assert.match((await over.json()).error, /sell anyway/i, 'oversell explains itself');
+  assert.equal((await api('/api/parts/sell', { method: 'POST', body: JSON.stringify({ customerName: 'Wally', lines: [{ partId: made.id, qty: 12, unitPrice: 50 }], allowNegative: true }) })).status, 200, 'confirmed oversell allowed');
+  assert.equal((await json(await api('/api/parts'))).find(p => p.id === made.id).onHand, -4, 'stock goes negative until receiving/count corrects it');
+
+  const reg = await json(await api('/api/parts/sales'));
+  assert.ok(reg.markup >= 1, 'suggested-price markup exposed');
+  const row = reg.sales.find(s => s.ref === sale.ref);
+  assert.ok(row && row.party === 'Walk-in Wally' && /Sale Test Fender|2×/.test(row.items + ''), 'sale in the register');
+
+  await api('/api/parts/' + made.id + '/adjust', { method: 'POST', body: JSON.stringify({ onHand: 0, reason: 'sale test cleanup' }) });
+});
+
 test('assign a vendor to a part — validated, reflected on GET, and unassignable', async () => {
   const v = await json(await api('/api/vendors', { method: 'POST', body: JSON.stringify({ name: 'Part Vendor Test Co', leadDays: 3 }) }));
   const part = await json(await api('/api/parts', { method: 'POST', body: JSON.stringify({ name: 'Smoke Vendor-Assign Bracket', cost: 4.5 }) }));
