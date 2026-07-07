@@ -975,7 +975,7 @@ app.get('/api/parts/sales', authMiddleware, requireSection('parts'), async (_req
 });
 // ---- Cycle counts: operations specialist records; OM/GM approves before on-hand + QB post ----
 app.post('/api/cycle-counts', authMiddleware, requireOpsCount, async (req, res) => {
-  try { res.json(await inventory.createCycleCount(req.body?.lines, req.body?.note, req.user)); }
+  try { res.json(await inventory.createCycleCount(req.body?.lines, req.body?.note, req.user, !!req.body?.opening)); }
   catch (e) { res.status(400).json({ error: e.message }); }
 });
 app.get('/api/cycle-counts', authMiddleware, requireOpsCount, async (req, res) => res.json(await inventory.listCycleCounts(req.query.status)));
@@ -1743,8 +1743,8 @@ app.get('/api/mrp', authMiddleware, async (_req, res) => {
 app.get('/api/po', authMiddleware, async (_req, res) => res.json(await poList()));
 app.post('/api/po', authMiddleware, requireTier('editor'), async (req, res) => {
   try {
-    const { partId, qty } = req.body || {};
-    const result = await createPO(partId, Math.max(1, Math.round(Number(qty) || 0)), req.user.id);
+    const { partId, qty, vendorId } = req.body || {};
+    const result = await createPO(partId, Math.max(1, Math.round(Number(qty) || 0)), req.user.id, vendorId || undefined);
     res.json(result);
   } catch (e) { res.status(400).json({ error: String(e.message || e) }); }
 });

@@ -134,6 +134,42 @@ test('invoicing relieves COGS to the ledger for single orders AND batches', asyn
   assert.ok(after.events.find(e => e.kind === 'invoice' && e.ref === batch.id), 'one combined invoice for the batch');
 });
 
+test('counts: opening baseline sets on-hand with NO books posting; a regular count posts', async () => {
+  const p = await json(await api('/api/parts', { method: 'POST', body: JSON.stringify({ name: 'Count Test Widget', cost: 10 }) }));
+  await api('/api/parts/' + p.id + '/adjust', { method: 'POST', body: JSON.stringify({ onHand: 5, reason: 'count test seed' }) });
+
+  // Opening (clean-start) count: 5 -> 12. On-hand applies; the books see nothing.
+  const cc = await json(await api('/api/cycle-counts', { method: 'POST', body: JSON.stringify({ lines: [{ partId: p.id, countedQty: 12 }], note: 'baseline', opening: true }) }));
+  assert.ok((await json(await api('/api/cycle-counts?status=pending'))).find(c => c.id === cc.id && c.opening === true), 'opening flag rides the listing');
+  const ap = await json(await api('/api/cycle-counts/' + cc.id + '/approve', { method: 'POST' }));
+  assert.equal(ap.qb, 'baseline', 'opening count does not post an adjustment');
+  assert.equal((await json(await api('/api/parts'))).find(x => x.id === p.id).onHand, 12, 'baseline on-hand applied');
+  assert.ok(!(await json(await api('/api/accounting'))).events.find(e => e.kind === 'inventory-adjust' && e.ref === 'CC-' + cc.id),
+    'no inventory-adjust ledger event for a baseline');
+
+  // Regular cycle count: 12 -> 9 posts a -$30 variance to the ledger (QBO journal in live mode).
+  const cc2 = await json(await api('/api/cycle-counts', { method: 'POST', body: JSON.stringify({ lines: [{ partId: p.id, countedQty: 9 }], note: 'weekly count' }) }));
+  const ap2 = await json(await api('/api/cycle-counts/' + cc2.id + '/approve', { method: 'POST' }));
+  assert.equal(ap2.netValue, -30);
+  assert.ok((await json(await api('/api/accounting'))).events.find(e => e.kind === 'inventory-adjust' && e.ref === 'CC-' + cc2.id),
+    'regular count variance hits the ledger');
+  await api('/api/parts/' + p.id + '/adjust', { method: 'POST', body: JSON.stringify({ onHand: 0, reason: 'count test cleanup' }) });
+});
+
+test('multi-vendor buys: a PO can go to an alternate vendor; the primary stays for MRP timing', async () => {
+  const vendors = (await json(await api('/api/vendors'))).filter(v => v.status !== 'pending' && v.status !== 'rejected');
+  assert.ok(vendors.length >= 2, 'two usable vendors available');
+  const [primary, alt] = vendors;
+  const part = await json(await api('/api/parts', { method: 'POST', body: JSON.stringify({ name: 'Dual Source Bracket', cost: 8 }) }));
+  await api('/api/parts/' + part.id, { method: 'PATCH', body: JSON.stringify({ vendorId: primary.id }) });
+
+  const po = await json(await api('/api/po', { method: 'POST', body: JSON.stringify({ partId: part.id, qty: 2, vendorId: alt.id }) }));
+  const row = (await json(await api('/api/po'))).find(x => x.id === po.id);
+  assert.equal(row.vendorId, alt.id, 'the PO belongs to the vendor actually used');
+  assert.equal((await json(await api('/api/parts'))).find(x => x.id === part.id).vendorId, primary.id, 'primary vendor unchanged');
+  assert.equal((await api('/api/po', { method: 'POST', body: JSON.stringify({ partId: part.id, qty: 1, vendorId: 'nope' }) })).status, 400, 'unknown alternate vendor rejected');
+});
+
 test('inventory valuation exposes the raw / make / WIP / finished buckets', async () => {
   const v = await json(await api('/api/inventory/summary'));
   for (const k of ['rawPurchased', 'makeParts', 'wipValue', 'finishedValue', 'totalValue'])

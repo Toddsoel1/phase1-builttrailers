@@ -1268,8 +1268,26 @@ async function saveNewLaborStep(modelId){
 }
 
 async function viewInv(){
-  $('pTitle').textContent='Inventory Value';$('pSub').textContent='Live valuation across raw stock, WIP and finished goods';$('pActions').innerHTML='';
-  const [inv,parts,wip]=await Promise.all([api('/api/inventory/summary'),api('/api/parts'),api('/api/wip').catch(()=>[])]);
+  $('pTitle').textContent='Inventory Value';$('pSub').textContent='Live valuation across raw stock, WIP and finished goods';
+  const canCount=isAdmin()||hasTitle('Shop Specialist','Office Manager','General Manager');
+  $('pActions').innerHTML=canCount?`<button class="btn" onclick="startCountModal()">🧮 Start a count</button>`:'';
+  const [inv,parts,wip,counts]=await Promise.all([api('/api/inventory/summary'),api('/api/parts'),api('/api/wip').catch(()=>[]),
+    canCount?api('/api/cycle-counts').catch(()=>[]):Promise.resolve([])]);
+  window._ccParts=parts.filter(p=>p.active!==false);
+  const canApprove=isAdmin()||hasTitle('Office Manager','General Manager');
+  const pendingCounts=counts.filter(c=>c.status==='pending');
+  const doneCounts=counts.filter(c=>c.status!=='pending').slice(0,8);
+  const countCard=canCount?`<div class="card" style="margin-top:16px;${pendingCounts.length?'border-color:var(--accent)':''}"><h3>🧮 Counts ${pendingCounts.length?`<span class="badge b-low">${pendingCounts.length} awaiting approval</span>`:''}</h3>
+    <p class="muted" style="font-size:12px;margin-bottom:10px">The Shop Specialist counts; the Office/General Manager approves — only then do on-hand and the QuickBooks value change. An <b>opening (baseline)</b> count sets on-hand without posting to QuickBooks: use it for the wall-to-wall clean-start count.</p>
+    ${pendingCounts.map(c=>`<div style="display:flex;gap:10px;align-items:center;padding:8px 0;border-bottom:1px solid var(--line);flex-wrap:wrap">
+      <div style="flex:1;min-width:200px"><b>CC-${c.id}</b>${c.opening?' <span class="badge b-buy">OPENING — no QB posting</span>':''} — ${c.lines} part(s), net <span style="color:${c.netValue>=0?'var(--ok,#1a7f4b)':'var(--red)'}">${money(c.netValue)}</span>
+        <div class="muted" style="font-size:11.5px">${esc(c.createdBy||'')} · ${new Date(c.createdAt).toLocaleString()}${c.note?' — '+esc(c.note):''}</div></div>
+      <button class="btn sm sec" onclick="viewCountDetail(${c.id})">Review lines</button>
+      ${canApprove?`<button class="btn sm" onclick="approveCount(${c.id},${c.opening?'true':'false'},${Math.round(c.netValue)})">✓ Approve</button>
+      <button class="btn sm sec" onclick="rejectCount(${c.id})">✕ Reject</button>`:''}
+    </div>`).join('')||'<p class="muted" style="font-size:12.5px">No counts awaiting approval.</p>'}
+    ${doneCounts.length?`<p class="muted" style="font-size:11.5px;margin:10px 0 2px"><b>Recent</b></p>${doneCounts.map(c=>`<div class="muted" style="font-size:11.5px;padding:2px 0">CC-${c.id} — ${c.status}${c.opening?' (opening baseline)':''} · ${c.lines} part(s) · net ${money(c.netValue)} · ${c.reviewedBy?esc(c.reviewedBy):''} ${c.qbStatus?'· QB '+esc(c.qbStatus):''}</div>`).join('')}`:''}
+  </div>`:'';
   const top=parts.slice().sort((a,b)=>b.extValue-a.extValue).slice(0,15);
   $('content').innerHTML=`<div class="grid g4">
     ${kpi('Total inventory value',money(inv.totalValue),'raw + WIP + finished')}
@@ -1289,10 +1307,64 @@ async function viewInv(){
    ${wip.map(o=>`<tr><td><b>${esc(o.id)}</b></td><td>${esc(o.model||'')}</td><td class="muted">${esc(o.customer||'')}</td><td class="center">${stageBadge(o.stage)}</td><td class="muted" style="font-size:12px">${(o.doneStages||[]).join(', ')||'—'}</td><td class="right"><b>${money(o.wip)}</b></td></tr>`).join('')}
    <tr><td colspan="5" class="right"><b>Total in WIP + finished</b></td><td class="right"><b>${money(inv.wipValue+inv.finishedValue)}</b></td></tr>
    </tbody></table></div>`:''}
+   ${countCard}
    <div class="card" style="margin-top:16px"><h3>Top 15 parts by value on hand</h3>
    <table><thead><tr><th>Part</th><th class="right">On hand</th><th class="right">Unit cost</th><th class="right">Ext. value</th></tr></thead><tbody>
    ${top.map(p=>`<tr><td><b>${esc(p.id)}</b> ${esc(p.name)}</td><td class="right">${p.onHand}</td><td class="right">${money2(p.cost)}</td><td class="right">${money(p.extValue)}</td></tr>`).join('')}
    </tbody></table></div>`;
+}
+// ── 🧮 Physical counts: Shop Specialist records → OM/GM approves → on-hand + QuickBooks ──
+function startCountModal(){
+  const parts=window._ccParts||[];
+  modal('🧮 Physical count',`
+    <p class="muted" style="font-size:12.5px">Type the counted quantity for every part you physically counted — leave the rest blank (blank = not counted, unchanged). Filter to work area by area.</p>
+    <input id="ccFilter" placeholder="filter parts…" oninput="ccFilterRows()" style="width:100%;padding:8px;border-radius:8px;border:1px solid var(--line);background:var(--panel2);color:var(--txt);margin-bottom:8px">
+    <div style="max-height:320px;overflow-y:auto;border:1px solid var(--line);border-radius:8px;padding:4px 8px">
+      ${parts.map(p=>`<div class="ccRow" data-t="${esc((p.id+' '+p.name).toLowerCase())}" style="display:flex;gap:8px;align-items:center;padding:4px 0;border-bottom:1px solid var(--line)">
+        <div style="flex:1;min-width:160px;font-size:12.5px"><b>${esc(p.id)}</b> <span class="muted">${esc(p.name)}</span></div>
+        <span class="muted" style="font-size:11px">sys ${p.onHand}</span>
+        <input type="number" min="0" step="1" class="ccQty" data-part="${esc(p.id)}" placeholder="—" style="width:74px;padding:5px;border-radius:6px;border:1px solid var(--line);background:var(--panel2);color:var(--txt)">
+      </div>`).join('')}
+    </div>
+    <label style="display:flex;gap:9px;align-items:flex-start;font-size:12.5px;margin:12px 0;cursor:pointer">
+      <input type="checkbox" id="ccOpening" style="margin-top:2px;width:16px;height:16px;flex:0 0 auto">
+      <span><b>Opening / baseline count</b> — sets on-hand as the starting truth <b>without posting a QuickBooks adjustment</b>. Use for the initial wall-to-wall count; QuickBooks gets one accountant journal at cutover instead.</span></label>
+    <div class="field"><label>Note (area / who counted)</label><input id="ccNote" class="inp" placeholder="e.g. steel racks + hardware wall — Maria & Dave"></div>
+    <div class="row" style="gap:8px;margin-top:8px">
+      <button class="btn" onclick="submitCount()">Submit for approval</button>
+      <button class="btn sec" onclick="closeModal()">Cancel</button>
+    </div>`);
+}
+function ccFilterRows(){const q=($('ccFilter').value||'').toLowerCase();document.querySelectorAll('.ccRow').forEach(r=>{r.style.display=!q||r.dataset.t.includes(q)?'flex':'none';});}
+async function submitCount(){
+  const lines=[...document.querySelectorAll('.ccQty')].filter(i=>i.value!=='').map(i=>({partId:i.dataset.part,countedQty:Number(i.value)}));
+  if(!lines.length)return toast('Enter a counted quantity for at least one part.');
+  const opening=$('ccOpening').checked;
+  try{ const r=await api('/api/cycle-counts',{method:'POST',body:JSON.stringify({lines,note:($('ccNote').value||'').trim(),opening})});
+    closeModal(); toast('🧮 CC-'+r.id+' submitted — '+lines.length+' part(s)'+(opening?' (opening baseline)':'')+' — awaiting OM/GM approval'); viewInv();
+  }catch(e){ toast(e.message); }
+}
+async function viewCountDetail(id){
+  let d; try{ d=await api('/api/cycle-counts/'+id); }catch(e){ return toast(e.message); }
+  modal('CC-'+id+(d.opening?' — OPENING baseline':''),`
+    <p class="muted" style="font-size:12px">${esc(d.createdBy||'')} · ${new Date(d.createdAt).toLocaleString()}${d.note?' — '+esc(d.note):''}</p>
+    <table><thead><tr><th>Part</th><th class="right">System</th><th class="right">Counted</th><th class="right">Δ</th><th class="right">Value</th></tr></thead><tbody>
+    ${d.lines.map(l=>`<tr><td><b>${esc(l.partId)}</b> <span class="muted" style="font-size:11px">${esc(l.name||'')}</span></td>
+      <td class="right">${l.systemQty}</td><td class="right"><b>${l.countedQty}</b></td>
+      <td class="right" style="color:${l.variance===0?'var(--muted)':l.variance>0?'var(--ok,#1a7f4b)':'var(--red)'}">${l.variance>0?'+':''}${l.variance}</td>
+      <td class="right">${money(l.varianceValue)}</td></tr>`).join('')}
+    </tbody></table>
+    <div style="margin-top:12px;text-align:right"><button class="btn sec" onclick="closeModal()">Close</button></div>`);
+}
+async function approveCount(id,opening,net){
+  if(!confirm('Approve CC-'+id+'? On-hand updates for every counted part'+(opening?'. Opening baseline — nothing posts to QuickBooks.':', and the $'+Math.abs(net)+' net variance posts to QuickBooks.')))return;
+  try{ const r=await api('/api/cycle-counts/'+id+'/approve',{method:'POST'}); toast('✓ CC-'+id+' applied — net '+money(r.netValue)+(opening?' (baseline, no QB posting)':' (QB '+r.qb+')')); viewInv(); }
+  catch(e){ toast(e.message); }
+}
+async function rejectCount(id){
+  const note=prompt('Reject CC-'+id+'? Optional reason:'); if(note===null)return;
+  try{ await api('/api/cycle-counts/'+id+'/reject',{method:'POST',body:JSON.stringify({note:note||undefined})}); toast('CC-'+id+' rejected'); viewInv(); }
+  catch(e){ toast(e.message); }
 }
 
 async function viewDaily(){
@@ -2473,8 +2545,30 @@ async function viewPredict(){
    <div class="card" style="margin-top:16px"><h3>How a recommendation is computed</h3>
    <p class="muted">Projected on-hand = current + open POs − demand from open orders. We compare days-of-coverage (on-hand ÷ daily consumption from production capacity) against vendor lead time + safety days. If coverage is thin, the suggested quantity rounds up to the vendor's lot size to refill past the reorder+cushion line and cover consumption during the lead window — so you reorder early enough to never run out.</p></div>`;
 }
+// Create a PO — the part's primary vendor is preselected, but any approved vendor can take
+// this buy (multi-vendor parts): the PO and its receipt stats follow the vendor actually used.
 async function makePO(partId,qty){
-  try{const r=await api('/api/po',{method:'POST',body:JSON.stringify({partId,qty})});toast(r.id+' created → emailed to vendor');viewPredict();}catch(e){toast(e.message);}
+  let parts,vendors;
+  try{ [parts,vendors]=await Promise.all([api('/api/parts'),api('/api/vendors')]); }catch(e){ return toast(e.message); }
+  const p=parts.find(x=>x.id===partId); if(!p)return toast('Part not found');
+  const usable=vendors.filter(v=>v.status!=='rejected'&&v.status!=='pending');
+  modal('Create PO — '+esc(partId),`
+    <p class="muted" style="font-size:12.5px">${esc(p.name)} · ${p.onHand} on hand · cost ${money2(p.cost)}/ea. The primary vendor drives reorder timing; pick an alternate for this buy if that's who you're actually ordering from.</p>
+    <div class="row">
+      <div class="field"><label>Quantity</label><input id="poQty" class="inp" type="number" min="1" value="${Math.max(1,Number(qty)||1)}"></div>
+      <div class="field"><label>Vendor</label><select id="poVendor" class="inp">
+        ${usable.map(v=>`<option value="${esc(v.id)}" ${v.id===p.vendorId?' selected':''}>${esc(v.name)}${v.id===p.vendorId?' — primary':''}${v.leadDays!=null||v.lead_days!=null?' ('+(v.leadDays??v.lead_days)+'d lead)':''}</option>`).join('')}
+      </select></div>
+    </div>
+    <div class="row" style="gap:8px;margin-top:8px">
+      <button class="btn" onclick="sendPO('${esc(partId)}')">Create PO</button>
+      <button class="btn sec" onclick="closeModal()">Cancel</button>
+    </div>`);
+}
+async function sendPO(partId){
+  const qty=Number($('poQty').value)||1;
+  const vendorId=$('poVendor').value||undefined;
+  try{const r=await api('/api/po',{method:'POST',body:JSON.stringify({partId,qty,vendorId})});closeModal();toast(r.id+(r.status==='Pending Approval'?' created — pending approval':' created'));viewPredict();}catch(e){toast(e.message);}
 }
 async function autoPO(){
   try{const r=await api('/api/mrp/auto',{method:'POST'});toast('⚡ Generated '+r.created+' purchase orders');page='pos';render();}catch(e){toast(e.message);}

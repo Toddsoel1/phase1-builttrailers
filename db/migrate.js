@@ -227,6 +227,10 @@ const colMigrations = [
   `ALTER TABLE model ADD COLUMN IF NOT EXISTS hitch_code TEXT`,
   `ALTER TABLE model ADD COLUMN IF NOT EXISTS body_code TEXT`,
   `ALTER TABLE model ADD COLUMN IF NOT EXISTS axles INT`,
+  // Opening/baseline counts: set on-hand as the starting truth WITHOUT posting a QuickBooks
+  // variance — the clean-start tool for the initial wall-to-wall count (QBO gets one manual
+  // accountant journal instead of a giant "variance" that would double-count two years of books).
+  `ALTER TABLE cycle_count ADD COLUMN IF NOT EXISTS opening BOOLEAN NOT NULL DEFAULT false`,
   // Over-the-counter part sales: one action deducts stock, invoices the buyer, and relieves
   // COGS — so selling a spare fender never means stepping outside the app.
   `CREATE TABLE IF NOT EXISTS part_sale (id SERIAL PRIMARY KEY, customer_id TEXT, party TEXT NOT NULL,

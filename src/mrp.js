@@ -129,11 +129,16 @@ export async function poList() {
   }));
 }
 
-export async function createPO(partId, qty, userId) {
+// vendorId (optional) buys this lot from an ALTERNATE vendor: the part keeps its primary
+// vendor (which drives MRP timing), while this PO — and the receipts feeding the supplier
+// scorecard and actual-lead medians — belong to whoever was actually used.
+export async function createPO(partId, qty, userId, vendorId) {
   const p = await one('SELECT * FROM part WHERE id=$1', [partId]);
   if (!p) throw new Error('part not found');
-  const v = await one('SELECT * FROM vendor WHERE id=$1', [p.vendor_id]);
+  const v = await one('SELECT * FROM vendor WHERE id=$1', [vendorId || p.vendor_id]);
+  if (vendorId && !v) throw new Error('vendor not found');
   if (v && v.status === 'pending') throw new Error(`Vendor "${v.name}" is pending approval — cannot place a PO yet`);
+  if (v && v.status === 'rejected') throw new Error(`Vendor "${v.name}" was rejected — pick another vendor.`);
   const n = (await all('SELECT id FROM purchase_order', [])).length;
   const id = 'PO-' + (3303 + n);
   const eta = new Date(); eta.setDate(eta.getDate() + (Number(v?.lead_days) || 7));
@@ -146,7 +151,7 @@ export async function createPO(partId, qty, userId) {
 
   await q(`INSERT INTO purchase_order(id,vendor_id,part_id,qty,unit_cost,placed,eta,status,created_by)
            VALUES ($1,$2,$3,$4,$5,CURRENT_DATE,$6,$7,$8)`,
-    [id, p.vendor_id, partId, qty, p.cost, eta.toISOString().slice(0, 10), status, userId || null]);
+    [id, v ? v.id : p.vendor_id, partId, qty, p.cost, eta.toISOString().slice(0, 10), status, userId || null]);
   await q('INSERT INTO audit_log(user_id,action,detail) VALUES ($1,$2,$3)', [userId || null, 'po.create', `${id} ${partId} x${qty} → ${status}`]);
   return { id, status, approvalCount: requests.length };
 }

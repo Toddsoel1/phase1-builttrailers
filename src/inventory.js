@@ -6,10 +6,11 @@ import { postInventoryAdjustment } from './accounting.js';
 
 // Create a pending count from { partId, countedQty } lines. Captures the system on-hand and unit
 // cost at count time. Nothing changes (on-hand or QuickBooks) until it's approved.
-export async function createCycleCount(lines, note, user) {
+export async function createCycleCount(lines, note, user, opening = false) {
   const clean = (Array.isArray(lines) ? lines : []).filter(l => l && l.partId);
   if (!clean.length) throw new Error('Add at least one part to count.');
-  const cc = await one(`INSERT INTO cycle_count(status,note,created_by) VALUES('pending',$1,$2) RETURNING id`, [note || null, user?.id || null]);
+  const cc = await one(`INSERT INTO cycle_count(status,note,created_by,opening) VALUES('pending',$1,$2,$3) RETURNING id`,
+    [note || null, user?.id || null, !!opening]);
   for (const l of clean) {
     const p = await one('SELECT on_hand, cost FROM part WHERE id=$1', [l.partId]);
     if (!p) continue;
@@ -29,7 +30,7 @@ export async function listCycleCounts(status) {
        LEFT JOIN app_user r ON r.id=cc.reviewed_by
       ${status ? 'WHERE cc.status=$1' : ''}
       ORDER BY cc.created_at DESC`, status ? [status] : []);
-  return rows.map(c => ({ id: c.id, status: c.status, note: c.note, createdBy: c.created_by_name, createdAt: c.created_at,
+  return rows.map(c => ({ id: c.id, status: c.status, opening: !!c.opening, note: c.note, createdBy: c.created_by_name, createdAt: c.created_at,
     reviewedBy: c.reviewed_by_name, reviewedAt: c.reviewed_at, lines: Number(c.lines), netValue: Number(c.net_value), qbStatus: c.qb_status }));
 }
 
@@ -40,7 +41,7 @@ export async function cycleCountDetail(id) {
   const lines = await all(`SELECT l.*, p.name AS part_name, p.type AS part_type FROM cycle_count_line l
                              LEFT JOIN part p ON p.id=l.part_id WHERE l.count_id=$1 ORDER BY l.part_id`, [id]);
   return {
-    id: cc.id, status: cc.status, note: cc.note, createdBy: cc.created_by_name, createdAt: cc.created_at,
+    id: cc.id, status: cc.status, opening: !!cc.opening, note: cc.note, createdBy: cc.created_by_name, createdAt: cc.created_at,
     reviewedBy: cc.reviewed_by_name, reviewedAt: cc.reviewed_at, reviewNote: cc.review_note, qbStatus: cc.qb_status,
     lines: lines.map(l => {
       const v = Number(l.counted_qty) - Number(l.system_qty);
@@ -63,7 +64,12 @@ export async function approveCycleCount(id, user) {
     netValue += (Number(l.counted_qty) - Number(l.system_qty)) * Number(l.unit_cost);
   }
   netValue = Math.round(netValue * 100) / 100;
-  const posted = await postInventoryAdjustment(`CC-${id}`, netValue, user?.id).catch(e => ({ status: 'error', error: e.message }));
+  // An OPENING (baseline) count establishes the starting truth: on-hand is set, but no
+  // QuickBooks variance posts — at cutover the accountant trues QBO up with ONE journal
+  // against the app's Inventory Value instead of a giant fake "variance".
+  const posted = cc.opening
+    ? { status: 'baseline', external: null }
+    : await postInventoryAdjustment(`CC-${id}`, netValue, user?.id).catch(e => ({ status: 'error', error: e.message }));
   await q(`UPDATE cycle_count SET status='posted', reviewed_by=$1, reviewed_at=now(), qb_status=$2, qb_external_id=$3 WHERE id=$4`,
     [user?.id || null, posted?.status || 'posted', posted?.external || null, id]);
   return { id, status: 'posted', netValue, qb: posted?.status || 'posted' };
