@@ -335,6 +335,40 @@ test('VIN: print center + correction are restricted to OM/GM/Admin', async () =>
   assert.equal((await fetch(BASE + `/api/trailers/${vinUnitId}/vin`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + sales }, body: JSON.stringify({ vin: 'BLTHACKVIN0000001' }) })).status, 403, 'sales cannot change a VIN');
 });
 
+test("users section grant: a non-admin title with 'users' manages accounts but can never mint or touch an admin", async () => {
+  // The owner's real scenario: an editor-tier Office Manager granted the 'users' section checkbox.
+  await api('/api/roles', { method: 'POST', body: JSON.stringify({ name: 'User Desk', tier: 'editor', sections: ['users', 'dashboard'] }) });
+  const made = await json(await api('/api/users', { method: 'POST', body: JSON.stringify({ name: 'Uma Desk', titles: ['User Desk'], password: 'deskPw123' }) }));
+  const dl = await json(await fetch(BASE + '/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: made.username, password: 'deskPw123' }) }));
+  assert.ok(dl.token, 'section-granted manager can log in');
+  assert.ok((dl.user.sections || []).includes('users'), 'login payload carries the users section');
+  const H = { 'Content-Type': 'application/json', Authorization: 'Bearer ' + dl.token };
+  const desk = (p, opts = {}) => fetch(BASE + p, { ...opts, headers: H });
+
+  // Day-to-day works: list users, create a normal (non-admin) user, edit their email.
+  assert.equal((await desk('/api/users')).status, 200, 'can list users');
+  const nu = await (await desk('/api/users', { method: 'POST', body: JSON.stringify({ name: 'Floor Hand', titles: ['Sales'] }) })).json();
+  assert.ok(nu.id, 'can create a non-admin user');
+  assert.equal((await desk('/api/users/' + nu.id, { method: 'PATCH', body: JSON.stringify({ email: 'floor@builttrailers.app' }) })).status, 200, 'can edit a non-admin user');
+
+  // Escalation is impossible: no admin-tier titles, no touching admins, no self-edit, no role management.
+  const gm = (await json(await api('/api/users'))).find(u => u.role === 'admin');
+  assert.equal((await desk('/api/users', { method: 'POST', body: JSON.stringify({ name: 'Sneaky', titles: ['General Manager'] }) })).status, 403, 'cannot create an admin-tier user');
+  assert.equal((await desk('/api/users/' + nu.id, { method: 'PATCH', body: JSON.stringify({ titles: ['General Manager'] }) })).status, 403, 'cannot promote to an admin-tier title');
+  assert.equal((await desk('/api/users/' + nu.id, { method: 'PATCH', body: JSON.stringify({ role: 'admin' }) })).status, 403, 'cannot set the raw admin role');
+  assert.equal((await desk('/api/users/' + gm.id, { method: 'PATCH', body: JSON.stringify({ email: 'x@x.test' }) })).status, 403, 'cannot edit an admin account');
+  assert.equal((await desk('/api/users/' + gm.id, { method: 'DELETE' })).status, 403, 'cannot remove an admin');
+  assert.equal((await desk('/api/users/' + made.id, { method: 'PATCH', body: JSON.stringify({ titles: ['General Manager'] }) })).status, 403, 'cannot edit their own record here');
+  assert.equal((await desk('/api/roles/Sales', { method: 'PATCH', body: JSON.stringify({ tier: 'admin' }) })).status, 403, 'role/tier management stays admin-only');
+  const still = (await json(await api('/api/users'))).find(u => u.id === nu.id);
+  assert.equal(still.role, 'editor', 'target user was never escalated');
+
+  // A title WITHOUT the users section (Sales) still gets nothing.
+  const sr = await api('/api/auth/login', { method: 'POST', body: JSON.stringify({ username: 'aruiz', password: 'built2026' }) });
+  const sales = (await sr.json()).token;
+  assert.equal((await fetch(BASE + '/api/users', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + sales }, body: JSON.stringify({ name: 'Nope', titles: ['Sales'] }) })).status, 403, 'no users grant -> still locked out');
+});
+
 test('guarded reprints: reason required, permanent register, requeue with badge, MSO needs a buyer', async () => {
   const sr = await api('/api/auth/login', { method: 'POST', body: JSON.stringify({ username: 'aruiz', password: 'built2026' }) });
   const sales = (await sr.json()).token;

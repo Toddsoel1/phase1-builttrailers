@@ -758,12 +758,30 @@ app.get('/api/users', authMiddleware, async (_req, res) => {
   }
   res.json(users);
 });
-app.post('/api/users', authMiddleware, requireTier('admin'), async (req, res) => {
+// User management is open to admins AND to anyone whose job title grants the 'users' section
+// (e.g. an editor-tier Office Manager who runs onboarding). Section-granted managers handle the
+// day-to-day — create staff, emails, workstations, schedules, password resets — but can never
+// touch an admin account or mint one: tier/role/section management stays strictly admin.
+const isUserManager = u => u.role === 'admin' || (Array.isArray(u.sections) && u.sections.includes('users'));
+function requireUserManager(req, res, next) {
+  if (isUserManager(req.user)) return next();
+  return res.status(403).json({ error: "Requires admin access, or a job title granted the 'users' section." });
+}
+async function guardUserTarget(req, res, targetId) {
+  if (req.user.role === 'admin') return true;
+  if (targetId === req.user.id) { res.status(403).json({ error: 'Edit your own record via 👤 My profile.' }); return false; }
+  const t = await one('SELECT role FROM app_user WHERE id=$1', [targetId]);
+  if (t && t.role === 'admin') { res.status(403).json({ error: 'Only an admin can modify an admin account.' }); return false; }
+  return true;
+}
+app.post('/api/users', authMiddleware, requireUserManager, async (req, res) => {
   const { name, title, titles, password, phone, email, smsConsent } = req.body || {};
   if (!name) return res.status(400).json({ error: 'name required' });
   // Accept a list of job titles; fall back to the single `title` for older clients.
   const roleList = (Array.isArray(titles) ? titles : (title ? [title] : [])).filter(Boolean);
   const tier = await maxTier(roleList);
+  if (req.user.role !== 'admin' && tier === 'admin')
+    return res.status(403).json({ error: 'Only an admin can create a user with an admin-tier title.' });
   const primary = roleList[0] || null;
   const id = 'u' + Date.now();
   const base = name.trim().toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 12) || 'user';
@@ -804,27 +822,35 @@ app.post('/api/users/me/password', authMiddleware, async (req, res) => {
   await audit(req, 'user.password', 'self-change');
   res.json({ ok: true });
 });
-app.patch('/api/users/:id', authMiddleware, requireTier('admin'), async (req, res) => {
+app.patch('/api/users/:id', authMiddleware, requireUserManager, async (req, res) => {
+  if (!await guardUserTarget(req, res, req.params.id)) return;
   const { title, titles, role, manager_id, password, username, phone, email, workstation, schedule, smsConsent } = req.body || {};
   const cur = await one('SELECT * FROM app_user WHERE id=$1', [req.params.id]);
   if (!cur) return res.status(404).json({ error: 'not found' });
   let newTitle = title ?? cur.title;
   let tier = role ?? cur.role;
+  let roleList = null;
   if (Array.isArray(titles)) {
     // Replace the user's whole set of job titles; permissions become the union of their sections.
-    const roleList = titles.filter(Boolean);
-    await q('DELETE FROM user_title WHERE user_id=$1', [req.params.id]);
-    for (const rn of roleList) await q('INSERT INTO user_title(user_id,role_name) VALUES($1,$2) ON CONFLICT DO NOTHING', [req.params.id, rn]);
+    roleList = titles.filter(Boolean);
     newTitle = roleList[0] || null;
     tier = await maxTier(roleList);
   } else if (title) {
     tier = (await one('SELECT tier FROM role WHERE name=$1', [title]))?.tier || cur.role;
   }
+  // A section-granted (non-admin) user manager can never promote anyone to admin —
+  // not via titles and not via the raw role field. Checked BEFORE any mutation.
+  if (req.user.role !== 'admin' && tier === 'admin')
+    return res.status(403).json({ error: 'Only an admin can grant admin-tier titles or the admin permission.' });
   // Never let the last admin be demoted — a stray tier change on a title (plus this endpoint's
   // recompute-from-titles) is exactly how the GM locked himself out of Users & Roles.
   if (cur.role === 'admin' && tier !== 'admin') {
     const others = await one(`SELECT COUNT(*)::int AS n FROM app_user WHERE role='admin' AND id<>$1 AND active IS DISTINCT FROM false`, [req.params.id]);
     if (!Number(others?.n)) return res.status(400).json({ error: 'That would remove the last admin — give someone else an admin-tier title first.' });
+  }
+  if (roleList) {
+    await q('DELETE FROM user_title WHERE user_id=$1', [req.params.id]);
+    for (const rn of roleList) await q('INSERT INTO user_title(user_id,role_name) VALUES($1,$2) ON CONFLICT DO NOTHING', [req.params.id, rn]);
   }
   const consentAt = (smsConsent === true && !cur.sms_consent) ? new Date().toISOString() : cur.sms_consent_at;
   const { name } = req.body || {};
@@ -844,8 +870,9 @@ app.patch('/api/users/:id', authMiddleware, requireTier('admin'), async (req, re
   await audit(req, 'user.update', `${req.params.id}${smsConsent !== undefined ? (smsConsent ? ' [sms-consent granted]' : ' [sms-consent revoked]') : ''}`);
   res.json({ ok: true });
 });
-app.delete('/api/users/:id', authMiddleware, requireTier('admin'), async (req, res) => {
+app.delete('/api/users/:id', authMiddleware, requireUserManager, async (req, res) => {
   if (req.params.id === req.user.id) return res.status(400).json({ error: 'Cannot delete your own account' });
+  if (!await guardUserTarget(req, res, req.params.id)) return;
   const cur = await one('SELECT name, role FROM app_user WHERE id=$1', [req.params.id]);
   if (!cur) return res.status(404).json({ error: 'not found' });
   // Never remove the last admin — that's a full lockout (Users & Roles is admin-only).
@@ -871,7 +898,8 @@ app.delete('/api/users/:id', authMiddleware, requireTier('admin'), async (req, r
     res.json({ ok: true, deleted: true });
   }
 });
-app.patch('/api/users/:id/reactivate', authMiddleware, requireTier('admin'), async (req, res) => {
+app.patch('/api/users/:id/reactivate', authMiddleware, requireUserManager, async (req, res) => {
+  if (!await guardUserTarget(req, res, req.params.id)) return;
   await q('UPDATE app_user SET active=true WHERE id=$1', [req.params.id]);
   await audit(req, 'user.reactivate', req.params.id);
   res.json({ ok: true });

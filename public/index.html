@@ -247,8 +247,12 @@ function canSee(section){
   if(!ME.sections) return true; // null = all sections (admin)
   return ME.sections.includes(section);
 }
+// Admins manage everyone; a job title granted the 'users' section (e.g. Office Manager) runs
+// day-to-day accounts but can't touch admin accounts or grant admin-tier titles (server-enforced).
+const canManageUsers=()=>isAdmin()||canSee('users');
+const pickableRoles=rs=>isAdmin()?rs:rs.filter(r=>r.tier!=='admin'); // non-admins never see admin-tier titles as options
 function navVisible(n){
-  if(n[0]==='users') return isAdmin();
+  if(n[0]==='users') return canManageUsers();
   if(n[0]==='neworder') return canSell()&&canSee('neworder');
   if(n[0]==='printcenter') return hasTitle('Office Manager','General Manager')||isAdmin();
   if(n[0]==='boatadmin') return hasTitle('Office Manager','General Manager')||isAdmin();
@@ -1649,12 +1653,15 @@ async function savePerfTargets(){
 }
 async function viewUsers(){
   $('pTitle').textContent='Users & Roles';$('pSub').textContent='Accounts, permission tiers and reporting hierarchy';
-  if(isAdmin()) $('pActions').innerHTML=`<button class="btn" onclick="addUserModal()">+ Add User</button>`;
+  if(canManageUsers()) $('pActions').innerHTML=`<button class="btn" onclick="addUserModal()">+ Add User</button>`;
   const [users,roles,wsReg]=await Promise.all([api('/api/users'),api('/api/roles'),
     isAdmin()?api('/api/workstations/registry').catch(()=>[]):Promise.resolve([])]);
   window._wsReg=wsReg;
   const byId=Object.fromEntries(users.map(u=>[u.id,u]));
   const tierColor={admin:'admin',editor:'editor',viewer:'viewer'};
+  // What THIS viewer may do to a given row: admins touch everyone; a section-granted user
+  // manager touches non-admin accounts other than their own (the server enforces the same).
+  const canTouch=u=>isAdmin()||(canManageUsers()&&u.role!=='admin'&&u.id!==ME.id);
   $('content').innerHTML=`
   <div class="card" style="margin-bottom:14px"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px"><h3 style="margin:0">Users (${users.filter(u=>u.active!==false).length} active)</h3></div>
    <table><thead><tr><th>Name</th><th>Username</th><th>Job Title</th><th class="center">Permission</th><th>Reports to</th><th>Phone / Email</th><th></th></tr></thead><tbody>
@@ -1662,12 +1669,12 @@ async function viewUsers(){
      <td><b>${esc(u.name)}</b>${u.active===false?' <span class="pill" style="background:#888;font-size:10px">Inactive</span>':''}</td>
      <td class="muted">${esc(u.username)}</td>
      <td>${(u.titles&&u.titles.length?u.titles:[u.title]).filter(Boolean).map(t=>`<span class="pill viewer" style="font-size:11px;margin:1px">${esc(t)}</span>`).join(' ')||'—'}
-       ${isAdmin()&&u.active!==false?`<button class="btn sm sec" style="margin-left:4px;padding:1px 6px;font-size:11px" onclick="manageTitles('${u.id}','${esc(u.name)}')">＋</button>`:''}</td>
+       ${canTouch(u)&&u.active!==false?`<button class="btn sm sec" style="margin-left:4px;padding:1px 6px;font-size:11px" onclick="manageTitles('${u.id}','${esc(u.name)}')">＋</button>`:''}</td>
      <td class="center"><span class="pill ${tierColor[u.role]||'viewer'}">${esc(u.role)}</span></td>
      <td class="muted">${u.manager_id?esc(byId[u.manager_id]?.name||'—'):'—'}</td>
      <td class="muted" style="font-size:12px">${esc(u.phone||'—')}${u.email?`<br>${esc(u.email)}`:''}</td>
      <td style="display:flex;gap:5px;flex-wrap:wrap">
-       ${isAdmin()&&u.active!==false?`<button class="btn sm" onclick="editUser('${u.id}')">Edit</button>`:''}<button class="btn sm sec" onclick="changePassword('${u.id}','${esc(u.name)}')">Password</button>${isAdmin()&&u.active!==false?`<button class="btn sm sec" onclick="editUserSms('${u.id}')">SMS</button>`:''} ${isAdmin()&&u.id!==ME.id?u.active===false?`<button class="btn sm" onclick="reactivateUser('${u.id}','${esc(u.name)}')">Reactivate</button>`:`<button class="btn sm" style="background:var(--danger,#c0392b)" onclick="deleteUser('${u.id}','${esc(u.name)}')">Remove</button>`:''}
+       ${canTouch(u)&&u.active!==false?`<button class="btn sm" onclick="editUser('${u.id}')">Edit</button>`:''}${canTouch(u)?`<button class="btn sm sec" onclick="changePassword('${u.id}','${esc(u.name)}')">Password</button>`:''}${isAdmin()&&u.active!==false?`<button class="btn sm sec" onclick="editUserSms('${u.id}')">SMS</button>`:''} ${canTouch(u)&&u.id!==ME.id?u.active===false?`<button class="btn sm" onclick="reactivateUser('${u.id}','${esc(u.name)}')">Reactivate</button>`:`<button class="btn sm" style="background:var(--danger,#c0392b)" onclick="deleteUser('${u.id}','${esc(u.name)}')">Remove</button>`:''}
      </td>
    </tr>`).join('')}
    </tbody></table></div>
@@ -1740,7 +1747,7 @@ async function editUser(id){
       <input id="euWs" class="inp" list="euWsList" value="${esc(u.workstation||'')}" placeholder="e.g. Weld Bay">
       <datalist id="euWsList">${wsList.map(w=>`<option value="${esc(w)}">`).join('')}</datalist></div>
     <div class="field"><label>Job titles <span style="color:var(--muted);font-weight:400">— check all that apply</span></label>
-      ${roleCheckboxHtml('eurole', roles, (u.titles&&u.titles.length)?u.titles:(u.title?[u.title]:[]))}</div>
+      ${roleCheckboxHtml('eurole', pickableRoles(roles), (u.titles&&u.titles.length)?u.titles:(u.title?[u.title]:[]))}</div>
     <div class="field"><label>Reports to</label><select id="euMgrEdit" class="inp">
       <option value="">— none —</option>
       ${activeUsers.map(x=>`<option value="${x.id}" ${u.manager_id===x.id?'selected':''}>${esc(x.name)} — ${esc(x.title||x.role)}</option>`).join('')}
@@ -1768,7 +1775,7 @@ async function addUserModal(){
     <div class="field"><label>Full name</label><input id="nuName" class="inp" placeholder="Jane Smith"></div>
     <div class="field"><label>Email</label><input id="nuEmail" class="inp" type="email" placeholder="name@builttrailers.app"></div>
     <div class="field"><label>Job titles <span style="color:var(--muted);font-weight:400">— check all that apply</span></label>
-      ${roleCheckboxHtml('nurole', roles, [])}</div>
+      ${roleCheckboxHtml('nurole', pickableRoles(roles), [])}</div>
     <div class="field"><label>Reports to</label><select id="nuMgr" class="inp">
       <option value="">— none —</option>
       ${activeUsers.map(u=>`<option value="${u.id}">${esc(u.name)} — ${esc(u.title||u.role)}</option>`).join('')}
@@ -1805,7 +1812,7 @@ async function manageTitles(userId,userName){
   modal(`Job Titles — ${esc(userName)}`,`
     <p class="muted" style="font-size:13px;margin-bottom:12px">Check the titles this person holds. Their access is the union of all assigned titles.</p>
     <div style="display:flex;flex-direction:column;gap:6px;max-height:320px;overflow-y:auto">
-    ${roles.map(r=>`<label style="display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:6px;border:1px solid var(--border);cursor:pointer">
+    ${pickableRoles(roles).map(r=>`<label style="display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:6px;border:1px solid var(--border);cursor:pointer">
       <input type="checkbox" ${assigned.has(r.name)?'checked':''} onchange="toggleUserTitle('${userId}',${ja(r.name)},this.checked)">
       <span><b>${esc(r.name)}</b> <span class="pill ${r.tier}" style="font-size:10px">${r.tier}</span></span>
     </label>`).join('')}
