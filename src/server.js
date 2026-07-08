@@ -56,6 +56,7 @@ import { runBackup } from './backup.js';
 import * as standup from './standup.js';
 import * as shopdash from './shopdash.js';
 import * as ownerdash from './ownerdash.js';
+import * as ideas from './ideas.js';
 import { myWork } from './mywork.js';
 import * as timesurvey from './timesurvey.js';
 
@@ -1244,6 +1245,36 @@ app.post('/api/trailer-types', authMiddleware, requireSales, async (req, res) =>
   await q('INSERT INTO trailer_type(name) VALUES ($1) ON CONFLICT DO NOTHING', [name]);
   await audit(req, 'type.add', name);
   res.json({ ok: true });
+});
+
+// ---- 💡 Daily ideas (kaizen): submit at checkout, SM ranks anonymously, Monday vote, Tuesday reveal ----
+app.get('/api/ideas/board', authMiddleware, async (req, res) => {
+  const titles = req.user.titles || [];
+  const isMgr = req.user.role === 'admin' || titles.includes('Shop Manager') || titles.includes('General Manager');
+  res.json(await ideas.ideasBoard(req.user, isMgr));
+});
+app.post('/api/ideas', authMiddleware, async (req, res) => {
+  try { const r = await ideas.submitIdea(req.body || {}, req.user);
+    await audit(req, 'idea.submit', `#${r.id}`); res.json(r); } // no text in the audit trail — ideas stay anonymous
+  catch (e) { res.status(400).json({ error: e.message }); }
+});
+app.post('/api/ideas/:id/daily-winner', authMiddleware, (req, res, next) => requireStandupManager(req, res, next), async (req, res) => {
+  try { const r = await ideas.pickDailyWinner(Number(req.params.id), req.user);
+    await audit(req, 'idea.daily', `#${req.params.id} wins ${r.date}`); res.json(r); }
+  catch (e) { res.status(400).json({ error: e.message }); }
+});
+app.post('/api/ideas/vote', authMiddleware, async (req, res) => {
+  try { res.json(await ideas.castVote(Number(req.body?.ideaId), req.user)); }
+  catch (e) { res.status(400).json({ error: e.message }); }
+});
+app.post('/api/ideas/announce', authMiddleware, (req, res, next) => requireStandupManager(req, res, next), async (req, res) => {
+  try { res.json(await ideas.announceWeekly(req.user)); }
+  catch (e) { res.status(400).json({ error: e.message }); }
+});
+app.post('/api/ideas/:id/status', authMiddleware, (req, res, next) => requireStandupManager(req, res, next), async (req, res) => {
+  try { const r = await ideas.setStatus(Number(req.params.id), req.body?.status, req.body?.note, req.user);
+    await audit(req, 'idea.status', `#${req.params.id} -> ${req.body?.status}`); res.json(r); }
+  catch (e) { res.status(400).json({ error: e.message }); }
 });
 
 // ---- Shop Manager dashboard: labor efficiency, SOP compliance, red flags, bottlenecks ----

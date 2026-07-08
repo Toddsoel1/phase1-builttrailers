@@ -1524,14 +1524,16 @@ async function viewStandup(){
   const date=window._suDate||new Date().toISOString().slice(0,10);
   window._suDate=date;
   $('pActions').innerHTML=isMgr?`<input type="date" id="suDate" value="${date}" onchange="window._suDate=this.value;viewStandup()" style="padding:6px 8px;border-radius:8px;border:1px solid var(--line);background:var(--panel2);color:var(--txt)"> <button class="btn sm sec" onclick="suGenerate()">⚙ Generate plan</button>`:'';
-  let me,plan=null,report=[],station=null,tsp=null,dash=null;
+  let me,plan=null,report=[],station=null,tsp=null,dash=null,ideas=null;
   try{
-    [me,report,station,tsp,dash]=await Promise.all([api('/api/standup/me?date='+date),api('/api/standup/report?days=14').catch(()=>[]),
+    [me,report,station,tsp,dash,ideas]=await Promise.all([api('/api/standup/me?date='+date),api('/api/standup/report?days=14').catch(()=>[]),
       ME.workstation?api('/api/mystation').catch(()=>null):Promise.resolve(null),
       api('/api/timesurvey/pending').catch(()=>null),
-      isMgr?api('/api/shopdash').catch(()=>null):Promise.resolve(null)]);
+      isMgr?api('/api/shopdash').catch(()=>null):Promise.resolve(null),
+      api('/api/ideas/board').catch(()=>null)]);
     if(isMgr) plan=await api('/api/standup?date='+date);
   }catch(e){ $('content').innerHTML=`<div class="card"><p class="msg err">${esc(e.message)}</p></div>`; return; }
+  window._ideas=ideas;
   window._tsp=tsp;
   const prog=me.goal?Math.round(me.done/me.goal*100):0;
   window._suMe=me;
@@ -1622,7 +1624,58 @@ async function viewStandup(){
           :'<div style="font-size:20px;font-weight:800;color:var(--ok,#1a7f4b)">Flow clear</div><div class="muted" style="font-size:11.5px">no stage over its WIP limit</div>'}</div>
     </div>`;
   }
-  $('content').innerHTML=dashBand+myCard+msCard+board+repCard;
+  // ── 💡 Ideas: daily prompt → SM daily winner → Monday vote → Tuesday reveal → implemented ──
+  let ideasCard='';
+  if(ideas){
+    const iv=ideas.voting;
+    const announced=(ideas.winners||[]).find(w=>w.weekOf===iv.weekOf)||(ideas.winners||[])[0];
+    ideasCard=`<div class="card" style="margin-bottom:16px"><h3>💡 Ideas ${ideas.todayCount?`<span class="badge b-ok">${ideas.todayCount} today</span>`:''}</h3>
+      ${!ideas.mineToday?`<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:10px;padding:8px;border:1px dashed var(--accent);border-radius:10px">
+        <input id="ideaQuick" placeholder="💡 Your idea for today — anything that could be better (anonymous until you win)" style="flex:2;min-width:220px;padding:8px;border-radius:8px;border:1px solid var(--line);background:var(--panel2);color:var(--txt)">
+        <select id="ideaQuickCat" style="padding:7px;border-radius:8px;border:1px solid var(--line);background:var(--panel2);color:var(--txt);font-size:12px">${ideas.categories.map(c=>`<option>${esc(c)}</option>`).join('')}</select>
+        <button class="btn sm" onclick="ideaQuickAdd()">Submit</button>
+      </div>`:''}
+      ${ideas.yesterdayWinner?`<div style="padding:8px 10px;background:rgba(255,122,24,.08);border-radius:10px;margin-bottom:8px;font-size:13px">🏆 <b>Yesterday's winning idea</b> <span class="badge b-buy" style="font-size:9px">${esc(ideas.yesterdayWinner.category||'')}</span><br>${esc(ideas.yesterdayWinner.text)} <span class="muted" style="font-size:11px">— anonymous until the weekly vote</span></div>`:''}
+      ${iv.open&&iv.slate.length?`<div style="margin:8px 0"><b style="font-size:13px">🗳 Monday vote — last week's daily winners</b>
+        ${iv.slate.map(s=>`<div style="display:flex;gap:8px;align-items:center;padding:6px 0;border-bottom:1px solid var(--line)">
+          <span style="flex:1;font-size:13px">${esc(s.text)} <span class="badge b-buy" style="font-size:9px">${esc(s.category||'')}</span>${isMgr&&s.votes!=null?` <span class="muted" style="font-size:11px">· ${s.votes} vote(s)</span>`:''}</span>
+          ${s.mine?'<span class="muted" style="font-size:11px">yours 🤫</span>':s.myVote?'<span class="badge b-ok">your vote ✓</span>':`<button class="btn sm sec" onclick="ideaVote(${s.id})">Vote</button>`}
+        </div>`).join('')}
+        ${isMgr?`<button class="btn sm" style="margin-top:8px" onclick="ideaAnnounce()">📣 Close voting &amp; announce the winner</button>`:''}
+      </div>`:''}
+      ${announced?`<div style="padding:8px 10px;border:1px solid var(--ok,#1a7f4b);border-radius:10px;margin:8px 0;font-size:13px">
+        🎉 <b>Weekly winner${announced.author?' — '+esc(announced.author):''}</b> <span class="badge ${announced.status==='implemented'?'b-ok':announced.status==='in_progress'?'b-low':'b-buy'}" style="font-size:9px">${announced.status==='implemented'?'IMPLEMENTED':announced.status==='in_progress'?'IN PROGRESS':'SELECTED'}</span><br>
+        ${esc(announced.text)}
+        ${announced.implementedNote?`<br><span class="muted" style="font-size:12px">📣 ${esc(announced.implementedNote)}</span>`:''}
+        ${isMgr&&announced.status!=='implemented'?`<div style="margin-top:6px"><button class="btn sm sec" onclick="ideaStatus(${announced.id},'in_progress')">🔧 In progress</button> <button class="btn sm" onclick="ideaStatus(${announced.id},'implemented')">✅ Implemented — report back</button></div>`:''}
+      </div>`:''}
+      ${isMgr&&ideas.ranking?['today','yesterday'].map(k=>{const list=ideas.ranking[k].filter(i=>true);return list.length?`
+        <details ${k==='today'?'':'open'} style="margin-top:8px"><summary class="lnk" style="font-size:12.5px;cursor:pointer">Rank ${k==='today'?"today's":"yesterday's"} ideas (${list.length}) — anonymous</summary>
+        ${list.map(i=>`<div style="display:flex;gap:8px;align-items:center;padding:5px 0 5px 10px;border-bottom:1px solid var(--line)">
+          <span style="flex:1;font-size:12.5px">${i.dailyWinner?'🏆 ':''}${esc(i.text)} <span class="badge b-buy" style="font-size:9px">${esc(i.category||'')}</span></span>
+          ${!i.dailyWinner?`<button class="btn sm sec" onclick="ideaPickDaily(${i.id})">🏆 Daily winner</button>`:'<span class="badge b-ok">daily winner</span>'}
+        </div>`).join('')}</details>`:'';}).join(''):''}
+      <p class="muted" style="font-size:11px;margin-top:8px">Everyone gives one idea a day at checkout. The Shop Manager picks a daily winner (ideas stay anonymous), Monday the crew votes on the week's winners, Tuesday the champion is announced — and the author finally gets the credit.</p>
+    </div>`;
+  }
+  $('content').innerHTML=dashBand+ideasCard+myCard+msCard+board+repCard;
+}
+async function ideaQuickAdd(){
+  const text=($('ideaQuick').value||'').trim(); if(text.length<8)return toast('💡 One real sentence — what should change, and why?');
+  try{ await api('/api/ideas',{method:'POST',body:JSON.stringify({text,category:$('ideaQuickCat').value})}); toast('💡 In — anonymous until you win'); viewStandup(); }
+  catch(e){ toast(e.message); }
+}
+async function ideaVote(id){ try{ await api('/api/ideas/vote',{method:'POST',body:JSON.stringify({ideaId:id})}); toast('🗳 Vote cast'); viewStandup(); }catch(e){ toast(e.message); } }
+async function ideaPickDaily(id){ try{ const r=await api('/api/ideas/'+id+'/daily-winner',{method:'POST'}); toast('🏆 Daily winner set for '+r.date+' — recognize it at stand-up'); viewStandup(); }catch(e){ toast(e.message); } }
+async function ideaAnnounce(){
+  if(!confirm('Close voting and announce this week\'s winner? The author is revealed and celebrated.'))return;
+  try{ const r=await api('/api/ideas/announce',{method:'POST'}); toast('🎉 Winner announced — '+r.votes+' vote(s)'); viewStandup(); }catch(e){ toast(e.message); }
+}
+async function ideaStatus(id,status){
+  const note=status==='implemented'?prompt('Report back — what was implemented / changed?'):prompt('Quick note on the plan/timeframe? (optional)');
+  if(note===null)return;
+  try{ await api('/api/ideas/'+id+'/status',{method:'POST',body:JSON.stringify({status,note:note||undefined})}); toast(status==='implemented'?'✅ Implemented — reported back':'🔧 Marked in progress'); viewStandup(); }
+  catch(e){ toast(e.message); }
 }
 async function msComplete(unitId,orderId){
   if(!confirm('Mark this stage complete for '+orderId+'? It moves to the next stage for the whole order.'))return;
@@ -1722,6 +1775,13 @@ function suVerifyModal(){
       <span style="font-size:13px;${t.done?'opacity:.55':''}">${esc(t.description)} <span class="muted">(${t.estHours}h)</span></span>
     </label>`).join('')||'<p class="muted">No tasks were on your plan.</p>'}
     <div class="field" style="margin-top:10px"><label>Anything get in the way? (optional)</label><input id="suvNote" class="inp" placeholder="e.g. waited 2h on axles"></div>
+    ${!(window._ideas&&window._ideas.mineToday)?`<div style="margin-top:12px;padding:10px;border:1px solid var(--accent);border-radius:10px">
+      <label style="font-weight:700;font-size:13px">💡 One idea before you go — required daily</label>
+      <p class="muted" style="font-size:11.5px;margin:3px 0 8px">Anything that could be better at Built: the trailers, quality, a process, or shop life. <b>Anonymous</b> until it wins the weekly vote — then you get the credit.</p>
+      <textarea id="suvIdea" rows="2" placeholder="e.g. Pre-kit axle hardware in bins so Build doesn't walk to the cage twice per trailer" style="width:100%;padding:8px;border-radius:8px;border:1px solid var(--line);background:var(--panel2);color:var(--txt);font-family:inherit;font-size:13px"></textarea>
+      <select id="suvIdeaCat" style="margin-top:6px;padding:6px;border-radius:8px;border:1px solid var(--line);background:var(--panel2);color:var(--txt);font-size:12px">
+        ${(window._ideas?.categories||['Quality','Trailers','Process','Shop life','Other']).map(c=>`<option>${esc(c)}</option>`).join('')}
+      </select></div>`:`<p class="muted" style="font-size:11.5px;margin-top:10px">💡 Today's idea is in — thanks.</p>`}
     <div class="row" style="gap:8px;margin-top:8px">
       <button class="btn" onclick="suVerifySend()">✔ Confirm my day</button>
       <button class="btn sec" onclick="closeModal()">Cancel</button>
@@ -1730,8 +1790,15 @@ function suVerifyModal(){
 }
 async function suVerifySend(){
   const completeIds=[...document.querySelectorAll('.suvChk:checked:not(:disabled)')].map(c=>Number(c.dataset.id));
+  const ideaBox=$('suvIdea');
+  if(ideaBox){
+    const text=(ideaBox.value||'').trim();
+    if(text.length<8)return toast('💡 The daily idea is part of checking out — one real sentence.');
+    try{ await api('/api/ideas',{method:'POST',body:JSON.stringify({text,category:$('suvIdeaCat').value})}); }
+    catch(e){ return toast(e.message); }
+  }
   try{ await api('/api/standup/verify',{method:'POST',body:JSON.stringify({date:window._suDate,completeIds,note:($('suvNote').value||'').trim()})});
-    closeModal(); toast('✔ Day verified — thanks');
+    closeModal(); toast('✔ Day verified — thanks'+(ideaBox?' · 💡 idea in':''));
     // Enough unsurveyed work piled up? Chain straight into the time check while it's fresh.
     const p=await api('/api/timesurvey/pending').catch(()=>null);
     if(p&&p.due){ timeSurveyModal(p); return; }

@@ -227,6 +227,19 @@ const colMigrations = [
   `ALTER TABLE model ADD COLUMN IF NOT EXISTS hitch_code TEXT`,
   `ALTER TABLE model ADD COLUMN IF NOT EXISTS body_code TEXT`,
   `ALTER TABLE model ADD COLUMN IF NOT EXISTS axles INT`,
+  // 💡 Daily ideas (kaizen): everyone submits at checkout; the author is stored but NEVER
+  // exposed by any API until the idea wins the weekly vote — ranking and voting stay
+  // merit-based. Daily winners feed Monday's vote; Tuesday's announcement reveals the author.
+  `CREATE TABLE IF NOT EXISTS idea (id SERIAL PRIMARY KEY, text TEXT NOT NULL, category TEXT,
+     author_id TEXT NOT NULL, idea_date DATE NOT NULL DEFAULT CURRENT_DATE,
+     daily_winner BOOLEAN NOT NULL DEFAULT false, daily_ranked_by TEXT, daily_ranked_at TIMESTAMPTZ,
+     week_of DATE, weekly_winner BOOLEAN NOT NULL DEFAULT false,
+     status TEXT NOT NULL DEFAULT 'new', implemented_note TEXT, implemented_at TIMESTAMPTZ,
+     created_at TIMESTAMPTZ NOT NULL DEFAULT now())`,
+  `CREATE INDEX IF NOT EXISTS idx_idea_date ON idea(idea_date)`,
+  `CREATE TABLE IF NOT EXISTS idea_vote (idea_id INT NOT NULL, user_id TEXT NOT NULL,
+     week_of DATE NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+     PRIMARY KEY (user_id, week_of))`,
   // Safety log (SOP-SM-010): findings stay open until resolved; incidents drive the
   // "days since last incident" counter on the Owner dashboard.
   `CREATE TABLE IF NOT EXISTS safety_log (id SERIAL PRIMARY KEY, kind TEXT NOT NULL DEFAULT 'finding',

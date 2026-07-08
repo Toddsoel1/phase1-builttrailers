@@ -15,7 +15,7 @@ const BASE = `http://localhost:${PORT}`;
 // real external service regardless of what's in .env.
 const HERMETIC = { PORT: String(PORT), ACCOUNTING_MODE: 'simulated', SMS_ENABLED: '0',
   QBO_CLIENT_ID: '', QBO_CLIENT_SECRET: '', JWT_SECRET: 'test-secret-smoke',
-  LOGIN_RATE_MAX: '100000', PORTAL_RATE_MAX: '100000', DEALER_FEED_TOKEN: 'test-feed-token', GEOCODE_DISABLED: '1', NHTSA_DISABLED: '1',
+  LOGIN_RATE_MAX: '100000', PORTAL_RATE_MAX: '100000', DEALER_FEED_TOKEN: 'test-feed-token', GEOCODE_DISABLED: '1', NHTSA_DISABLED: '1', IDEAS_VOTE_OPEN: '1',
   BACKUP_DIR: path.join(tmpdir(), 'bt-smoke-backups'), TIME_SURVEY_MIN_ITEMS: '3' };
 
 let server, dbDir, token, orderId, modelId;
@@ -772,6 +772,61 @@ test('daily scorecard: standard vs actual with the drill-down; self always, mana
   assert.equal(own.user.id, carl.id, 'self view works for everyone');
   const gm = (await json(await api('/api/users'))).find(x => x.role === 'admin');
   assert.equal((await fetch(BASE + '/api/scorecard?userId=' + gm.id, { headers: { Authorization: 'Bearer ' + cl.token } })).status, 403, 'peeking at others is manager-only');
+});
+
+test('daily ideas: anonymous ranking, daily winner, voting without self-votes, reveal, implementation', async () => {
+  await api('/api/roles', { method: 'POST', body: JSON.stringify({ name: 'Idea Probe', tier: 'viewer', sections: ['standup'] }) });
+  const mk = async name => {
+    const u = await json(await api('/api/users', { method: 'POST', body: JSON.stringify({ name, titles: ['Idea Probe'], password: 'ideaPw12' }) }));
+    const l = await json(await fetch(BASE + '/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: u.username, password: 'ideaPw12' }) }));
+    return { id: u.id, H: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + l.token } };
+  };
+  const ida = await mk('Ida Ideas'), ivan = await mk('Ivan Voter');
+
+  assert.equal((await fetch(BASE + '/api/ideas', { method: 'POST', headers: ida.H, body: JSON.stringify({ text: 'short' }) })).status, 400, 'one real sentence required');
+  const A = await (await fetch(BASE + '/api/ideas', { method: 'POST', headers: ida.H, body: JSON.stringify({ text: 'Pre-kit axle hardware in labeled bins at the Build bay', category: 'Process' }) })).json();
+  const B = await (await fetch(BASE + '/api/ideas', { method: 'POST', headers: ivan.H, body: JSON.stringify({ text: 'Add a second grinder station so Finish never waits', category: 'Shop life' }) })).json();
+  assert.ok(A.id && B.id);
+  assert.equal((await json(await fetch(BASE + '/api/ideas/board', { headers: ida.H }))).mineToday, true, 'daily-idea flag set for the author');
+
+  // Anonymity is structural: the ranking payload carries no author in any form.
+  const adminBoard = await json(await api('/api/ideas/board'));
+  for (const i of adminBoard.ranking.today) {
+    assert.ok(!('author' in i) && !('authorId' in i) && !('author_id' in i), 'ranking never exposes the author');
+  }
+
+  // Only the SM/GM/admin ranks; the pick is swappable within the day.
+  assert.equal((await fetch(BASE + '/api/ideas/' + A.id + '/daily-winner', { method: 'POST', headers: ivan.H, body: '{}' })).status, 403, 'workers cannot rank');
+  await api('/api/ideas/' + B.id + '/daily-winner', { method: 'POST' });
+  await api('/api/ideas/' + A.id + '/daily-winner', { method: 'POST' }); // re-pick swaps
+  const ranked = (await json(await api('/api/ideas/board'))).ranking.today;
+  assert.equal(ranked.find(i => i.id === A.id).dailyWinner, true);
+  assert.equal(ranked.find(i => i.id === B.id).dailyWinner, false, 'one daily winner per day');
+
+  // Voting: the author can't vote for their own; others can, and can change their vote.
+  assert.equal((await fetch(BASE + '/api/ideas/vote', { method: 'POST', headers: ida.H, body: JSON.stringify({ ideaId: A.id }) })).status, 400, 'no self-votes');
+  assert.equal((await fetch(BASE + '/api/ideas/vote', { method: 'POST', headers: ivan.H, body: JSON.stringify({ ideaId: A.id }) })).status, 200);
+  const ivanBoard = await json(await fetch(BASE + '/api/ideas/board', { headers: ivan.H }));
+  assert.ok(ivanBoard.voting.slate.find(s => s.id === A.id)?.myVote, 'voter sees their vote');
+  assert.ok((await json(await fetch(BASE + '/api/ideas/board', { headers: ida.H }))).voting.slate.find(s => s.id === A.id)?.mine, 'author sees “yours” instead of a vote button');
+
+  // Announce: SM/GM/admin only; the author is revealed ONLY now.
+  assert.equal((await fetch(BASE + '/api/ideas/announce', { method: 'POST', headers: ivan.H, body: '{}' })).status, 403);
+  const win = await json(await api('/api/ideas/announce', { method: 'POST' }));
+  assert.equal(win.id, A.id);
+  assert.equal(win.votes, 1);
+  const after = await json(await api('/api/ideas/board'));
+  const crowned = after.winners.find(w => w.id === A.id);
+  assert.equal(crowned.author, 'Ida Ideas', 'the author is finally revealed and credited');
+  assert.equal((await api('/api/ideas/announce', { method: 'POST' })).status, 400, 'no double announcement for the same slate');
+
+  // Implementation tracking with the report-back.
+  assert.equal((await api('/api/ideas/' + B.id + '/status', { method: 'POST', body: JSON.stringify({ status: 'implemented' }) })).status, 400, 'only weekly winners track implementation');
+  await api('/api/ideas/' + A.id + '/status', { method: 'POST', body: JSON.stringify({ status: 'in_progress', note: 'bins ordered, ETA Friday' }) });
+  await api('/api/ideas/' + A.id + '/status', { method: 'POST', body: JSON.stringify({ status: 'implemented', note: 'kitting bins live at Build — walk eliminated' }) });
+  const done = (await json(await api('/api/ideas/board'))).winners.find(w => w.id === A.id);
+  assert.equal(done.status, 'implemented');
+  assert.match(done.implementedNote, /kitting bins/, 'the report-back rides with the winner');
 });
 
 test('guarded reprints: reason required, permanent register, requeue with badge, MSO needs a buyer', async () => {
