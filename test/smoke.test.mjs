@@ -577,6 +577,60 @@ test('bill-to vs ship-to: MSO + invoices bill the parent entity; the BOL ships t
   assert.match((await noBol.json()).error, /destination/i);
 });
 
+test('parts capabilities: add/receive vs full edit; renaming a part number carries its history', async () => {
+  await api('/api/roles', { method: 'POST', body: JSON.stringify({ name: 'Parts Adder', tier: 'editor', sections: ['parts', 'parts_add'] }) });
+  await api('/api/roles', { method: 'POST', body: JSON.stringify({ name: 'Parts Editor', tier: 'editor', sections: ['parts', 'parts_edit'] }) });
+  const mk = async title => {
+    const u = await json(await api('/api/users', { method: 'POST', body: JSON.stringify({ name: title + ' Person', titles: [title], password: 'partsPw1' }) }));
+    const l = await json(await fetch(BASE + '/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: u.username, password: 'partsPw1' }) }));
+    return { 'Content-Type': 'application/json', Authorization: 'Bearer ' + l.token };
+  };
+  const addH = await mk('Parts Adder'), edH = await mk('Parts Editor');
+
+  // The lighter grant: create + receive, but no editing and no on-hand overrides.
+  const np = await (await fetch(BASE + '/api/parts', { method: 'POST', headers: addH, body: JSON.stringify({ name: 'Cap Test Widget', cost: 5, vendorPartNo: 'ACME-77' }) })).json();
+  assert.ok(np.id, 'parts_add can create a part');
+  assert.equal((await json(await api('/api/parts'))).find(p => p.id === np.id).vendorPartNo, 'ACME-77', 'vendor part # stored at creation');
+  assert.equal((await fetch(BASE + '/api/parts/' + np.id + '/receive', { method: 'POST', headers: addH, body: JSON.stringify({ qty: 3 }) })).status, 200, 'parts_add can receive stock');
+  assert.equal((await fetch(BASE + '/api/parts/' + np.id, { method: 'PATCH', headers: addH, body: JSON.stringify({ cost: 9 }) })).status, 403, 'parts_add cannot edit a part');
+  assert.equal((await fetch(BASE + '/api/parts/' + np.id + '/adjust', { method: 'POST', headers: addH, body: JSON.stringify({ onHand: 0 }) })).status, 403, 'parts_add cannot set on-hand');
+
+  // The restricted grant: every field, including the vendor part number and the part number itself.
+  assert.equal((await fetch(BASE + '/api/parts/' + np.id, { method: 'PATCH', headers: edH, body: JSON.stringify({ cost: 9, vendorPartNo: 'ACME-99', name: 'Cap Test Widget v2' }) })).status, 200, 'parts_edit edits fields');
+  const vendor = (await json(await api('/api/vendors'))).find(v => v.status !== 'pending' && v.status !== 'rejected');
+  assert.equal((await fetch(BASE + '/api/parts/' + np.id, { method: 'PATCH', headers: edH, body: JSON.stringify({ vendorId: vendor.id }) })).status, 200, 'parts_edit assigns the primary vendor');
+  const po = await json(await api('/api/po', { method: 'POST', body: JSON.stringify({ partId: np.id, qty: 2 }) }));
+
+  const rn = await (await fetch(BASE + '/api/parts/' + np.id, { method: 'PATCH', headers: edH, body: JSON.stringify({ newId: 'CAP-RENAMED-1' }) })).json();
+  assert.equal(rn.renamed, true);
+  assert.equal(rn.id, 'CAP-RENAMED-1');
+  const parts2 = await json(await api('/api/parts'));
+  assert.ok(!parts2.find(p => p.id === np.id), 'old part number is gone');
+  const renamed = parts2.find(p => p.id === 'CAP-RENAMED-1');
+  assert.ok(renamed && renamed.onHand === 3 && renamed.cost === 9 && renamed.vendorPartNo === 'ACME-99', 'stock, cost, and vendor part # followed the rename');
+  const poRow = (await json(await api('/api/po'))).find(x => x.id === po.id);
+  assert.equal(poRow.partId, 'CAP-RENAMED-1', 'the open PO followed the rename');
+  assert.equal(poRow.vendorPartNo, 'ACME-99', 'PO list carries the vendor part number');
+  const clashTarget = parts2.find(p => p.id !== 'CAP-RENAMED-1').id;
+  assert.equal((await fetch(BASE + '/api/parts/CAP-RENAMED-1', { method: 'PATCH', headers: edH, body: JSON.stringify({ newId: clashTarget }) })).status, 400, 'renaming onto an existing number refused');
+  await api('/api/parts/CAP-RENAMED-1/adjust', { method: 'POST', body: JSON.stringify({ onHand: 0, reason: 'cap test cleanup' }) });
+});
+
+test('job titles: rename carries assignments, access, and the legacy title text', async () => {
+  await api('/api/roles', { method: 'POST', body: JSON.stringify({ name: 'Old Title Name', tier: 'editor', sections: ['orders', 'standup'] }) });
+  const u = await json(await api('/api/users', { method: 'POST', body: JSON.stringify({ name: 'Rename Holder', titles: ['Old Title Name'] }) }));
+  assert.equal((await api('/api/roles/' + encodeURIComponent('Old Title Name') + '/rename', { method: 'PATCH', body: JSON.stringify({ newName: 'New Title Name' }) })).status, 200);
+  const roles = await json(await api('/api/roles'));
+  assert.ok(!roles.find(r => r.name === 'Old Title Name'), 'old name gone');
+  const nr = roles.find(r => r.name === 'New Title Name');
+  assert.ok(nr && nr.sections.includes('orders') && nr.sections.includes('standup'), 'access followed the rename');
+  const user = (await json(await api('/api/users'))).find(x => x.id === u.id);
+  assert.ok(user.titles.includes('New Title Name'), 'the user now holds the renamed title');
+  assert.equal(user.title, 'New Title Name', 'legacy primary-title text updated');
+  await api('/api/roles', { method: 'POST', body: JSON.stringify({ name: 'Clash Title', tier: 'viewer', sections: [] }) });
+  assert.equal((await api('/api/roles/' + encodeURIComponent('New Title Name') + '/rename', { method: 'PATCH', body: JSON.stringify({ newName: 'Clash Title' }) })).status, 400, 'renaming onto an existing title refused');
+});
+
 test('guarded reprints: reason required, permanent register, requeue with badge, MSO needs a buyer', async () => {
   const sr = await api('/api/auth/login', { method: 'POST', body: JSON.stringify({ username: 'aruiz', password: 'built2026' }) });
   const sales = (await sr.json()).token;

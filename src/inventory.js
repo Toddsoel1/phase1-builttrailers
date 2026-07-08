@@ -75,6 +75,31 @@ export async function approveCycleCount(id, user) {
   return { id, status: 'posted', netValue, qb: posted?.status || 'posted' };
 }
 
+// ---- Renaming a part number ----
+// The part id IS the part number, and history hangs off it everywhere. A rename copies the row
+// under the new id, repoints every child table, then removes the old row — so BOMs, POs,
+// consumption, counts, build logs, sales, claims, and time surveys all follow the new number.
+const PART_CHILD_TABLES = ['bom_line', 'purchase_order', 'inventory_consumption', 'option_choice_part',
+  'order_bom_delta', 'part_build_log', 'warranty_claim_part', 'cycle_count_line', 'part_sale_line', 'time_survey_line'];
+export async function renamePart(oldId, newId, user) {
+  const clean = String(newId || '').trim();
+  if (!/^[A-Za-z0-9][A-Za-z0-9 _.\-/]{1,39}$/.test(clean)) throw new Error('Part numbers are 2–40 characters: letters, numbers, spaces, - _ . /');
+  if (clean === oldId) return { ok: true, id: oldId };
+  const row = await one('SELECT * FROM part WHERE id=$1', [oldId]);
+  if (!row) throw new Error('Part not found.');
+  if (await one('SELECT id FROM part WHERE id=$1', [clean])) throw new Error(`Part number ${clean} is already taken.`);
+  const cols = Object.keys(row);
+  row.id = clean;
+  await q(`INSERT INTO part(${cols.map(c => '"' + c + '"').join(',')}) VALUES(${cols.map((_, i) => '$' + (i + 1)).join(',')})`,
+    cols.map(c => row[c]));
+  for (const t of PART_CHILD_TABLES)
+    await q(`UPDATE ${t} SET part_id=$1 WHERE part_id=$2`, [clean, oldId]).catch(() => {}); // pre-migration tables may not exist yet
+  await q('DELETE FROM part WHERE id=$1', [oldId]);
+  await q('INSERT INTO audit_log(user_id,action,detail) VALUES ($1,$2,$3)',
+    [user?.id || null, 'part.rename', `${oldId} -> ${clean} (history follows)`]);
+  return { ok: true, id: clean };
+}
+
 export async function rejectCycleCount(id, user, note) {
   const cc = await one('SELECT status FROM cycle_count WHERE id=$1', [id]);
   if (!cc) throw new Error('Cycle count not found.');

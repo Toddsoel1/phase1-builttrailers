@@ -912,44 +912,76 @@ app.get('/api/parts', authMiddleware, async (_req, res) => {
                             FROM part p LEFT JOIN vendor v ON v.id=p.vendor_id ORDER BY p.type DESC, p.id`, []);
   res.json(rows.map(p => ({
     id: p.id, name: p.name, type: p.type, vendor: p.vendor_name, vendorId: p.vendor_id, vendorStatus: p.vendor_status, leadDays: p.lead_days,
-    uom: p.uom, spec: p.spec, cost: Number(p.cost), onHand: p.on_hand, reorder: p.reorder,
+    uom: p.uom, spec: p.spec, cost: Number(p.cost), onHand: p.on_hand, reorder: p.reorder, vendorPartNo: p.vendor_part_no,
     cushion: p.cushion, lot: p.lot, active: p.active !== false, extValue: Number(p.cost) * p.on_hand,
     status: p.on_hand < p.reorder ? 'below' : (p.on_hand < p.reorder + p.cushion ? 'low' : 'ok')
   })));
 });
 // Create a Make part in-app — app-only, never pushed to QuickBooks (the QB item sync
 // only ever touches QB-prefixed parts). Buy parts come from the QuickBooks import instead.
-app.post('/api/parts', authMiddleware, requireTier('editor'), async (req, res) => {
-  const { id, name, type, cost, uom, spec, reorder, cushion, lot } = req.body || {};
+// Creating parts (and receiving stock) is the LIGHTER grant — 'parts_add'. Full editing of
+// existing parts (costs, vendors, renumbering) is the restricted 'parts_edit' grant below.
+function requirePartsAdd(req, res, next) {
+  const ok = req.user.role === 'admin'
+    || (req.user.role !== 'viewer' && Array.isArray(req.user.sections)
+        && (req.user.sections.includes('parts_add') || req.user.sections.includes('parts_edit')));
+  if (!ok) return res.status(403).json({ error: "Adding parts requires the 'Parts — add & receive' grant (Users & Roles → Edit access) or an admin." });
+  next();
+}
+app.post('/api/parts', authMiddleware, requirePartsAdd, async (req, res) => {
+  const { id, name, type, cost, uom, spec, reorder, cushion, lot, vendorId, vendorPartNo } = req.body || {};
   if (!name || !String(name).trim()) return res.status(400).json({ error: 'Part name is required.' });
-  const partType = type === 'P' ? 'P' : 'M';
+  const partType = ['B', 'P'].includes(type) ? type : 'M';
+  if (vendorId && !await one('SELECT id FROM vendor WHERE id=$1', [vendorId])) return res.status(400).json({ error: 'Vendor not found' });
   let pid = id && String(id).trim() ? String(id).trim().toUpperCase().replace(/\s+/g, '-') : null;
   if (!pid) { const n = (await all(`SELECT id FROM part WHERE id LIKE 'MK-%'`, [])).length; pid = 'MK-' + (1001 + n); }
   if (await one('SELECT id FROM part WHERE id=$1', [pid])) return res.status(400).json({ error: `Part ${pid} already exists.` });
-  await q(`INSERT INTO part(id,name,type,cost,uom,spec,on_hand,reorder,cushion,lot,active)
-           VALUES ($1,$2,$3,$4,$5,$6,0,$7,$8,$9,true)`,
+  await q(`INSERT INTO part(id,name,type,cost,uom,spec,on_hand,reorder,cushion,lot,active,vendor_id,vendor_part_no)
+           VALUES ($1,$2,$3,$4,$5,$6,0,$7,$8,$9,true,$10,$11)`,
     [pid, String(name).trim(), partType, Number(cost) || 0, uom || null, spec || null,
-     Number(reorder) || 0, Number(cushion) || 0, Math.max(1, Number(lot) || 1)]);
+     Number(reorder) || 0, Number(cushion) || 0, Math.max(1, Number(lot) || 1),
+     vendorId || null, String(vendorPartNo || '').trim() || null]);
   await audit(req, 'part.create', `${pid} ${name} (${partType === 'M' ? 'Make' : 'Buy'}, app-only)`);
   res.json({ id: pid });
 });
-app.patch('/api/parts/:id', authMiddleware, requireTier('editor'), async (req, res) => {
+// Editing the Parts Master is a grantable capability: 'parts_edit' in the Edit-access matrix.
+// Admins always pass; a one-time boot backfill gave it to every editor-tier title that already
+// held the 'parts' section, so nothing broke — but it's now revocable per title.
+function requirePartsEdit(req, res, next) {
+  const ok = req.user.role === 'admin'
+    || (req.user.role !== 'viewer' && Array.isArray(req.user.sections) && req.user.sections.includes('parts_edit'));
+  if (!ok) return res.status(403).json({ error: "Editing parts requires the 'Parts — edit' grant (Users & Roles → Edit access) or an admin." });
+  next();
+}
+app.patch('/api/parts/:id', authMiddleware, requirePartsEdit, async (req, res) => {
   const cur = await one('SELECT * FROM part WHERE id=$1', [req.params.id]);
   if (!cur) return res.status(404).json({ error: 'not found' });
-  const { cost, reorder, cushion, lot, active, vendorId } = req.body || {};
+  const { name, cost, uom, spec, type, reorder, cushion, lot, active, vendorId, vendorPartNo, newId } = req.body || {};
   if (vendorId !== undefined && vendorId && !await one('SELECT id FROM vendor WHERE id=$1', [vendorId]))
     return res.status(400).json({ error: 'Vendor not found' });
+  if (type !== undefined && !['B', 'M'].includes(type)) return res.status(400).json({ error: "type must be 'B' (buy) or 'M' (make)" });
   const newVendorId = vendorId !== undefined ? (vendorId || null) : cur.vendor_id;
-  await q('UPDATE part SET cost=$1, reorder=$2, cushion=$3, lot=$4, active=$5, vendor_id=$6 WHERE id=$7',
-    [cost ?? cur.cost, reorder ?? cur.reorder, cushion ?? cur.cushion, lot ?? cur.lot,
-     active !== undefined ? !!active : (cur.active !== false), newVendorId, req.params.id]);
+  await q(`UPDATE part SET name=$1, cost=$2, uom=$3, spec=$4, type=$5, reorder=$6, cushion=$7, lot=$8, active=$9,
+                           vendor_id=$10, vendor_part_no=$11 WHERE id=$12`,
+    [String(name ?? cur.name).trim() || cur.name, cost ?? cur.cost,
+     uom !== undefined ? (String(uom).trim() || null) : cur.uom,
+     spec !== undefined ? (String(spec).trim() || null) : cur.spec,
+     type ?? cur.type, reorder ?? cur.reorder, cushion ?? cur.cushion, lot ?? cur.lot,
+     active !== undefined ? !!active : (cur.active !== false), newVendorId,
+     vendorPartNo !== undefined ? (String(vendorPartNo).trim() || null) : cur.vendor_part_no,
+     req.params.id]);
   if (cost != null && Number(cost) !== Number(cur.cost))
     await audit(req, 'part.cost', `${req.params.id}: ${cur.cost} -> ${cost}`);
   if (active !== undefined) await audit(req, 'part.active', `${req.params.id} ${active ? 'active' : 'inactive'}`);
   if (vendorId !== undefined && newVendorId !== cur.vendor_id) await audit(req, 'part.vendor', `${req.params.id} -> ${newVendorId || '(none)'}`);
-  res.json({ ok: true });
+  // Renaming the part number itself — history follows across every table.
+  if (newId !== undefined && String(newId).trim() && String(newId).trim() !== req.params.id) {
+    try { const r = await inventory.renamePart(req.params.id, newId, req.user); return res.json({ ok: true, id: r.id, renamed: true }); }
+    catch (e) { return res.status(400).json({ error: e.message }); }
+  }
+  res.json({ ok: true, id: req.params.id });
 });
-app.post('/api/parts/:id/receive', authMiddleware, requireTier('editor'), async (req, res) => {
+app.post('/api/parts/:id/receive', authMiddleware, requirePartsAdd, async (req, res) => {
   const qty = Math.round(Number(req.body?.qty) || 0);
   const cur = await one('SELECT * FROM part WHERE id=$1', [req.params.id]);
   if (!cur) return res.status(404).json({ error: 'not found' });
@@ -957,7 +989,7 @@ app.post('/api/parts/:id/receive', authMiddleware, requireTier('editor'), async 
   await audit(req, 'part.receive', `${req.params.id}: +${qty}`);
   res.json({ ok: true, onHand: cur.on_hand + qty });
 });
-app.post('/api/parts/:id/adjust', authMiddleware, requireTier('editor'), async (req, res) => {
+app.post('/api/parts/:id/adjust', authMiddleware, requirePartsEdit, async (req, res) => {
   const to = Math.round(Number(req.body?.onHand) || 0);
   const cur = await one('SELECT * FROM part WHERE id=$1', [req.params.id]);
   if (!cur) return res.status(404).json({ error: 'not found' });
@@ -1129,6 +1161,25 @@ app.post('/api/roles', authMiddleware, requireTier('admin'), async (req, res) =>
   }
   await audit(req, 'role.create', `${name.trim()}→${tier}`);
   res.json({ ok: true });
+});
+// Rename a job title everywhere it appears: the role row (copy → repoint → delete, since the
+// name is the primary key), every user holding it, every section grant, and the legacy
+// app_user.title text. Access and assignments follow the new name untouched.
+app.patch('/api/roles/:name/rename', authMiddleware, requireTier('admin'), async (req, res) => {
+  const oldName = req.params.name;
+  const newName = String(req.body?.newName || '').trim();
+  if (newName.length < 2 || newName.length > 40) return res.status(400).json({ error: 'Title names are 2–40 characters.' });
+  const cur = await one('SELECT * FROM role WHERE name=$1', [oldName]);
+  if (!cur) return res.status(404).json({ error: 'Job title not found.' });
+  if (newName === oldName) return res.json({ ok: true, name: oldName });
+  if (await one('SELECT name FROM role WHERE name=$1', [newName])) return res.status(400).json({ error: `A title named "${newName}" already exists.` });
+  await q('INSERT INTO role(name,tier) VALUES($1,$2)', [newName, cur.tier]);
+  await q('UPDATE role_section SET role_name=$1 WHERE role_name=$2', [newName, oldName]);
+  await q('UPDATE user_title SET role_name=$1 WHERE role_name=$2', [newName, oldName]);
+  await q('UPDATE app_user SET title=$1 WHERE title=$2', [newName, oldName]);
+  await q('DELETE FROM role WHERE name=$1', [oldName]);
+  await audit(req, 'role.rename', `${oldName} -> ${newName}`);
+  res.json({ ok: true, name: newName });
 });
 app.patch('/api/roles/:name', authMiddleware, requireTier('admin'), async (req, res) => {
   const { tier, sections } = req.body || {};
@@ -2683,6 +2734,18 @@ await ensureSchema();
   await q(`INSERT INTO role_section(role_name, section)
              SELECT DISTINCT role_name, 'trailers' FROM role_section WHERE section='orders'
              ON CONFLICT DO NOTHING`).catch(e => console.warn('trailers section grant:', e.message));
+  // ONE-TIME backfill for the new parts capabilities: every editor/admin-tier title that already
+  // held the 'parts' section keeps its ability to add AND edit — as explicit, revocable grants.
+  // After this runs once, un-checking 'Parts — full edit' on a title sticks.
+  const capsDone = await one(`SELECT value FROM app_config WHERE key='parts_caps_backfill'`, []).catch(() => null);
+  if (!capsDone) {
+    for (const cap of ['parts_add', 'parts_edit'])
+      await q(`INSERT INTO role_section(role_name, section)
+                 SELECT rs.role_name, $1 FROM role_section rs JOIN role r ON r.name = rs.role_name
+                  WHERE rs.section='parts' AND r.tier IN ('admin','editor')
+                 ON CONFLICT DO NOTHING`, [cap]).catch(e => console.warn('parts caps backfill:', e.message));
+    await q(`INSERT INTO app_config(key,value) VALUES('parts_caps_backfill','done') ON CONFLICT(key) DO NOTHING`).catch(() => {});
+  }
   // Performance analytics: production-facing roles get the new section automatically.
   await q(`INSERT INTO role_section(role_name, section)
              SELECT DISTINCT role_name, 'performance' FROM role_section WHERE section='orders'

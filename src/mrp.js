@@ -119,11 +119,12 @@ export async function vendorScorecard() {
 }
 
 export async function poList() {
-  const rows = await all(`SELECT po.*, v.name AS vendor_name, p.name AS part_name
+  const rows = await all(`SELECT po.*, v.name AS vendor_name, p.name AS part_name, p.vendor_part_no
                             FROM purchase_order po LEFT JOIN vendor v ON v.id=po.vendor_id
                             LEFT JOIN part p ON p.id=po.part_id ORDER BY po.id DESC`, []);
   return rows.map(r => ({
     id: r.id, vendor: r.vendor_name, vendorId: r.vendor_id, partId: r.part_id, part: r.part_name,
+    vendorPartNo: r.vendor_part_no || null,
     qty: r.qty, unit: Number(r.unit_cost), total: r.qty * Number(r.unit_cost),
     placed: r.placed, eta: r.eta, status: r.status
   }));

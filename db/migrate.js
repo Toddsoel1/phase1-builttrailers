@@ -227,6 +227,8 @@ const colMigrations = [
   `ALTER TABLE model ADD COLUMN IF NOT EXISTS hitch_code TEXT`,
   `ALTER TABLE model ADD COLUMN IF NOT EXISTS body_code TEXT`,
   `ALTER TABLE model ADD COLUMN IF NOT EXISTS axles INT`,
+  // The vendor's own part number — what actually goes on POs and vendor communication.
+  `ALTER TABLE part ADD COLUMN IF NOT EXISTS vendor_part_no TEXT`,
   // Bill-to vs ship-to per dealership: some dealers bill through a corporate/parent entity.
   // Blank bill_name = bill the dealership itself. The MSO's Sold-to and every invoice use the
   // bill-to; the Bill of Lading and deliveries use the dealership's own (ship-to) address.

@@ -219,6 +219,10 @@ const sectionGrant = s => ME && ME.role!=='viewer' && Array.isArray(ME.sections)
 const canSell = () => ME && (ME.role==='admin' || hasTitle('Sales','Rep Specialist','General Manager') || sectionGrant('neworder'));
 // Bill-to + delivery windows are decided by Accounting (Office Manager), Sales, or the GM.
 const canBillShip = () => ME && (ME.role==='admin' || hasTitle('Sales','Rep Specialist','Office Manager','General Manager'));
+// Parts capabilities from the Edit-access matrix: add/receive is the lighter grant; full edit
+// (costs, vendors, renumbering) is restricted. Mirrors the server gates.
+const canEditParts = () => ME && (ME.role==='admin' || sectionGrant('parts_edit'));
+const canAddParts = () => canEditParts() || sectionGrant('parts_add');
 
 // ---- login ----
 async function login(){
@@ -866,7 +870,7 @@ async function viewDash(){
 
 async function viewParts(){
   $('pTitle').textContent='Parts Master';$('pSub').textContent='Live parts, costs and on-hand — '+(canEdit()?'click a cost to edit':'read-only');
-  $('pActions').innerHTML=(canSell()?`<button class="btn" onclick="sellPartsModal()">💵 Sell parts</button> `:'')+(canEdit()?`<button class="btn" onclick="addMakePart()">➕ Add Make Part</button> <button class="btn sec" onclick="previewQBItems()">⬇ Import from QuickBooks</button>`:'');
+  $('pActions').innerHTML=(canSell()?`<button class="btn" onclick="sellPartsModal()">💵 Sell parts</button> `:'')+(canAddParts()?`<button class="btn" onclick="addMakePart()">➕ Add Make Part</button> `:'')+(canEditParts()?`<button class="btn sec" onclick="previewQBItems()">⬇ Import from QuickBooks</button>`:'');
   const allParts=await api('/api/parts');
   const salesR=await api('/api/parts/sales').catch(()=>({markup:1.5,sales:[]}));
   const parts=allParts.filter(p=>p.active!==false);
@@ -874,16 +878,16 @@ async function viewParts(){
   $('content').innerHTML=`
    <div id="qbItemsPanel" style="display:none;margin-bottom:14px"></div>
    <div class="card"><h3>Parts (${parts.length}) ${csvBtn('parts_master',allParts)}</h3>
-   <table><thead><tr><th>Part</th><th>Type</th><th>Vendor</th><th class="right">On hand</th><th class="right">Reorder</th><th class="right">Unit cost</th><th class="right">Ext. value</th><th class="center">Status</th>${canEdit()?'<th></th>':''}</tr></thead><tbody>
+   <table><thead><tr><th>Part</th><th>Type</th><th>Vendor</th><th class="right">On hand</th><th class="right">Reorder</th><th class="right">Unit cost</th><th class="right">Ext. value</th><th class="center">Status</th>${canAddParts()?'<th></th>':''}</tr></thead><tbody>
    ${parts.map(p=>`<tr>
      <td><b>${esc(p.id)}</b><br><span class="muted" style="font-size:11px">${esc(p.name)}</span></td>
      <td>${p.type==='M'?'<span class="badge b-mfg">MAKE</span>':'<span class="badge b-buy">BUY</span>'}</td>
-     <td style="font-size:12px">${canEdit()?`<a class="lnk" onclick="editPartVendor('${p.id}','${p.vendorId||''}')">${esc(p.vendor||'— assign —')}</a>`:esc(p.vendor||'')}${p.vendorStatus==='pending'?' <span class="badge b-low" style="font-size:9px">pending</span>':''}</td>
+     <td style="font-size:12px">${canEditParts()?`<a class="lnk" onclick="editPartVendor('${p.id}','${p.vendorId||''}')">${esc(p.vendor||'— assign —')}</a>`:esc(p.vendor||'')}${p.vendorStatus==='pending'?' <span class="badge b-low" style="font-size:9px">pending</span>':''}${p.vendorPartNo?`<br><span class="muted" style="font-size:10.5px">V/PN ${esc(p.vendorPartNo)}</span>`:''}</td>
      <td class="right">${p.onHand}</td><td class="right">${p.reorder}</td>
-     <td class="right">${canEdit()?`<a class="lnk" onclick="editCost('${p.id}',${p.cost})">${money2(p.cost)}</a>`:money2(p.cost)}</td>
+     <td class="right">${canEditParts()?`<a class="lnk" onclick="editCost('${p.id}',${p.cost})">${money2(p.cost)}</a>`:money2(p.cost)}</td>
      <td class="right">${money(p.extValue)}</td>
      <td class="center"><span class="badge ${p.status==='ok'?'b-ok':p.status==='low'?'b-low':'b-below'}">${p.status}</span></td>
-     ${canEdit()?`<td class="right" style="white-space:nowrap"><button class="btn sm sec" onclick="receive('${p.id}')">Receive</button> <button class="btn sm sec" onclick="inactivatePart('${p.id}')">Inactivate</button></td>`:''}
+     ${canAddParts()?`<td class="right" style="white-space:nowrap">${canEditParts()?`<button class="btn sm" onclick="editPartModal('${p.id}')">✏️ Edit</button> `:''}<button class="btn sm sec" onclick="receive('${p.id}')">Receive</button>${canEditParts()?` <button class="btn sm sec" onclick="inactivatePart('${p.id}')">Inactivate</button>`:''}</td>`:''}
    </tr>`).join('')}
    </tbody></table></div>
    ${salesR.sales.length?`<div class="card" style="margin-top:14px"><h3>💵 Part sales (${salesR.sales.length}) ${csvBtn('part_sales',salesR.sales.map(s=>({ref:s.ref,date:String(s.soldAt).slice(0,10),customer:s.party,items:s.items,total:s.total,cost:s.costTotal,margin:s.margin,soldBy:s.soldBy||''})))}</h3>
@@ -893,7 +897,7 @@ async function viewParts(){
        <td class="right">${money(s.total)}</td><td class="right" style="color:${s.margin>=0?'var(--ok,#1a7f4b)':'var(--red)'}">${money(s.margin)}</td>
        <td class="muted" style="font-size:12px">${esc(s.soldBy||'—')}<br>${new Date(s.soldAt).toLocaleDateString()}</td></tr>`).join('')}
      </tbody></table></div>`:''}
-   ${canEdit()&&inactive.length?`<div class="card"><h3>Inactive parts (${inactive.length})</h3>
+   ${canEditParts()&&inactive.length?`<div class="card"><h3>Inactive parts (${inactive.length})</h3>
      <p class="muted" style="font-size:12px;margin-bottom:10px">Hidden from the parts list above — app only, not changed in QuickBooks. Pick one to bring it back.</p>
      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
        <select id="reactivateSel" style="flex:1;min-width:240px;padding:8px;border-radius:8px;border:1px solid var(--line);background:var(--panel2);color:var(--txt)">
@@ -969,6 +973,54 @@ async function spSend(allowNegative){
     }else toast(e.message);
   }
 }
+// ── ✏️ Edit everything about a part — including its part number (history follows the rename) ──
+async function editPartModal(id){
+  let parts,vendors;
+  try{ [parts,vendors]=await Promise.all([api('/api/parts'),api('/api/vendors')]); }catch(e){ return toast(e.message); }
+  const p=parts.find(x=>x.id===id); if(!p)return toast('Part not found');
+  const vOpts=vendors.filter(v=>v.status!=='rejected').map(v=>`<option value="${esc(v.id)}" ${v.id===p.vendorId?'selected':''}>${esc(v.name)}${v.status==='pending'?' (pending)':''}</option>`).join('');
+  modal('✏️ Edit part — '+esc(p.id),`
+    <div class="row">
+      <div class="field"><label>Part number</label><input id="epId" class="inp" value="${esc(p.id)}" style="font-family:ui-monospace,monospace">
+        <span class="muted" style="font-size:10.5px">Renaming carries ALL history — BOMs, POs, counts, sales, build logs.</span></div>
+      <div class="field" style="max-width:110px"><label>Type</label><select id="epType" class="inp">
+        <option value="B" ${p.type==='B'?'selected':''}>Buy</option><option value="M" ${p.type==='M'?'selected':''}>Make</option></select></div>
+    </div>
+    <div class="field"><label>Name</label><input id="epName" class="inp" value="${esc(p.name||'')}"></div>
+    <div class="row">
+      <div class="field"><label>Primary vendor</label><select id="epVendor" class="inp"><option value="">— none —</option>${vOpts}</select></div>
+      <div class="field"><label>Vendor part #</label><input id="epVpn" class="inp" value="${esc(p.vendorPartNo||'')}" placeholder="their number, goes on POs"></div>
+    </div>
+    <div class="row">
+      <div class="field"><label>Unit cost $</label><input id="epCost" class="inp" type="number" min="0" step="0.01" value="${p.cost}"></div>
+      <div class="field"><label>UOM</label><input id="epUom" class="inp" value="${esc(p.uom||'')}" placeholder="ea / ft / lb"></div>
+      <div class="field"><label>Spec</label><input id="epSpec" class="inp" value="${esc(p.spec||'')}"></div>
+    </div>
+    <div class="row">
+      <div class="field"><label>Reorder point</label><input id="epReorder" class="inp" type="number" min="0" value="${p.reorder}"></div>
+      <div class="field"><label>Cushion</label><input id="epCushion" class="inp" type="number" min="0" value="${p.cushion}"></div>
+      <div class="field"><label>Lot size</label><input id="epLot" class="inp" type="number" min="1" value="${p.lot}"></div>
+    </div>
+    <p class="muted" style="font-size:11px">On-hand isn't edited here — use Receive, 📥 Receive an invoice, or a 🧮 count so stock changes stay accounted for.</p>
+    <div class="row" style="gap:8px;margin-top:8px">
+      <button class="btn" onclick="saveEditPart('${esc(p.id)}')">Save</button>
+      <button class="btn sec" onclick="closeModal()">Cancel</button>
+    </div>`);
+}
+async function saveEditPart(id){
+  const newId=($('epId').value||'').trim();
+  const body={name:($('epName').value||'').trim(),type:$('epType').value,vendorId:$('epVendor').value||null,
+    vendorPartNo:($('epVpn').value||'').trim(),cost:Number($('epCost').value)||0,uom:($('epUom').value||'').trim(),
+    spec:($('epSpec').value||'').trim(),reorder:Number($('epReorder').value)||0,cushion:Number($('epCushion').value)||0,
+    lot:Math.max(1,Number($('epLot').value)||1)};
+  if(newId&&newId!==id){
+    if(!confirm('Rename '+id+' to '+newId+'? Every BOM line, PO, count, sale, and build log follows the new number.'))return;
+    body.newId=newId;
+  }
+  try{ const r=await api('/api/parts/'+encodeURIComponent(id),{method:'PATCH',body:JSON.stringify(body)});
+    closeModal(); toast(r.renamed?'✏️ Renamed to '+r.id+' — history followed':'✏️ '+id+' updated'); viewParts(); }
+  catch(e){ toast(e.message); }
+}
 async function inactivatePart(id){ try{await api('/api/parts/'+id,{method:'PATCH',body:JSON.stringify({active:false})});toast('Part inactivated');viewParts();}catch(e){toast(e.message);} }
 async function reactivatePart(){ const sel=$('reactivateSel'); const id=sel?sel.value:''; if(!id)return; try{await api('/api/parts/'+id,{method:'PATCH',body:JSON.stringify({active:true})});toast('Part reactivated');viewParts();}catch(e){toast(e.message);} }
 async function editPartVendor(partId,currentVendorId){
@@ -1032,6 +1084,7 @@ function addMakePart(){
       <div class="field"><label>SKU / code (optional)</label><input id="mpId" class="inp" placeholder="auto: MK-…"></div>
       <div class="field"><label>Reorder point</label><input id="mpReorder" class="inp" type="number" min="0" value="0"></div>
     </div>
+    <div class="field"><label>Vendor part # (optional)</label><input id="mpVpn" class="inp" placeholder="the vendor's own number — for Buy parts"></div>
     <div class="field"><label>Spec / notes (optional)</label><input id="mpSpec" class="inp" placeholder="materials, build notes"></div>
     <div class="row" style="gap:8px;margin-top:8px">
       <button class="btn" onclick="saveNewPart()">Add part</button>
@@ -1041,7 +1094,7 @@ function addMakePart(){
 async function saveNewPart(){
   const name=($('mpName').value||'').trim(); if(!name)return toast('Part name is required');
   const cost=Number($('mpCost').value); if($('mpCost').value===''||isNaN(cost)||cost<0)return toast('Enter a cost (0 or more)');
-  const body={ name, type:'M', cost, uom:($('mpUom').value||'').trim()||undefined, spec:($('mpSpec').value||'').trim()||undefined, id:($('mpId').value||'').trim()||undefined, reorder:Number($('mpReorder').value)||0 };
+  const body={ name, type:'M', cost, uom:($('mpUom').value||'').trim()||undefined, spec:($('mpSpec').value||'').trim()||undefined, id:($('mpId').value||'').trim()||undefined, reorder:Number($('mpReorder').value)||0, vendorPartNo:($('mpVpn')?.value||'').trim()||undefined };
   try{ const r=await api('/api/parts',{method:'POST',body:JSON.stringify(body)}); closeModal(); toast('Make part '+r.id+' added'); viewParts(); }
   catch(e){ toast(e.message); }
 }
@@ -1835,11 +1888,11 @@ async function viewUsers(){
    </div>
    <table><thead><tr><th>Job Title</th><th>Permission Tier</th><th>Sections</th><th></th></tr></thead><tbody>
    ${roles.map(r=>`<tr>
-     <td>${esc(r.name)}</td>
+     <td>${esc(r.name)} <button class="btn sm sec" style="padding:1px 6px;font-size:11px" title="Rename this job title everywhere — assignments and access follow" onclick='renameRole(${JSON.stringify(r.name)})'>✏️</button></td>
      <td><select onchange="saveRoleTier('${esc(r.name)}',this.value,'${r.tier}')" style="padding:3px 8px;border-radius:6px;border:1px solid var(--border)">
        ${['admin','editor','viewer'].map(t=>`<option value="${t}" ${r.tier===t?'selected':''}>${t}</option>`).join('')}
      </select></td>
-     <td><span class="muted" style="font-size:12px">${(r.sections||[]).length} of ${NAV.length}</span> <button class="btn sm sec" onclick='editRoleSections(${JSON.stringify(r.name)},${JSON.stringify(r.sections||[])})'>Edit access</button></td>
+     <td><span class="muted" style="font-size:12px">${(r.sections||[]).length} item(s)</span> <button class="btn sm sec" onclick='editRoleSections(${JSON.stringify(r.name)},${JSON.stringify(r.sections||[])})'>Edit access</button></td>
      <td><button class="btn sm" style="background:var(--danger,#c0392b)" onclick="deleteRole(${ja(r.name)})">✕</button></td>
    </tr>`).join('')}
    </tbody></table>
@@ -1977,14 +2030,42 @@ async function toggleUserTitle(userId,roleName,add){
   }catch(e){toast(e.message);}
 }
 let _editRoleName=null;
+// Abilities beyond screens: grantable capabilities that show alongside the NAV sections.
+const CAPS=[['parts_add','📦 Parts — add & receive','create parts, receive stock'],
+            ['parts_edit','📦 Parts — full edit','costs, vendors, renumber parts (restricted)']];
+// Pre-canned access templates for setting up a title quickly. Starting points — tweak after applying.
+const ACCESS_PRESETS={
+  'Floor worker':['dashboard','standup','mywork','daily','orders','trailers'],
+  'Sales rep':['dashboard','neworder','orders','customers','trailers','performance'],
+  'Purchasing / inventory':['dashboard','parts','parts_add','parts_edit','predict','pos','boms','inventory'],
+  'Office desk':['dashboard','orders','customers','parts','parts_add','pos','predict','inventory','accounting','trailers','printcenter','notify'],
+};
 async function editRoleSections(name,currentSections){
   _editRoleName=name; // stash the name — passing it through the onclick attr breaks on spaces/quotes
+  let allRoles=[]; try{ allRoles=await api('/api/roles'); }catch(e){}
+  window._rolesForCopy=allRoles.filter(r=>r.name!==name);
   modal(`Access — ${esc(name)}`,`
-    <p class="muted" style="font-size:13px;margin-bottom:12px">Select which sections of the app this job title can see.</p>
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;max-height:360px;overflow-y:auto">
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:10px">
+      <select id="rsCopy" style="padding:6px;border-radius:8px;border:1px solid var(--line);background:var(--panel2);color:var(--txt);font-size:12px">
+        <option value="">Copy access from…</option>
+        ${window._rolesForCopy.map((r,i)=>`<option value="${i}">${esc(r.name)}</option>`).join('')}
+      </select>
+      <button class="btn sm sec" onclick="rsCopyFrom()">Copy</button>
+      <span class="muted" style="font-size:11px">or a preset:</span>
+      ${Object.keys(ACCESS_PRESETS).map(p=>`<button class="btn sm sec" style="font-size:11px" onclick='rsPreset(${JSON.stringify(p)})'>${esc(p)}</button>`).join(' ')}
+    </div>
+    <p class="muted" style="font-size:12px;margin-bottom:6px"><b>Screens</b> this title can open:</p>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;max-height:280px;overflow-y:auto">
     ${NAV.map(([key,label])=>`<label style="display:flex;align-items:center;gap:8px;padding:5px 8px;border-radius:6px;border:1px solid var(--border);cursor:pointer">
-      <input type="checkbox" value="${key}" ${(currentSections||[]).includes(key)?'checked':''}>
+      <input type="checkbox" class="rsChk" value="${key}" ${(currentSections||[]).includes(key)?'checked':''}>
       <span style="font-size:13px">${esc(label)}</span>
+    </label>`).join('')}
+    </div>
+    <p class="muted" style="font-size:12px;margin:10px 0 6px"><b>Abilities</b> — what they can change (editor tier or above):</p>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">
+    ${CAPS.map(([key,label,hint])=>`<label style="display:flex;align-items:flex-start;gap:8px;padding:5px 8px;border-radius:6px;border:1px solid var(--border);cursor:pointer">
+      <input type="checkbox" class="rsChk" value="${key}" style="margin-top:2px" ${(currentSections||[]).includes(key)?'checked':''}>
+      <span style="font-size:13px">${esc(label)}<br><span class="muted" style="font-size:10.5px">${esc(hint)}</span></span>
     </label>`).join('')}
     </div>
     <div class="row" style="gap:8px;margin-top:12px">
@@ -1992,12 +2073,25 @@ async function editRoleSections(name,currentSections){
       <button class="btn sec" onclick="closeModal()">Cancel</button>
     </div>`);
 }
+function rsSet(keys){ document.querySelectorAll('.rsChk').forEach(c=>{ c.checked=keys.includes(c.value); }); }
+function rsCopyFrom(){ const i=$('rsCopy').value; if(i==='')return toast('Pick a title to copy from.');
+  const r=(window._rolesForCopy||[])[Number(i)]; if(!r)return; rsSet(r.sections||[]); toast('Copied '+r.name+"'s access — review and Save"); }
+function rsPreset(name){ const keys=ACCESS_PRESETS[name]; if(!keys)return; rsSet(keys); toast(name+' preset applied — review and Save'); }
 async function saveRoleSections(){
   const name=_editRoleName;
-  const checks=[...$('modalBg').querySelectorAll('input[type=checkbox]')];
+  const checks=[...document.querySelectorAll('.rsChk')];
   const sections=checks.filter(c=>c.checked).map(c=>c.value);
   try{await api('/api/roles/'+encodeURIComponent(name),{method:'PATCH',body:JSON.stringify({sections})});closeModal();toast('Access updated');viewUsers();}
   catch(e){toast(e.message);}
+}
+async function renameRole(name){
+  const newName=prompt('Rename the job title "'+name+'" — every user holding it and all its access follow the new name:',name);
+  if(newName===null)return;
+  const clean=newName.trim();
+  if(!clean||clean===name)return;
+  try{ await api('/api/roles/'+encodeURIComponent(name)+'/rename',{method:'PATCH',body:JSON.stringify({newName:clean})});
+    toast('✏️ "'+name+'" is now "'+clean+'"'); viewUsers(); }
+  catch(e){ toast(e.message); }
 }
 function addRoleModal(){
   modal('Add Job Title',`
@@ -2787,7 +2881,7 @@ async function viewPOs(){
    ${pos.map(p=>{
      const isPending=p.status==='Pending Approval',isRejected=p.status==='Rejected';
      const badge=isPending?'b-low':isRejected?'b-below':p.status==='Open'?'b-mfg':'b-ok';
-     return `<tr><td><b>${p.id}</b></td><td>${p.vendor||''}</td><td style="font-size:12px">${p.part||p.partId}</td>
+     return `<tr><td><b>${p.id}</b></td><td>${p.vendor||''}</td><td style="font-size:12px">${p.part||p.partId}${p.vendorPartNo?`<br><span class="muted" style="font-size:10.5px">V/PN ${esc(p.vendorPartNo)}</span>`:''}</td>
        <td class="right">${p.qty}</td><td class="right">${money(p.total)}</td><td>${p.eta||''}</td>
        <td class="center"><span class="badge ${badge}">${p.status}</span></td>
        ${canEdit()?`<td class="right">${p.status==='Open'?`<button class="btn sm sec" onclick="receivePO('${p.id}')">Receive</button>`:''}</td>`:''}
