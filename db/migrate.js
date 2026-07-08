@@ -227,6 +227,9 @@ const colMigrations = [
   `ALTER TABLE model ADD COLUMN IF NOT EXISTS hitch_code TEXT`,
   `ALTER TABLE model ADD COLUMN IF NOT EXISTS body_code TEXT`,
   `ALTER TABLE model ADD COLUMN IF NOT EXISTS axles INT`,
+  // EFFECTIVE DATING: the price is frozen on each order at creation, so later catalog price
+  // changes apply to FUTURE orders only — historical revenue, invoices, and margins never move.
+  `ALTER TABLE sales_order ADD COLUMN IF NOT EXISTS unit_price NUMERIC(12,2)`,
   // The vendor's own part number — what actually goes on POs and vendor communication.
   `ALTER TABLE part ADD COLUMN IF NOT EXISTS vendor_part_no TEXT`,
   // Bill-to vs ship-to per dealership: some dealers bill through a corporate/parent entity.

@@ -205,6 +205,41 @@ test('landed-cost receiving: extras allocate by value, parts land at weighted co
   for (const id of [A.id, B.id]) await api('/api/parts/' + id + '/adjust', { method: 'POST', body: JSON.stringify({ onHand: 0, reason: 'landed test cleanup' }) });
 });
 
+test('effective dating: price changes hit FUTURE orders only — history, invoices, batches never move', async () => {
+  const custs = (await json(await api('/api/customers'))).filter(c => c.active !== false && c.allowed?.length);
+  const models = await json(await api('/api/models'));
+  let cust, model;
+  for (const c of custs) { const m = models.find(mm => c.allowed.includes(mm.category)); if (m) { cust = c; model = m; break; } }
+  const before = Number(model.price);
+
+  const oldO = await json(await api('/api/orders', { method: 'POST', body: JSON.stringify({ customerId: cust.id, modelId: model.id, qty: 1 }) }));
+  // A plain editor title cannot reprice the catalog; Sales/admin can — future orders only.
+  await api('/api/roles', { method: 'POST', body: JSON.stringify({ name: 'Price Probe', tier: 'editor', sections: ['orders'] }) });
+  const pu = await json(await api('/api/users', { method: 'POST', body: JSON.stringify({ name: 'Price Probe P', titles: ['Price Probe'], password: 'pricePw1' }) }));
+  const pl = await json(await fetch(BASE + '/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: pu.username, password: 'pricePw1' }) }));
+  assert.equal((await fetch(BASE + '/api/models/' + encodeURIComponent(model.id) + '/price', { method: 'PATCH', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + pl.token }, body: JSON.stringify({ price: 1 }) })).status, 403, 'repricing is sales/admin only');
+  assert.equal((await api('/api/models/' + encodeURIComponent(model.id) + '/price', { method: 'PATCH', body: JSON.stringify({ price: before + 777 }) })).status, 200);
+
+  const frozen = await json(await api('/api/orders/' + oldO.id));
+  assert.equal(frozen.price, before, 'the existing order keeps its frozen price');
+  assert.equal(frozen.revenue, before, 'historical revenue does not move');
+  const newO = await json(await api('/api/orders', { method: 'POST', body: JSON.stringify({ customerId: cust.id, modelId: model.id, qty: 1 }) }));
+  assert.equal((await json(await api('/api/orders/' + newO.id))).price, before + 777, 'a NEW order gets the new price');
+
+  // Invoicing the old order bills the frozen amount, even though the catalog moved.
+  await api('/api/orders/' + oldO.id + '/stage', { method: 'PATCH', body: JSON.stringify({ stage: 'Ready' }) });
+  assert.equal((await api('/api/orders/' + oldO.id + '/invoice', { method: 'POST' })).status, 200);
+  const ev = (await json(await api('/api/accounting'))).events.find(e => e.kind === 'invoice' && e.ref === oldO.id);
+  assert.equal(ev.amount, before, 'the invoice posts the frozen price');
+
+  // Batches freeze the same way: reprice AGAIN, the batched order still bills at ITS price.
+  const batch = await json(await api('/api/invoice-batches', { method: 'POST', body: JSON.stringify({ customerId: cust.id, orderIds: [newO.id] }) }));
+  assert.equal((await api('/api/models/' + encodeURIComponent(model.id) + '/price', { method: 'PATCH', body: JSON.stringify({ price: before + 1500 }) })).status, 200);
+  assert.equal((await json(await api('/api/invoice-batches/' + batch.id))).total, before + 777, 'batch total uses each order\'s own frozen price');
+
+  await api('/api/models/' + encodeURIComponent(model.id) + '/price', { method: 'PATCH', body: JSON.stringify({ price: before }) }); // restore for downstream tests
+});
+
 test('inventory valuation exposes the raw / make / WIP / finished buckets', async () => {
   const v = await json(await api('/api/inventory/summary'));
   for (const k of ['rawPurchased', 'makeParts', 'wipValue', 'finishedValue', 'totalValue'])

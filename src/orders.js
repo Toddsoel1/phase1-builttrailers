@@ -54,14 +54,19 @@ export async function ordersFull() {
       LEFT JOIN customer c ON c.id=o.customer_id
       LEFT JOIN app_user u ON u.id=o.rep_id
      ORDER BY o.production_seq NULLS LAST, o.created_at, o.id`, []);
-  return rows.map(o => ({
-    id: o.id, customerId: o.customer_id, customer: o.customer_name, modelId: o.model_id,
-    model: o.model_name, type: o.type || 'Custom', qty: o.qty, stage: o.stage, due: o.due,
-    deposit: Number(o.deposit), channel: o.channel, rep: o.rep_name, consumed: o.consumed, billed: !!o.billed,
-    prodSeq: o.production_seq == null ? null : Number(o.production_seq),
-    price: Number(o.price || 0), revenue: Number(o.price || 0) * o.qty,
-    andonOpen: Number(o.andon_open || 0)
-  }));
+  return rows.map(o => {
+    // Effective dating: the price frozen on the order at creation wins; the live catalog
+    // price is only a fallback for pre-freeze rows the boot backfill hasn't seen.
+    const unit = o.unit_price != null ? Number(o.unit_price) : Number(o.price || 0);
+    return {
+      id: o.id, customerId: o.customer_id, customer: o.customer_name, modelId: o.model_id,
+      model: o.model_name, type: o.type || 'Custom', qty: o.qty, stage: o.stage, due: o.due,
+      deposit: Number(o.deposit), channel: o.channel, rep: o.rep_name, consumed: o.consumed, billed: !!o.billed,
+      prodSeq: o.production_seq == null ? null : Number(o.production_seq),
+      price: unit, revenue: unit * o.qty,
+      andonOpen: Number(o.andon_open || 0)
+    };
+  });
 }
 
 // Resequence the production queue. `ids` is the full ordered list of order IDs;
@@ -89,7 +94,7 @@ export async function consumeInventory(orderId, userId) {
   // Bill once (idempotent on `billed`), independent of consume. Skipped if billed as part of
   // an invoice batch (invoice_batch_id) so a trailer is never invoiced twice.
   if (!o.invoice_batch_id && !o.billed) {
-    const info = await one(`SELECT m.id AS model_id, m.name AS model, m.price,
+    const info = await one(`SELECT m.id AS model_id, m.name AS model, COALESCE(o.unit_price, m.price) AS price,
                                    COALESCE(c.bill_name, c.name) AS customer FROM sales_order o
                               LEFT JOIN model m ON m.id=o.model_id
                               LEFT JOIN customer c ON c.id=o.customer_id WHERE o.id=$1`, [orderId]);

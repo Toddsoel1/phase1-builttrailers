@@ -1575,8 +1575,9 @@ app.post('/api/orders', authMiddleware, requireSales, async (req, res) => {
     return res.status(403).json({ error: `${cust.name} is not authorized to order ${mdl.category} trailers` });
   const id = 'SO-' + (1049 + (await all('SELECT id FROM sales_order', [])).length);
   const seqRow = await one('SELECT COALESCE(MAX(production_seq),0)+1 AS n FROM sales_order', []);
-  await q('INSERT INTO sales_order(id,customer_id,model_id,qty,stage,due,deposit,channel,rep_id,production_seq) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)',
-    [id, customerId, modelId, Math.max(1, Number(qty) || 1), 'Quote', due || null, 0, 'Sales', req.user.id, seqRow?.n || 1]);
+  await q('INSERT INTO sales_order(id,customer_id,model_id,qty,stage,due,deposit,channel,rep_id,production_seq,unit_price) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)',
+    [id, customerId, modelId, Math.max(1, Number(qty) || 1), 'Quote', due || null, 0, 'Sales', req.user.id, seqRow?.n || 1,
+     Number(mdl.price) || 0]); // price frozen at order time — catalog changes hit future orders only
   await audit(req, 'order.create', `${id} ${cust.name} ${mdl.category} x${qty}`);
   res.json({ id });
 });
@@ -1589,8 +1590,8 @@ app.post('/api/orders/stock', authMiddleware, requireStockCreator, async (req, r
   const n = Math.max(1, Number(qty) || 1);
   const id = 'SO-' + (1049 + (await all('SELECT id FROM sales_order', [])).length);
   const seqRow = await one('SELECT COALESCE(MAX(production_seq),0)+1 AS n FROM sales_order', []);
-  await q('INSERT INTO sales_order(id,customer_id,model_id,qty,stage,due,deposit,channel,rep_id,production_seq) VALUES ($1,NULL,$2,$3,$4,$5,0,$6,$7,$8)',
-    [id, modelId, n, 'Scheduled', due || null, 'Stock', req.user.id, seqRow?.n || 1]);
+  await q('INSERT INTO sales_order(id,customer_id,model_id,qty,stage,due,deposit,channel,rep_id,production_seq,unit_price) VALUES ($1,NULL,$2,$3,$4,$5,0,$6,$7,$8,$9)',
+    [id, modelId, n, 'Scheduled', due || null, 'Stock', req.user.id, seqRow?.n || 1, Number(mdl.price) || 0]);
   await audit(req, 'order.stock', `${id} STOCK ${mdl.category} x${n}`);
   res.json({ id, stock: true });
 });
@@ -2316,6 +2317,17 @@ app.get('/api/print/unit-history', authMiddleware, requireVinAuthority, async (r
   if (!h) return res.status(404).json({ error: 'No unit found with that VIN or unit id.' });
   res.json(h);
 });
+// Set a model's catalog price. EFFECTIVE DATING: this touches FUTURE orders only — every
+// existing order carries the price frozen on it at creation, so history never moves.
+app.patch('/api/models/:id/price', authMiddleware, requireSales, async (req, res) => {
+  const m = await one('SELECT id, price FROM model WHERE id=$1', [req.params.id]);
+  if (!m) return res.status(404).json({ error: 'model not found' });
+  const price = Number(req.body?.price);
+  if (!Number.isFinite(price) || price < 0) return res.status(400).json({ error: 'Enter a price of 0 or more.' });
+  await q('UPDATE model SET price=$1 WHERE id=$2', [price, req.params.id]);
+  await audit(req, 'model.price', `${req.params.id}: ${m.price} -> ${price} (future orders only)`);
+  res.json({ ok: true, price });
+});
 // Per-model print specs — the numbers the federal VIN label and MSO carry.
 // (Own path, not /api/models/:id/..., so it can't collide with the models routes above.)
 app.get('/api/print-specs', authMiddleware, requireVinAuthority, async (_req, res) => {
@@ -2725,6 +2737,13 @@ await ensureSchema();
     const secs = r.tier==='admin' ? ALL_SECTIONS : r.tier==='editor' ? EDITOR_SECTIONS : VIEWER_SECTIONS;
     for (const s of secs) await q(`INSERT INTO role_section(role_name,section) VALUES($1,$2) ON CONFLICT DO NOTHING`, [r.name, s]);
   }
+  // Effective dating: freeze the price on any order that predates unit_price, at today's
+  // catalog price (the best obtainable history). Idempotent — only ever touches NULLs, and
+  // every new order writes its own frozen price at creation.
+  await q(`UPDATE sales_order o SET unit_price = COALESCE(
+             (SELECT ob.total_price / GREATEST(o.qty,1) FROM order_build ob WHERE ob.order_id = o.id),
+             (SELECT m.price FROM model m WHERE m.id = o.model_id), 0)
+            WHERE o.unit_price IS NULL`).catch(e => console.warn('unit_price backfill:', e.message));
   // Backfill production_seq for any orders missing it, defaulting to confirmation/creation order.
   await q(`UPDATE sales_order s SET production_seq = sub.rn + COALESCE((SELECT MAX(production_seq) FROM sales_order), 0)
              FROM (SELECT id, row_number() OVER (ORDER BY created_at, id) AS rn

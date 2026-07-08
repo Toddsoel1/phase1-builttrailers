@@ -1160,6 +1160,16 @@ async function receive(id){
 }
 
 let _bomModels=[], _currentBomId=null;
+// Catalog price changes are FORWARD-ONLY: existing orders keep the price frozen on them.
+async function editModelPrice(modelId,current){
+  const v=prompt('New catalog price for '+modelId+' — applies to FUTURE orders only (existing orders keep their frozen price):',current);
+  if(v===null)return;
+  const price=Number(v);
+  if(!Number.isFinite(price)||price<0)return toast('Enter a price of 0 or more.');
+  try{ await api('/api/models/'+encodeURIComponent(modelId)+'/price',{method:'PATCH',body:JSON.stringify({price})});
+    toast('✓ '+modelId+' now '+money(price)+' for new orders'); showBom(modelId); }
+  catch(e){ toast(e.message); }
+}
 async function viewBoms(){
   $('pTitle').textContent='BOMs & Cost';$('pSub').textContent='Per-model bill of materials with live cost rollup';$('pActions').innerHTML='';
   _bomModels=await api('/api/models');
@@ -1192,6 +1202,11 @@ async function showBom(id){
     ${kpi('Total cost',money(m.totalCost),'per unit')}
     ${kpi('Margin',(m.margin*100).toFixed(1)+'%',money(m.marginDollars)+' on '+money(m.price))}
    </div>
+   ${canSell()?`<div class="card" style="margin-bottom:14px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+     <span style="font-size:13px"><b>Catalog price:</b> ${money(m.price)}</span>
+     <button class="btn sm sec" onclick="editModelPrice('${id}',${m.price})">✏️ Change price</button>
+     <span class="muted" style="font-size:11.5px">Applies to <b>future orders only</b> — every existing order keeps the price frozen on it when it was placed.</span>
+   </div>`:''}
    <div class="card"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px"><h3 style="margin:0">${esc(m.name)} — Bill of Materials</h3>${isAdmin()?`<button class="btn sm" onclick="addBomLine('${id}')">+ Propose Part</button>`:''}</div>
    <table><thead><tr><th>Part</th><th>Stage</th><th class="right">Qty</th><th class="right">Unit cost</th><th class="right">Ext.</th>${isAdmin()?'<th></th>':''}</tr></thead><tbody>
    ${m.bom.map(b=>`<tr>

@@ -16,10 +16,11 @@ async function nextBatchId() {
   return 'IB-' + (2001 + n);
 }
 
-// Live sum of a batch's order revenue (model price × qty).
+// Sum of a batch's order revenue — each order at ITS OWN frozen price (effective dating),
+// falling back to the live model price only for pre-freeze rows.
 async function batchTotal(batchId) {
   const r = await one(
-    `SELECT COALESCE(SUM(m.price * o.qty), 0) AS total
+    `SELECT COALESCE(SUM(COALESCE(o.unit_price, m.price) * o.qty), 0) AS total
        FROM sales_order o LEFT JOIN model m ON m.id = o.model_id
       WHERE o.invoice_batch_id = $1`, [batchId]);
   return Number(r?.total || 0);
@@ -29,7 +30,8 @@ async function batchTotal(batchId) {
 // not already in a batch.
 export async function eligibleOrders(customerId) {
   const rows = await all(
-    `SELECT o.id, o.qty, o.stage, o.due, m.name AS model, m.category AS type, m.price
+    `SELECT o.id, o.qty, o.stage, o.due, m.name AS model, m.category AS type,
+            COALESCE(o.unit_price, m.price) AS price
        FROM sales_order o LEFT JOIN model m ON m.id = o.model_id
       WHERE o.customer_id = $1 AND o.billed = false AND o.invoice_batch_id IS NULL
       ORDER BY o.production_seq NULLS LAST, o.id`, [customerId]);
@@ -43,7 +45,7 @@ export async function listBatches() {
   const rows = await all(
     `SELECT b.id, b.customer_name, b.status, b.note, b.created_at, b.invoiced_at, b.paid_at,
             COUNT(o.id)::int AS order_count,
-            COALESCE(SUM(m.price * o.qty), 0) AS calc_total
+            COALESCE(SUM(COALESCE(o.unit_price, m.price) * o.qty), 0) AS calc_total
        FROM invoice_batch b
        LEFT JOIN sales_order o ON o.invoice_batch_id = b.id
        LEFT JOIN model m ON m.id = o.model_id
@@ -60,7 +62,8 @@ export async function getBatch(id) {
   const b = await one('SELECT * FROM invoice_batch WHERE id=$1', [id]);
   if (!b) return null;
   const orders = await all(
-    `SELECT o.id, o.qty, o.stage, o.due, o.model_id, m.name AS model, m.category AS type, m.price
+    `SELECT o.id, o.qty, o.stage, o.due, o.model_id, m.name AS model, m.category AS type,
+            COALESCE(o.unit_price, m.price) AS price
        FROM sales_order o LEFT JOIN model m ON m.id = o.model_id
       WHERE o.invoice_batch_id = $1 ORDER BY o.id`, [id]);
   // One invoice line per physical trailer, each carrying its VIN (or null if not

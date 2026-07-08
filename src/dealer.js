@@ -144,14 +144,16 @@ export async function placeOrder(d, { modelId, qty, due }) {
   const seq = await one('SELECT COALESCE(MAX(production_seq),0)+1 AS n FROM sales_order', []);
   const cust = await one('SELECT rep_id FROM customer WHERE id=$1', [d.customer_id]);
   // Dealer orders enter as Quote = pending Built Trailers sales approval.
-  await q(`INSERT INTO sales_order(id,customer_id,model_id,qty,stage,due,deposit,channel,rep_id,production_seq)
-           VALUES($1,$2,$3,$4,'Quote',$5,0,'Dealer Portal',$6,$7)`,
-    [id, d.customer_id, modelId, Math.max(1, Number(qty) || 1), due || null, cust?.rep_id || null, seq?.n || 1]);
+  await q(`INSERT INTO sales_order(id,customer_id,model_id,qty,stage,due,deposit,channel,rep_id,production_seq,unit_price)
+           VALUES($1,$2,$3,$4,'Quote',$5,0,'Dealer Portal',$6,$7,$8)`,
+    [id, d.customer_id, modelId, Math.max(1, Number(qty) || 1), due || null, cust?.rep_id || null, seq?.n || 1,
+     Number(mdl.price) || 0]); // frozen at order time
   return { id, status: 'Pending approval' };
 }
 export async function myOrders(d) {
   if (!d.customer_id) return [];
-  const rows = await all(`SELECT o.id, o.qty, o.stage, o.due, o.created_at, m.id AS model_id, m.name AS model, m.category AS type, m.price,
+  const rows = await all(`SELECT o.id, o.qty, o.stage, o.due, o.created_at, m.id AS model_id, m.name AS model, m.category AS type,
+                                 COALESCE(o.unit_price, m.price) AS price,
                                  (SELECT COUNT(*) FROM trailer t WHERE t.order_id=o.id AND t.vin IS NOT NULL) AS vins,
                                  (SELECT 1 FROM order_build ob WHERE ob.order_id=o.id) AS is_boat
                             FROM sales_order o LEFT JOIN model m ON m.id=o.model_id
@@ -168,7 +170,8 @@ export async function stockList(d) {
   if (!d.customer_id) return { available: [], coming: [] };
   const allowed = (await all('SELECT type FROM customer_allowed_type WHERE customer_id=$1', [d.customer_id])).map(a => a.type);
   const rows = await all(`
-    SELECT o.id, o.qty, o.stage, o.due, m.name AS model, m.category AS type, m.price,
+    SELECT o.id, o.qty, o.stage, o.due, m.name AS model, m.category AS type,
+           COALESCE(o.unit_price, m.price) AS price,
            (SELECT string_agg(t.vin, ', ') FROM trailer t WHERE t.order_id=o.id AND t.vin IS NOT NULL) AS vin_list,
            (SELECT COUNT(*) FROM stock_request sr WHERE sr.order_id=o.id AND sr.status='pending' AND sr.customer_id=$1) AS mine
       FROM sales_order o JOIN model m ON m.id=o.model_id

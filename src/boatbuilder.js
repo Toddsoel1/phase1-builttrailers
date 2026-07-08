@@ -270,9 +270,10 @@ export async function submitBuild(actor, payload) {
   const { deltas } = await computeFinalBOM(boat.base_model_id, payload.selections, cat);
   const id = 'SO-' + (1049 + (await all('SELECT id FROM sales_order', [])).length);
   const seq = (await one('SELECT COALESCE(MAX(production_seq),0)+1 AS n FROM sales_order', [])).n;
-  await q(`INSERT INTO sales_order(id,customer_id,model_id,qty,stage,due,channel,rep_id,production_seq)
-           VALUES($1,$2,$3,$4,'Quote',$5,$6,$7,$8)`,
-    [id, payload.customerId || null, boat.base_model_id, payload.qty || 1, payload.due || null, payload.channel || 'Configurator', payload.repId || actor?.id || null, seq]);
+  await q(`INSERT INTO sales_order(id,customer_id,model_id,qty,stage,due,channel,rep_id,production_seq,unit_price)
+           VALUES($1,$2,$3,$4,'Quote',$5,$6,$7,$8,$9)`,
+    [id, payload.customerId || null, boat.base_model_id, payload.qty || 1, payload.due || null, payload.channel || 'Configurator', payload.repId || actor?.id || null, seq,
+     Math.round((Number(price.total) / Math.max(1, Number(payload.qty) || 1)) * 100) / 100]); // configured price frozen per unit
   await q(`INSERT INTO order_build(order_id,boat_id,boat_make,boat_model,boat_year,boat_length,base_model_id,total_price,note,created_by)
            VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
     [id, boat.id, boat.make_id, boat.name, payload.year || null, boat.length_ft, boat.base_model_id, price.total, payload.note || null, actor?.id || payload.createdBy || null]);
@@ -313,7 +314,11 @@ export async function updateBuild(orderId, payload) {
   const { deltas } = await computeFinalBOM(boat.base_model_id, p.selections, cat);
   await q(`UPDATE order_build SET boat_id=$1,boat_make=$2,boat_model=$3,boat_year=$4,boat_length=$5,base_model_id=$6,total_price=$7 WHERE order_id=$8`,
     [boat.id, boat.make_id, boat.name, payload.year ?? ob.boat_year, boat.length_ft, boat.base_model_id, price.total, orderId]);
-  await q('UPDATE sales_order SET model_id=$1 WHERE id=$2', [boat.base_model_id, orderId]); // base trailer can change
+  // Reconfiguring a still-editable Quote re-freezes ITS price — a deliberate edit to this
+  // transaction, not a catalog change leaking in.
+  const soQty = await one('SELECT qty FROM sales_order WHERE id=$1', [orderId]);
+  await q('UPDATE sales_order SET model_id=$1, unit_price=$2 WHERE id=$3',
+    [boat.base_model_id, Math.round((Number(price.total) / Math.max(1, Number(soQty?.qty) || 1)) * 100) / 100, orderId]); // base trailer can change
   await q('DELETE FROM order_build_option WHERE order_id=$1', [orderId]);
   await q('DELETE FROM order_bom_delta WHERE order_id=$1', [orderId]);
   for (const g of cat.groups) {

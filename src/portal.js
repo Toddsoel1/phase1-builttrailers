@@ -162,9 +162,11 @@ export async function submitMaintenance(data) {
 export async function pendingRegistrations() {
   const rows = await all(`SELECT r.trailer_id, r.owner_name, r.email, r.phone, r.warranty_address, r.city, r.state, r.zip, r.sale_date,
                                  r.selling_dealer, r.sms_opt_in, r.email_opt_in, r.proof_of_sale, r.within_15_days,
-                                 r.registered_at, r.source, r.sale_price, r.accessories, r.ocr_sale_date, t.vin, m.name AS model, m.price AS our_price, c.name AS dealer
+                                 r.registered_at, r.source, r.sale_price, r.accessories, r.ocr_sale_date, t.vin, m.name AS model,
+                                 COALESCE(o.unit_price, m.price) AS our_price, c.name AS dealer
                             FROM warranty_registration r
                             JOIN trailer t ON t.id=r.trailer_id
+                            LEFT JOIN sales_order o ON o.id=t.order_id
                             LEFT JOIN model m ON m.id=t.model_id
                             LEFT JOIN customer c ON c.id=t.customer_id
                            WHERE r.verification_status='pending'
@@ -210,13 +212,16 @@ export async function pendingRegistrationCount() {
 // Compares each model's avg retail sale price (what dealers sold for) to our price
 // (what dealers pay us) and tallies accessory frequency. Never exposed to dealers/owners.
 export async function marginReport() {
-  const byModel = await all(`SELECT m.name AS model, m.price AS our_price,
+  // Effective dating: each trailer's margin uses the price frozen on ITS order at sale time —
+  // today's catalog price only fills in for pre-freeze history.
+  const byModel = await all(`SELECT m.name AS model, AVG(COALESCE(o.unit_price, m.price)) AS our_price,
                                     COUNT(r.sale_price)::int AS n, AVG(r.sale_price) AS avg_sale,
                                     MIN(r.sale_price) AS min_sale, MAX(r.sale_price) AS max_sale
                                FROM warranty_registration r
                                JOIN trailer t ON t.id=r.trailer_id JOIN model m ON m.id=t.model_id
+                               LEFT JOIN sales_order o ON o.id=t.order_id
                               WHERE r.sale_price IS NOT NULL
-                              GROUP BY m.name, m.price ORDER BY m.name`, []).catch(() => []);
+                              GROUP BY m.name ORDER BY m.name`, []).catch(() => []);
   const accRows = await all(`SELECT accessories FROM warranty_registration WHERE accessories IS NOT NULL AND accessories<>''`, []).catch(() => []);
   const accCount = {};
   for (const row of accRows)
@@ -225,10 +230,12 @@ export async function marginReport() {
   // By dealer: who marks our trailers up the most (avg over their model mix).
   const byDealer = await all(`SELECT COALESCE(c.name, r.selling_dealer, '—') AS dealer,
                                      COUNT(r.sale_price)::int AS n,
-                                     AVG(r.sale_price) AS avg_sale, AVG(r.sale_price - m.price) AS avg_margin,
-                                     SUM(r.sale_price - m.price) AS total_margin
+                                     AVG(r.sale_price) AS avg_sale,
+                                     AVG(r.sale_price - COALESCE(o.unit_price, m.price)) AS avg_margin,
+                                     SUM(r.sale_price - COALESCE(o.unit_price, m.price)) AS total_margin
                                 FROM warranty_registration r
                                 JOIN trailer t ON t.id=r.trailer_id JOIN model m ON m.id=t.model_id
+                                LEFT JOIN sales_order o ON o.id=t.order_id
                                 LEFT JOIN customer c ON c.id=t.customer_id
                                WHERE r.sale_price IS NOT NULL
                                GROUP BY COALESCE(c.name, r.selling_dealer, '—')
@@ -236,10 +243,12 @@ export async function marginReport() {
   // Over time: monthly trend (sale date; falls back to when it was registered).
   const byMonth = await all(`SELECT to_char(COALESCE(r.sale_date, r.registered_at::date), 'YYYY-MM') AS month,
                                     COUNT(r.sale_price)::int AS n,
-                                    AVG(r.sale_price) AS avg_sale, AVG(r.sale_price - m.price) AS avg_margin,
-                                    SUM(r.sale_price - m.price) AS total_margin
+                                    AVG(r.sale_price) AS avg_sale,
+                                    AVG(r.sale_price - COALESCE(o.unit_price, m.price)) AS avg_margin,
+                                    SUM(r.sale_price - COALESCE(o.unit_price, m.price)) AS total_margin
                                FROM warranty_registration r
                                JOIN trailer t ON t.id=r.trailer_id JOIN model m ON m.id=t.model_id
+                               LEFT JOIN sales_order o ON o.id=t.order_id
                               WHERE r.sale_price IS NOT NULL
                               GROUP BY 1 ORDER BY 1`, []).catch(() => []);
   return {
