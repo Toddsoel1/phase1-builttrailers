@@ -730,22 +730,22 @@ const HELP={
       <li>Review weekly with direct reports in 1-on-1s</li>
     </ul>`},
   wins:{title:'🎉 Wins',body:`
-    <p>Team recognition board. Celebrate accomplishments and build culture.</p>
+    <p>Recognition is <b>frequent, specific, and tied to the Constitution</b> — not reserved for extraordinary achievement.</p>
     <h4 style="color:var(--accent);margin:14px 0 6px">Posting a win</h4>
     <ol>
-      <li>Click <strong>+ Post a Win</strong></li>
-      <li>Write a short description of the achievement (a milestone, record, great work, shoutout)</li>
-      <li>Tag it to an individual, a workstation, or the whole team</li>
-      <li>Post — it appears on the board and on the Dashboard</li>
+      <li>Click <strong>🎉 Post a win</strong> (here, on the Dashboard, or at Stand-Up)</li>
+      <li>Pick <b>which behavior</b> it celebrates: quality catch, safety intervention, cost-saving idea, helping a teammate, process improvement, cross-training, mentoring, or a customer compliment</li>
+      <li>Name the specific behavior, not just the person — “Maria caught a torque issue before it left Finish” teaches the whole shop what good looks like; “great job, Maria” does not (the app will ask you to be specific)</li>
+      <li>Tag it to an individual, a workstation, or a department</li>
     </ol>
-    <h4 style="color:var(--accent);margin:14px 0 6px">Reacting</h4>
-    <p>Click any emoji reaction button under a win to add your reaction. Multiple team members can react. Reactions are visible to everyone.</p>
-    <h4 style="color:var(--accent);margin:14px 0 6px">Tips</h4>
+    <h4 style="color:var(--accent);margin:14px 0 6px">Where wins show up</h4>
     <ul>
-      <li>Post wins frequently — even small ones matter for morale</li>
-      <li>Tag a workstation to recognize the whole crew, not just individuals</li>
-      <li>Recent wins scroll on the Dashboard so the whole team sees them immediately</li>
-    </ul>`},
+      <li>Recent wins on the <b>Dashboard</b>, this week's wins at <b>Stand-Up</b> (and on the 📺 TV rotation), and in the Monday <b>weekly digest</b> email</li>
+      <li>When an idea from the 💡 ideas platform is implemented, a Process-improvement win is posted automatically crediting the author</li>
+      <li>The Shop Manager's Stand-Up band tracks days since the last win and which behaviors haven't been celebrated this month</li>
+    </ul>
+    <h4 style="color:var(--accent);margin:14px 0 6px">Reacting</h4>
+    <p>Click any emoji reaction button under a win to add a cheer. Reactions are visible to everyone.</p>`},
   forecast:{title:'🔮 Forecasting & Planning',body:`
     <p>Financial and capacity planning tools for leadership.</p>
     <h4 style="color:var(--accent);margin:14px 0 6px">Revenue forecast</h4>
@@ -852,8 +852,21 @@ function renderInbox(items){
 
 async function viewDash(){
   $('pTitle').textContent='Dashboard';$('pSub').textContent='The single source of truth — live from the database';$('pActions').innerHTML='';
-  const [inv,models,inbox]=await Promise.all([api('/api/inventory/summary'),api('/api/models'),api('/api/inbox').catch(()=>({items:[]}))]);
+  const [inv,models,inbox,winsD]=await Promise.all([api('/api/inventory/summary'),api('/api/models'),api('/api/inbox').catch(()=>({items:[]})),api('/api/wins').catch(()=>null)]);
   const avgMargin=models.reduce((s,m)=>s+m.margin,0)/models.length*100;
+  let winStrip='';
+  if(winsD){
+    winMeta=winsD;
+    const canCel=!(myTitles().length&&myTitles().every(t=>t==='External Viewer'));
+    const recent=(winsD.wins||[]).filter(w=>(Date.now()-new Date(w.on+'T00:00:00').getTime())/864e5<=14).slice(0,5);
+    winStrip=`<div class="card" style="margin-top:16px"><h3 style="display:flex;justify-content:space-between;align-items:center;gap:8px">🎉 Recent wins ${canCel?`<button class="btn sm sec" onclick="postWin()">+ Post a win</button>`:''}</h3>
+     ${recent.length?recent.map(w=>`<div style="display:flex;gap:8px;align-items:center;padding:6px 0;border-bottom:1px solid var(--line);font-size:13px">
+       ${w.category?`<span class="badge b-buy" style="font-size:9px">${esc(w.category)}</span>`:''}
+       <span style="flex:1"><b>${esc(w.targetLabel)}</b> — ${esc(w.title)}</span>
+       <span class="muted" style="font-size:11px">${w.on}${w.cheers?' · '+w.cheers+' 🎉':''}</span></div>`).join('')+`<a class="lnk" style="font-size:12px" onclick="go('wins')">all wins →</a>`
+      :`<p class="muted" style="font-size:13px">No wins in the last two weeks — recognition should be frequent. Post one for a behavior you saw today: a quality catch, a safety intervention, someone helping a teammate.</p>`}
+    </div>`;
+  }
   $('content').innerHTML=`
    ${renderInbox(inbox.items||[])}
    <div class="banner">✅ Connected to the live API and database. Every figure below is computed server-side from stored data.</div>
@@ -863,6 +876,7 @@ async function viewDash(){
     ${kpi('Avg gross margin',avgMargin.toFixed(1)+'%','across all models')}
     ${kpi('Below reorder',inv.belowReorder,'parts need attention')}
    </div>
+   ${winStrip}
    <div class="card" style="margin-top:16px"><h3>Model cost & margin</h3>
    <table><thead><tr><th>Model</th><th>Category</th><th class="right">Material</th><th class="right">Labor</th><th class="right">Total cost</th><th class="right">Price</th><th class="right">Margin</th></tr></thead><tbody>
    ${models.map(m=>`<tr><td><b>${m.id}</b> ${m.name}</td><td>${m.category}</td><td class="right">${money(m.material)}</td><td class="right">${money(m.laborCost)}</td><td class="right"><b>${money(m.totalCost)}</b></td><td class="right">${money(m.price)}</td><td class="right" style="color:${m.margin<0?'var(--red)':m.margin>.3?'var(--green)':'var(--yellow)'}">${(m.margin*100).toFixed(1)}%</td></tr>`).join('')}
@@ -1524,13 +1538,14 @@ async function viewStandup(){
   const date=window._suDate||new Date().toISOString().slice(0,10);
   window._suDate=date;
   $('pActions').innerHTML=isMgr?`<input type="date" id="suDate" value="${date}" onchange="window._suDate=this.value;viewStandup()" style="padding:6px 8px;border-radius:8px;border:1px solid var(--line);background:var(--panel2);color:var(--txt)"> <button class="btn sm sec" onclick="suGenerate()">⚙ Generate plan</button>`:'';
-  let me,plan=null,report=[],station=null,tsp=null,dash=null,ideas=null;
+  let me,plan=null,report=[],station=null,tsp=null,dash=null,ideas=null,winsD=null;
   try{
-    [me,report,station,tsp,dash,ideas]=await Promise.all([api('/api/standup/me?date='+date),api('/api/standup/report?days=14').catch(()=>[]),
+    [me,report,station,tsp,dash,ideas,winsD]=await Promise.all([api('/api/standup/me?date='+date),api('/api/standup/report?days=14').catch(()=>[]),
       ME.workstation?api('/api/mystation').catch(()=>null):Promise.resolve(null),
       api('/api/timesurvey/pending').catch(()=>null),
       isMgr?api('/api/shopdash').catch(()=>null):Promise.resolve(null),
-      api('/api/ideas/board').catch(()=>null)]);
+      api('/api/ideas/board').catch(()=>null),
+      api('/api/wins').catch(()=>null)]);
     if(isMgr) plan=await api('/api/standup?date='+date);
   }catch(e){ $('content').innerHTML=`<div class="card"><p class="msg err">${esc(e.message)}</p></div>`; return; }
   window._ideas=ideas;
@@ -1622,6 +1637,12 @@ async function viewStandup(){
       <div class="card" style="margin:0;${dash.bottlenecks.length?'border-color:var(--red)':''}"><div class="muted" style="font-size:11px;text-transform:uppercase;letter-spacing:.5px">🚧 Bottleneck station</div>
         ${dash.bottlenecks.length?dash.bottlenecks.map(b=>`<div style="font-size:13px;padding:2px 0"><b style="color:var(--red)">${esc(b.stage)}</b> — ${b.count}/${b.limit} in stage${b.overForHours!=null?', over for <b>'+b.overForHours+'h</b>':''}</div>`).join('')+`<a class="lnk" style="font-size:11.5px" onclick="go('orders')">unstick on the board →</a>`
           :'<div style="font-size:20px;font-weight:800;color:var(--ok,#1a7f4b)">Flow clear</div><div class="muted" style="font-size:11.5px">no stage over its WIP limit</div>'}</div>
+      ${dash.recognition?(()=>{const rec=dash.recognition;const recColor=rec.daysSinceLastWin==null?'var(--red)':rec.daysSinceLastWin<=1?'var(--ok,#1a7f4b)':rec.daysSinceLastWin<=3?'var(--yellow,#e0a800)':'var(--red)';return `
+      <div class="card" style="margin:0"><div class="muted" style="font-size:11px;text-transform:uppercase;letter-spacing:.5px">🎉 Recognition — last win</div>
+        <div style="font-size:24px;font-weight:800;color:${recColor}">${rec.daysSinceLastWin==null?'never':rec.daysSinceLastWin===0?'today':rec.daysSinceLastWin+'d ago'}</div>
+        <div class="muted" style="font-size:11.5px">${rec.monthTotal||0} win(s) this month</div>
+        ${rec.missing&&rec.missing.length?`<div class="muted" style="font-size:11px;margin-top:2px">not yet celebrated: ${esc(rec.missing.slice(0,3).join(', '))}${rec.missing.length>3?' +'+(rec.missing.length-3)+' more':''}</div>`:'<div style="font-size:11.5px;color:var(--ok,#1a7f4b)">all 8 behaviors celebrated this month 🎉</div>'}
+        <a class="lnk" style="font-size:11.5px" onclick="go('wins')">the wins wall →</a></div>`;})():''}
     </div>`;
   }
   // ── 💡 Ideas: daily prompt → SM daily winner → Monday vote → Tuesday reveal → implemented ──
@@ -1665,7 +1686,21 @@ async function viewStandup(){
       <p class="muted" style="font-size:11px;margin-top:8px">Everyone gives one idea a day at checkout. The Shop Manager picks a daily winner (ideas stay anonymous), Monday the crew votes on the week's winners, Tuesday the champion is announced — and the author finally gets the credit.</p>
     </div>`;
   }
-  $('content').innerHTML=dashBand+ideasCard+myCard+msCard+board+repCard;
+  // ── 🎉 Recognition at stand-up: this week's wins, named behaviors, right where the crew meets ──
+  let winsCard='';
+  if(winsD){
+    winMeta=winsD;
+    const canCel=!(myTitles().length&&myTitles().every(t=>t==='External Viewer'));
+    const wk=(winsD.wins||[]).filter(w=>(Date.now()-new Date(w.on+'T00:00:00').getTime())/864e5<=7).slice(0,6);
+    winsCard=`<div class="card" style="margin-bottom:16px"><h3 style="display:flex;justify-content:space-between;align-items:center;gap:8px">🎉 This week's wins ${canCel?`<button class="btn sm sec" onclick="postWin()">+ Post a win</button>`:''}</h3>
+      ${wk.length?wk.map(w=>`<div style="display:flex;gap:8px;align-items:center;padding:6px 0;border-bottom:1px solid var(--line);font-size:13px">
+        ${w.category?`<span class="badge b-buy" style="font-size:9px">${esc(w.category)}</span>`:''}
+        <span style="flex:1"><b>${esc(w.targetLabel)}</b> — ${esc(w.title)}</span>
+        <span class="muted" style="font-size:11px">${w.on}${w.cheers?' · '+w.cheers+' 🎉':''}</span></div>`).join('')
+       :`<p class="muted" style="font-size:12.5px">None yet this week. See a quality catch, a safety intervention, someone helping a teammate? Post it — and name the behavior.</p>`}
+    </div>`;
+  }
+  $('content').innerHTML=dashBand+ideasCard+winsCard+myCard+msCard+board+repCard;
 }
 async function ideaQuickAdd(){
   const text=($('ideaQuick').value||'').trim(); if(text.length<8)return toast('💡 One real sentence — what should change, and why?');
@@ -4420,32 +4455,40 @@ async function toggleGoal(id){ await api('/api/selfgoals/'+id+'/toggle',{method:
 async function delGoal(id){ await api('/api/selfgoals/'+id,{method:'DELETE'});viewOutcomes(); }
 async function saveOut(uid){ try{await api('/api/users/'+uid+'/outcomes',{method:'PATCH',body:JSON.stringify({day:$('o_'+uid+'_d').value,week:$('o_'+uid+'_w').value,month:$('o_'+uid+'_m').value})});toast('Outcomes set');}catch(e){toast(e.message);} }
 
-let winFilter='All', winMeta={};
+let winFilter='All', winCat='All', winMeta={};
 async function viewWins(){
-  $('pTitle').textContent='Wins & Celebrations';$('pSub').textContent='Celebrate individual, workstation and department wins';
+  $('pTitle').textContent='Wins & Celebrations';$('pSub').textContent='Frequent, specific recognition — name the behavior, not just the person';
   const canCel=!(myTitles().length&&myTitles().every(t=>t==='External Viewer'));
   $('pActions').innerHTML=canCel?`<button class="btn" onclick="postWin()">🎉 Post a win</button>`:'';
   const d=await api('/api/wins');winMeta=d;
   const REACTIONS=['🎉','🙌','💪','🔥','👏'];
-  const wins=winFilter==='All'?d.wins:d.wins.filter(w=>w.scope===winFilter.toLowerCase());
+  const monthKey=new Date().toISOString().slice(0,7);
+  const mix={};d.wins.filter(w=>w.category&&String(w.on).slice(0,7)===monthKey).forEach(w=>{mix[w.category]=(mix[w.category]||0)+1;});
+  const celebrated=Object.keys(mix).length;
+  let wins=winFilter==='All'?d.wins:d.wins.filter(w=>w.scope===winFilter.toLowerCase());
+  if(winCat!=='All')wins=wins.filter(w=>w.category===winCat);
   const cheers=d.wins.reduce((s,w)=>s+w.cheers,0);
-  $('content').innerHTML=`<div class="banner">🎉 Recognize a teammate, a workstation, or a whole department. ${canCel?'React to give a cheer!':'(External viewers can read but not post.)'}</div>
-   <div class="grid g4" style="grid-template-columns:repeat(3,1fr);margin-bottom:14px">${kpi('Wins',d.wins.length,'on the wall')}${kpi('Total cheers',cheers,'team recognition')}${kpi('Departments',d.departments.length,'tracked')}</div>
-   <div class="tabs">${['All','Individual','Workstation','Department'].map(t=>`<button class="${winFilter===t?'active':''}" onclick="winFilter='${t}';viewWins()">${t}</button>`).join('')}</div>
+  $('content').innerHTML=`<div class="banner">🎉 Recognition is frequent, specific, and tied to the Constitution. Name the behavior — “Maria caught a torque issue before it left Finish” teaches the whole shop what good looks like. ${canCel?'':'(External viewers can read but not post.)'}</div>
+   <div class="grid g4" style="grid-template-columns:repeat(3,1fr);margin-bottom:14px">${kpi('Wins',d.wins.length,'on the wall')}${kpi('Total cheers',cheers,'team recognition')}${kpi('Behaviors this month',celebrated+' / '+(d.categories||[]).length,celebrated>=(d.categories||[]).length?'all celebrated 🎉':'from the Constitution list')}</div>
+   <div class="card" style="margin-bottom:14px;padding:10px 14px"><b style="font-size:12.5px">What we're celebrating this month</b> <span class="muted" style="font-size:11px">— click to filter; dim ones haven't been celebrated yet</span>
+     <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:7px">${(d.categories||[]).map(c=>`<span class="badge ${mix[c]?'b-ok':'b-low'}" style="cursor:pointer;${winCat===c?'outline:2px solid var(--accent);':''}${mix[c]?'':'opacity:.45'}" onclick="winCat=winCat==='${c}'?'All':'${c}';viewWins()">${c}${mix[c]?' ×'+mix[c]:''}</span>`).join('')}</div></div>
+   <div class="tabs">${['All','Individual','Workstation','Department'].map(t=>`<button class="${winFilter===t?'active':''}" onclick="winFilter='${t}';viewWins()">${t}</button>`).join('')}${winCat!=='All'?`<button class="active" onclick="winCat='All';viewWins()">${winCat} ✕</button>`:''}</div>
    ${wins.map(w=>{const sb=w.scope==='individual'?'b-buy':w.scope==='workstation'?'b-mfg':'b-ok';return `<div class="card" style="margin-bottom:12px;border-left:3px solid var(--accent)">
      <div style="font-size:15px;font-weight:700">🏆 ${w.title}</div>
-     <div style="margin:4px 0"><span class="badge ${sb}">${w.scope}</span> ${w.targetLabel}</div>
+     <div style="margin:4px 0"><span class="badge ${sb}">${w.scope}</span> ${w.targetLabel} ${w.category?`<span class="badge b-buy">${esc(w.category)}</span>`:''}</div>
      ${w.detail?`<div class="muted" style="font-size:13px">${w.detail}</div>`:''}
      <div class="muted" style="font-size:11px;margin-top:5px">Posted by ${w.by} · ${w.on}</div>
      <div style="display:flex;gap:6px;margin-top:9px;flex-wrap:wrap">${REACTIONS.map(e=>{const n=(w.reactions[e]||[]).length;const me=(w.reactions[e]||[]).includes(ME.id);return `<button class="btn sm ${me?'':'sec'}" ${canCel?'':'disabled'} onclick="reactWin('${w.id}','${e}')">${e} ${n||''}</button>`;}).join('')}</div>
-   </div>`}).join('')||'<div class="card"><p class="muted">No wins yet.</p></div>'}`;
+   </div>`}).join('')||'<div class="card"><p class="muted">No wins here yet'+(winCat!=='All'?' for '+winCat:'')+'.</p></div>'}`;
 
 }
 async function reactWin(id,emoji){ try{await api('/api/wins/'+id+'/react',{method:'POST',body:JSON.stringify({emoji})});viewWins();}catch(e){toast(e.message);} }
 function postWin(){
-  modal('Post a win 🎉',`<div class="row"><div class="field"><label>Type</label><select id="wScope" onchange="winTargets()"><option value="individual">Individual</option><option value="workstation">Workstation</option><option value="department">Department</option></select></div><div class="field"><label>Who / where</label><select id="wTarget"></select></div></div>
-   <div class="field"><label>Headline</label><input id="wTitle" placeholder="e.g. Shipped 10 trailers with zero defects"></div>
-   <div class="field"><label>Details</label><textarea id="wDetail" rows="2"></textarea></div>
+  modal('Post a win 🎉',`<p class="muted" style="font-size:12px;margin:0 0 10px">Name the specific behavior, not just the person — “Maria caught a torque issue before it left Finish” teaches the whole shop what good looks like.</p>
+   <div class="row"><div class="field"><label>Type</label><select id="wScope" onchange="winTargets()"><option value="individual">Individual</option><option value="workstation">Workstation</option><option value="department">Department</option></select></div><div class="field"><label>Who / where</label><select id="wTarget"></select></div></div>
+   <div class="field"><label>What behavior is this? (the Constitution's list)</label><select id="wCat">${(winMeta.categories||[]).map(c=>`<option>${c}</option>`).join('')}</select></div>
+   <div class="field"><label>What did they do?</label><input id="wTitle" placeholder="e.g. Caught a torque issue before it left Finish"></div>
+   <div class="field"><label>Details (optional)</label><textarea id="wDetail" rows="2"></textarea></div>
    <button class="btn" onclick="submitWin()">🎉 Celebrate it</button>`);
   winTargets();
 }
@@ -4456,7 +4499,7 @@ async function winTargets(){
   else opts=(winMeta.departments||[]).map(d=>`<option>${d}</option>`).join('');
   $('wTarget').innerHTML=opts;
 }
-async function submitWin(){ const title=$('wTitle').value.trim();if(!title){toast('Add a headline');return;} try{await api('/api/wins',{method:'POST',body:JSON.stringify({scope:$('wScope').value,target:$('wTarget').value,title,detail:$('wDetail').value})});closeModal();toast('🎉 Win posted!');viewWins();}catch(e){toast(e.message);} }
+async function submitWin(){ const title=$('wTitle').value.trim();if(title.length<12){toast('Describe the specific behavior — what did they actually do?');return;} try{await api('/api/wins',{method:'POST',body:JSON.stringify({scope:$('wScope').value,target:$('wTarget').value,title,detail:$('wDetail').value,category:$('wCat').value})});closeModal();toast('🎉 Win posted!');render();}catch(e){toast(e.message);} }
 
 // ============ PHASE 6: FORECASTING / SCENARIO / NOTIFICATIONS ============
 function sparkline(hist,fc){

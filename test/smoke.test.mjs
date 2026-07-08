@@ -872,6 +872,49 @@ test('monthly champion: weekly winners accumulate, the month vote crowns BY NAME
   assert.equal((await api('/api/ideas/' + C.id + '/status', { method: 'POST', body: JSON.stringify({ status: 'in_progress', note: 'boards being cut' }) })).status, 200, 'implementation tracking follows the champion');
 });
 
+test('recognition wins: Constitution behaviors required, "name the behavior" guard, ideas bridge, SM health', async () => {
+  const meta = await json(await api('/api/wins'));
+  assert.deepEqual(meta.categories, ['Quality catch', 'Safety intervention', 'Cost-saving idea', 'Helping a teammate',
+    'Process improvement', 'Cross-training', 'Mentoring', 'Customer compliment'], 'the eight celebrated behaviors');
+
+  const wanda = await json(await api('/api/users', { method: 'POST', body: JSON.stringify({ name: 'Wanda Weld', titles: ['Idea Probe'], password: 'winsPw12' }) }));
+  const post = body => api('/api/wins', { method: 'POST', body: JSON.stringify(body) });
+
+  // Tied to the Constitution: a win must name one of the eight behaviors.
+  assert.equal((await post({ scope: 'department', target: 'Production', title: 'Shipped ten trailers with zero defects this week' })).status, 400, 'category required');
+  assert.equal((await post({ scope: 'department', target: 'Production', title: 'Shipped ten trailers with zero defects this week', category: 'Vibes' })).status, 400, 'only Constitution behaviors count');
+  // Specific: "great job, Maria" teaches nobody.
+  assert.equal((await post({ scope: 'individual', target: wanda.id, title: 'Great job, Wanda!!!', category: 'Quality catch' })).status, 400, 'name the behavior, not just the person');
+  const w1 = await json(await post({ scope: 'individual', target: wanda.id, title: 'Caught a miswired brake controller before the unit left Finish', category: 'Quality catch' }));
+  const wall = (await json(await api('/api/wins'))).wins;
+  const mine = wall.find(w => w.id === w1.id);
+  assert.equal(mine.category, 'Quality catch');
+  assert.equal(mine.targetLabel, 'Wanda Weld');
+
+  // Ideas → wins bridge: implementing the monthly champion auto-posts a win crediting the author BY NAME.
+  const board = await json(await api('/api/ideas/board'));
+  assert.equal(board.announced.kind, 'monthly');
+  assert.equal((await api('/api/ideas/' + board.announced.id + '/status', { method: 'POST', body: JSON.stringify({ status: 'implemented', note: 'shadow boards hung at every station' }) })).status, 200);
+  const bridged = () => api('/api/wins').then(json).then(d => d.wins.filter(w => w.category === 'Process improvement' && w.targetLabel === 'Milo Champion'));
+  const b1 = await bridged();
+  assert.equal(b1.length, 1, 'implemented idea posts exactly one win for the author');
+  assert.match(b1[0].title, /shadow boards/i, 'the win names the behavior — the idea itself');
+  assert.equal((await api('/api/ideas/' + board.announced.id + '/status', { method: 'POST', body: JSON.stringify({ status: 'implemented' }) })).status, 200);
+  assert.equal((await bridged()).length, 1, 're-marking implemented does not duplicate the win');
+
+  // Recognition health on the SM dashboard: frequency + the month's behavior mix.
+  const rec = (await json(await api('/api/shopdash'))).recognition;
+  assert.equal(rec.daysSinceLastWin, 0, 'a win was posted today');
+  assert.ok(rec.monthTotal >= 2);
+  assert.ok(rec.byCategory['Quality catch'] >= 1 && rec.byCategory['Process improvement'] >= 1);
+  assert.ok(!rec.missing.includes('Quality catch'), 'celebrated behaviors leave the missing list');
+  assert.ok(rec.missing.includes('Mentoring'), 'uncelebrated behaviors are called out');
+
+  // The Monday digest builds with the wins section in it (dry run renders the full email).
+  const dry = await json(await api('/api/admin/digest/send', { method: 'POST', body: JSON.stringify({ dryRun: true }) }));
+  assert.match(dry.subject, /weekly digest/i, 'digest still builds with the recognition block');
+});
+
 test('guarded reprints: reason required, permanent register, requeue with badge, MSO needs a buyer', async () => {
   const sr = await api('/api/auth/login', { method: 'POST', body: JSON.stringify({ username: 'aruiz', password: 'built2026' }) });
   const sales = (await sr.json()).token;

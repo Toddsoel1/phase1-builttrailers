@@ -147,14 +147,25 @@ export async function announceMonthly(user) {
 }
 
 // Winner implementation tracking: selected → in_progress → implemented (+ the report-back note).
+// The Constitution's recognition loop closes here: the moment an idea is implemented, a
+// Process-improvement win is auto-posted crediting the author BY NAME (public since the reveal).
 export async function setStatus(ideaId, status, note, user) {
   if (!['in_progress', 'implemented'].includes(status)) throw new Error("Status must be 'in_progress' or 'implemented'.");
-  const idea = await one('SELECT id, weekly_winner FROM idea WHERE id=$1', [ideaId]);
+  const idea = await one('SELECT id, weekly_winner, status, author_id, text FROM idea WHERE id=$1', [ideaId]);
   if (!idea) throw new Error('Idea not found.');
   if (!idea.weekly_winner) throw new Error('Only weekly winners get implementation tracking.');
   await q(`UPDATE idea SET status=$1, implemented_note=COALESCE($2, implemented_note),
                   implemented_at=CASE WHEN $1='implemented' THEN now() ELSE implemented_at END WHERE id=$3`,
     [status, String(note || '').trim() || null, ideaId]);
+  if (status === 'implemented' && idea.status !== 'implemented' && idea.author_id) {
+    const { postWin } = await import('./people.js'); // lazy: keeps people.js ↔ ideas.js decoupled at load
+    const snippet = idea.text.length > 90 ? idea.text.slice(0, 87) + '…' : idea.text;
+    await postWin({
+      scope: 'individual', target: idea.author_id, category: 'Process improvement',
+      title: `Their idea is now how we work: "${snippet}"`,
+      detail: String(note || '').trim() || 'From the ideas platform — implemented.',
+    }, user).catch(e => console.warn('idea→win bridge:', e.message));
+  }
   return { ok: true };
 }
 

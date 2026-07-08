@@ -6,6 +6,10 @@ import { userHasTitle } from './auth.js';
 
 const DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 const REACTIONS = ['🎉', '🙌', '💪', '🔥', '👏'];
+// The Constitution's celebrated behaviors — every win must name one, so recognition
+// stays tied to what Built asks for rather than generic applause.
+export const WIN_CATEGORIES = ['Quality catch', 'Safety intervention', 'Cost-saving idea', 'Helping a teammate',
+  'Process improvement', 'Cross-training', 'Mentoring', 'Customer compliment'];
 
 function parseSched(s) { try { return JSON.parse(s || '{}'); } catch { return {}; } }
 function toMin(t) { if (!t) return 0; const [a, b] = t.split(':').map(Number); return a * 60 + b; }
@@ -121,13 +125,52 @@ export async function wins() {
     if (w.scope === 'individual') targetLabel = uname(w.target);
     else if (w.scope === 'workstation') targetLabel = w.target + ' workstation';
     else targetLabel = w.target + ' department';
-    return { id: w.id, scope: w.scope, target: w.target, targetLabel, title: w.title, detail: w.detail, by: uname(w.by_user), on: w.created_on, reactions, cheers: r.length };
+    return { id: w.id, scope: w.scope, target: w.target, targetLabel, title: w.title, detail: w.detail, category: w.category || null, by: uname(w.by_user), on: dayKey(w.created_on), reactions, cheers: r.length };
   });
 }
-export async function postWin({ scope, target, title, detail }, user) {
+const dayKey = d => d instanceof Date ? d.toISOString().slice(0, 10) : String(d).slice(0, 10);
+// "Recognition should always name the specific behavior, not just the person."
+// Strip the recipient's name and generic praise from the headline; what's left must
+// still describe what they actually DID.
+const GENERIC_PRAISE = ['great job', 'good job', 'nice job', 'great work', 'good work', 'nice work', 'well done',
+  'way to go', 'awesome', 'amazing', 'fantastic', 'incredible', 'excellent', 'outstanding', 'congrats',
+  'congratulations', 'crushed it', 'killed it', 'nailed it', 'rockstar', 'rock star', 'the best', 'so good',
+  'keep it up', 'thank you', 'thanks'];
+export async function postWin({ scope, target, title, detail, category }, user) {
+  if (!WIN_CATEGORIES.includes(category)) throw new Error('Pick which behavior this celebrates — the Constitution\'s list: ' + WIN_CATEGORIES.join(', ') + '.');
+  const t = String(title || '').trim();
+  let meaning = ' ' + t.toLowerCase() + ' ';
+  if (scope === 'individual') {
+    const u = await one('SELECT name FROM app_user WHERE id=$1', [target]);
+    String(u?.name || '').toLowerCase().split(/\s+/).forEach(tok => { if (tok.length >= 3) meaning = meaning.split(tok).join(' '); });
+  } else if (target) meaning = meaning.split(String(target).toLowerCase()).join(' ');
+  GENERIC_PRAISE.forEach(p => { meaning = meaning.split(p).join(' '); });
+  if (t.length < 12 || meaning.replace(/[^a-z0-9]/g, '').length < 10) {
+    throw new Error('Name the specific behavior, not just the person — what did they do? e.g. "Caught a torque issue before it left Finish".');
+  }
   const id = 'W-' + Date.now();
-  await q('INSERT INTO win(id,scope,target,title,detail,by_user) VALUES ($1,$2,$3,$4,$5,$6)', [id, scope, target, title, detail || '', user.id]);
+  await q('INSERT INTO win(id,scope,target,title,detail,by_user,category) VALUES ($1,$2,$3,$4,$5,$6,$7)', [id, scope, target, t, detail || '', user.id, category]);
   return id;
+}
+// Recognition health for the Shop Manager: "frequent" is only manageable if it's measured.
+export async function recognitionHealth() {
+  const last = await one('SELECT MAX(created_on) AS d FROM win', []);
+  const daysSinceLastWin = last?.d ? Math.max(0, Math.round((Date.now() - new Date(dayKey(last.d) + 'T00:00:00').getTime()) / 864e5)) : null;
+  const rows = await all(`SELECT category, COUNT(*)::int AS n FROM win
+                           WHERE created_on >= date_trunc('month', CURRENT_DATE) AND category IS NOT NULL
+                           GROUP BY category`, []);
+  const byCategory = Object.fromEntries(rows.map(r => [r.category, Number(r.n)]));
+  const monthTotal = Number((await one(`SELECT COUNT(*)::int AS n FROM win WHERE created_on >= date_trunc('month', CURRENT_DATE)`, []))?.n || 0);
+  return { daysSinceLastWin, monthTotal, byCategory, missing: WIN_CATEGORIES.filter(c => !byCategory[c]) };
+}
+// Last week's wins for the digest — recognition travels with the Monday email.
+export async function winsSince(days) {
+  const ws = await all(`SELECT w.*, u.name AS uname FROM win w LEFT JOIN app_user u ON u.id=w.target
+                         WHERE w.created_on >= CURRENT_DATE - $1::int ORDER BY w.created_on DESC, w.id DESC`, [days]);
+  return ws.map(w => ({
+    targetLabel: w.scope === 'individual' ? (w.uname || w.target) : w.target + (w.scope === 'workstation' ? ' workstation' : ' department'),
+    title: w.title, category: w.category || null, on: dayKey(w.created_on),
+  }));
 }
 export async function reactWin(winId, emoji, userId) {
   if (!REACTIONS.includes(emoji)) return;

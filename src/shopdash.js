@@ -8,6 +8,7 @@
 import { all, one, q } from './db.js';
 import { stageForWorkstation } from './wip.js';
 import { getWipLimits } from './analytics.js';
+import { recognitionHealth } from './people.js';
 
 const RED_FLAG_PCT = () => Number(process.env.SM_RED_FLAG_PCT || 70);
 const pct = (std, actual) => actual > 0 ? Math.round((std / actual) * 100) : null;
@@ -156,8 +157,9 @@ export async function dailyScorecard(userId, date) {
 export async function shopDashboard() {
   const today = new Date().toISOString().slice(0, 10);
   const weekAgo = new Date(Date.now() - 6 * 864e5).toISOString().slice(0, 10);
-  const [effToday, effWeek, sop, wipOver] = await Promise.all([
+  const [effToday, effWeek, sop, wipOver, recognition] = await Promise.all([
     laborEfficiency(today, today), laborEfficiency(weekAgo, today), sopList(), bottlenecks(),
+    recognitionHealth(),
   ]);
   const threshold = RED_FLAG_PCT();
   // Red flags: today's people with real hours logged but efficiency under the threshold.
@@ -171,5 +173,6 @@ export async function shopDashboard() {
     sop: { required: sop.required, confirmed: sop.confirmed, pct: sop.pct },
     redFlags, threshold,
     bottlenecks: wipOver,
+    recognition,
   };
 }

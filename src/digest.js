@@ -5,6 +5,7 @@
 import { all } from './db.js';
 import { scorecard } from './analytics.js';
 import { sendEmail, emailConfigured } from './email.js';
+import { winsSince } from './people.js';
 
 const esc = s => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 const APP = () => process.env.STAFF_APP_URL || 'https://app.builttrailers.app';
@@ -46,19 +47,30 @@ export async function buildDigest() {
     ? `<p style="margin:14px 0 4px"><b>Top blockers (30 days)</b></p><ul style="margin:0;padding-left:18px">${sc.andon.pareto.slice(0, 3).map(p => `<li>${esc(p.reason)} — ${p.count}× (${p.hoursLost}h lost)</li>`).join('')}</ul>`
     : '';
 
+  // Recognition travels with the Monday email: the week's wins by Constitution behavior —
+  // or a nudge when the wall went quiet, because recognition should be frequent.
+  const wins = await winsSince(7);
+  const catCounts = {};
+  wins.forEach(w => { if (w.category) catCounts[w.category] = (catCounts[w.category] || 0) + 1; });
+  const winsBlock = wins.length
+    ? `<p style="margin:14px 0 4px"><b>🎉 Wins of the week (${wins.length})</b>${Object.keys(catCounts).length ? ` <span style="color:#6b7785;font-size:12px">— ${Object.entries(catCounts).map(([c, n]) => `${esc(c)} ×${n}`).join(' · ')}</span>` : ''}</p>
+       <ul style="margin:0;padding-left:18px;font-size:13.5px;line-height:1.55">${wins.slice(0, 8).map(w => `<li>${w.category ? `<b>${esc(w.category)}</b>: ` : ''}${esc(w.targetLabel)} — ${esc(w.title)}</li>`).join('')}</ul>`
+    : `<p style="margin:14px 0 4px"><b>🎉 No wins posted this week.</b> <span style="color:#6b7785;font-size:12px">Recognition should be frequent — post one for a behavior you saw: a quality catch, a safety intervention, someone helping a teammate.</span></p>`;
+
   const html = `<div style="font-family:Arial,Helvetica,sans-serif;color:#1a2230;max-width:560px">
     <h2 style="margin:0 0 4px">Weekly performance digest</h2>
     <p style="color:#6b7785;font-size:13px;margin:0 0 14px">Week of ${week} · throughput ${sc.completions.throughputPerWeek ?? '—'}/wk · ${sc.pastDue} past due</p>
     <table style="border-collapse:collapse;width:100%;font-size:14px">${kpiRows}</table>
     <h3 style="font-size:14px;margin:18px 0 4px">Where to focus this week</h3>
     <ul style="margin:0;padding-left:18px;font-size:13.5px;line-height:1.55">${recRows}</ul>
-    ${andonBlock}${paretoBlock}
+    ${andonBlock}${paretoBlock}${winsBlock}
     <p style="margin:18px 0 0"><a href="${APP()}" style="display:inline-block;background:#e8631a;color:#fff;padding:10px 18px;border-radius:8px;text-decoration:none;font-weight:bold">Open the Performance screen</a></p>
     <p style="color:#6b7785;font-size:12px;margin-top:18px">Built Trailers — generated automatically every Monday. Targets are editable on the Performance screen.</p></div>`;
 
   const text = `Built Trailers weekly digest (${week})\n`
     + sc.kpis.map(k => `${(STATUS_DOT[k.status] || '')} ${k.label}: ${fmtKpi(k)}${fmtTarget(k)}`).join('\n')
     + `\n\nWhere to focus:\n` + sc.recommendations.slice(0, 6).map(r => `- ${r.text} (${r.owner})`).join('\n')
+    + `\n\nWins of the week:\n` + (wins.length ? wins.slice(0, 8).map(w => `- ${w.category ? w.category + ': ' : ''}${w.targetLabel} — ${w.title}`).join('\n') : '- none posted — recognition should be frequent; post one for a behavior you saw')
     + `\n\n${APP()}`;
 
   return { subject, html, text, misses, recCount: sc.recommendations.length };

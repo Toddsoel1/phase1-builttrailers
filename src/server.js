@@ -2255,11 +2255,11 @@ app.post('/api/selfgoals/:id/toggle', authMiddleware, async (req, res) => { awai
 app.delete('/api/selfgoals/:id', authMiddleware, async (req, res) => { await people.deleteSelfGoal(req.user.id, req.params.id); res.json({ ok: true }); });
 
 // ---- recognition / wins ----
-app.get('/api/wins', authMiddleware, async (_req, res) => res.json({ wins: await people.wins(), departments: await people.departments(), workstations: await people.workstationsList() }));
+app.get('/api/wins', authMiddleware, async (_req, res) => res.json({ wins: await people.wins(), departments: await people.departments(), workstations: await people.workstationsList(), categories: people.WIN_CATEGORIES }));
 app.post('/api/wins', authMiddleware, async (req, res) => {
   if (req.user.titles.length && req.user.titles.every(t => t === 'External Viewer')) return res.status(403).json({ error: 'External viewers cannot post' });
-  if (!req.body?.title) return res.status(400).json({ error: 'title required' });
-  res.json({ id: await people.postWin(req.body, req.user) });
+  try { res.json({ id: await people.postWin(req.body || {}, req.user) }); }
+  catch (e) { res.status(400).json({ error: e.message }); }
 });
 app.post('/api/wins/:id/react', authMiddleware, async (req, res) => {
   if (req.user.titles.length && req.user.titles.every(t => t === 'External Viewer')) return res.status(403).json({ error: 'External viewers cannot react' });

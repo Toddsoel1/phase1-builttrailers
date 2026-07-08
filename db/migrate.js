@@ -249,6 +249,8 @@ const colMigrations = [
   `CREATE TABLE IF NOT EXISTS idea_vote_month (idea_id INT NOT NULL, user_id TEXT NOT NULL,
      month_of DATE NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
      PRIMARY KEY (user_id, month_of))`,
+  // Recognition ties to the Constitution: every win names one of the eight celebrated behaviors.
+  `ALTER TABLE win ADD COLUMN IF NOT EXISTS category TEXT`,
   // Safety log (SOP-SM-010): findings stay open until resolved; incidents drive the
   // "days since last incident" counter on the Owner dashboard.
   `CREATE TABLE IF NOT EXISTS safety_log (id SERIAL PRIMARY KEY, kind TEXT NOT NULL DEFAULT 'finding',
