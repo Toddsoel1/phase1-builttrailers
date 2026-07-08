@@ -154,8 +154,10 @@ export async function postWin({ scope, target, title, detail, category }, user) 
 }
 // Recognition health for the Shop Manager: "frequent" is only manageable if it's measured.
 export async function recognitionHealth() {
-  const last = await one('SELECT MAX(created_on) AS d FROM win', []);
-  const daysSinceLastWin = last?.d ? Math.max(0, Math.round((Date.now() - new Date(dayKey(last.d) + 'T00:00:00').getTime()) / 864e5)) : null;
+  // Calendar-day difference computed entirely in SQL: both dates come from the same DB
+  // session clock, so no JS-vs-DB timezone can skew "today" into "1d ago" (bit us on CI/UTC).
+  const last = await one('SELECT (CURRENT_DATE - MAX(created_on))::int AS days FROM win', []);
+  const daysSinceLastWin = last?.days == null ? null : Math.max(0, Number(last.days));
   const rows = await all(`SELECT category, COUNT(*)::int AS n FROM win
                            WHERE created_on >= date_trunc('month', CURRENT_DATE) AND category IS NOT NULL
                            GROUP BY category`, []);

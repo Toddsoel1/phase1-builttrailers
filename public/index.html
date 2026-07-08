@@ -163,6 +163,7 @@ const money = n => '$' + Math.round(n).toLocaleString();
 const money2 = n => '$' + (Math.round(n*100)/100).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});
 // Escape user-supplied strings before inserting into innerHTML
 function esc(s){ const d=document.createElement('div');d.textContent=String(s??'');return d.innerHTML; }
+function daysAgoStr(n){ const d=new Date(Date.now()-n*864e5);return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); }
 // Embed a JS value inside a double-quoted onclick="" safely: JSON.stringify's double quotes
 // would otherwise close the attribute early. &quot; is HTML-decoded back to " before the JS runs.
 function ja(v){ return JSON.stringify(v).replace(/"/g,'&quot;'); }
@@ -858,7 +859,7 @@ async function viewDash(){
   if(winsD){
     winMeta=winsD;
     const canCel=!(myTitles().length&&myTitles().every(t=>t==='External Viewer'));
-    const recent=(winsD.wins||[]).filter(w=>(Date.now()-new Date(w.on+'T00:00:00').getTime())/864e5<=14).slice(0,5);
+    const recent=(winsD.wins||[]).filter(w=>w.on>=daysAgoStr(14)).slice(0,5);
     winStrip=`<div class="card" style="margin-top:16px"><h3 style="display:flex;justify-content:space-between;align-items:center;gap:8px">🎉 Recent wins ${canCel?`<button class="btn sm sec" onclick="postWin()">+ Post a win</button>`:''}</h3>
      ${recent.length?recent.map(w=>`<div style="display:flex;gap:8px;align-items:center;padding:6px 0;border-bottom:1px solid var(--line);font-size:13px">
        ${w.category?`<span class="badge b-buy" style="font-size:9px">${esc(w.category)}</span>`:''}
@@ -1691,7 +1692,7 @@ async function viewStandup(){
   if(winsD){
     winMeta=winsD;
     const canCel=!(myTitles().length&&myTitles().every(t=>t==='External Viewer'));
-    const wk=(winsD.wins||[]).filter(w=>(Date.now()-new Date(w.on+'T00:00:00').getTime())/864e5<=7).slice(0,6);
+    const wk=(winsD.wins||[]).filter(w=>w.on>=daysAgoStr(7)).slice(0,6);
     winsCard=`<div class="card" style="margin-bottom:16px"><h3 style="display:flex;justify-content:space-between;align-items:center;gap:8px">🎉 This week's wins ${canCel?`<button class="btn sm sec" onclick="postWin()">+ Post a win</button>`:''}</h3>
       ${wk.length?wk.map(w=>`<div style="display:flex;gap:8px;align-items:center;padding:6px 0;border-bottom:1px solid var(--line);font-size:13px">
         ${w.category?`<span class="badge b-buy" style="font-size:9px">${esc(w.category)}</span>`:''}
