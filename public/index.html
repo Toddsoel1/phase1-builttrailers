@@ -1627,8 +1627,8 @@ async function viewStandup(){
   // ── 💡 Ideas: daily prompt → SM daily winner → Monday vote → Tuesday reveal → implemented ──
   let ideasCard='';
   if(ideas){
-    const iv=ideas.voting;
-    const announced=(ideas.winners||[]).find(w=>w.weekOf===iv.weekOf)||(ideas.winners||[])[0];
+    const iv=ideas.voting, mv=ideas.monthlyVoting||{open:false,slate:[]};
+    const announced=ideas.announced; // the server decides: the monthly champion replaces the weekly slot when fresher
     ideasCard=`<div class="card" style="margin-bottom:16px"><h3>💡 Ideas ${ideas.todayCount?`<span class="badge b-ok">${ideas.todayCount} today</span>`:''}</h3>
       ${!ideas.mineToday?`<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:10px;padding:8px;border:1px dashed var(--accent);border-radius:10px">
         <input id="ideaQuick" placeholder="💡 Your idea for today — anything that could be better (anonymous until you win)" style="flex:2;min-width:220px;padding:8px;border-radius:8px;border:1px solid var(--line);background:var(--panel2);color:var(--txt)">
@@ -1643,8 +1643,15 @@ async function viewStandup(){
         </div>`).join('')}
         ${isMgr?`<button class="btn sm" style="margin-top:8px" onclick="ideaAnnounce()">📣 Close voting &amp; announce the winner</button>`:''}
       </div>`:''}
-      ${announced?`<div style="padding:8px 10px;border:1px solid var(--ok,#1a7f4b);border-radius:10px;margin:8px 0;font-size:13px">
-        🎉 <b>Weekly winner${announced.author?' — '+esc(announced.author):''}</b> <span class="badge ${announced.status==='implemented'?'b-ok':announced.status==='in_progress'?'b-low':'b-buy'}" style="font-size:9px">${announced.status==='implemented'?'IMPLEMENTED':announced.status==='in_progress'?'IN PROGRESS':'SELECTED'}</span><br>
+      ${mv.open&&mv.slate.length?`<div style="margin:8px 0;padding:8px 10px;border:1px dashed var(--accent);border-radius:10px"><b style="font-size:13px">🥇 Monthly vote — the month's weekly champions</b>
+        ${mv.slate.map(s=>`<div style="display:flex;gap:8px;align-items:center;padding:6px 0;border-bottom:1px solid var(--line)">
+          <span style="flex:1;font-size:13px">${esc(s.text)} <span class="muted" style="font-size:11px">— ${esc(s.author||'')}</span>${isMgr&&s.votes!=null?` <span class="muted" style="font-size:11px">· ${s.votes} vote(s)</span>`:''}</span>
+          ${s.mine?'<span class="muted" style="font-size:11px">yours 🤫</span>':s.myVote?'<span class="badge b-ok">your vote ✓</span>':`<button class="btn sm sec" onclick="ideaVoteMonth(${s.id})">Vote</button>`}
+        </div>`).join('')}
+        ${isMgr?`<button class="btn sm" style="margin-top:8px" onclick="ideaAnnounceMonth()">🥇 Close the month &amp; crown the champion</button>`:''}
+      </div>`:''}
+      ${announced?`<div style="padding:8px 10px;border:${announced.kind==='monthly'?'2px solid var(--accent)':'1px solid var(--ok,#1a7f4b)'};border-radius:10px;margin:8px 0;font-size:13px">
+        ${announced.kind==='monthly'?'🥇':'🎉'} <b>${announced.kind==='monthly'?'Idea of the Month':'Weekly winner'}${announced.author?' — '+esc(announced.author):''}</b> <span class="badge ${announced.status==='implemented'?'b-ok':announced.status==='in_progress'?'b-low':'b-buy'}" style="font-size:9px">${announced.status==='implemented'?'IMPLEMENTED':announced.status==='in_progress'?'IN PROGRESS':'SELECTED'}</span><br>
         ${esc(announced.text)}
         ${announced.implementedNote?`<br><span class="muted" style="font-size:12px">📣 ${esc(announced.implementedNote)}</span>`:''}
         ${isMgr&&announced.status!=='implemented'?`<div style="margin-top:6px"><button class="btn sm sec" onclick="ideaStatus(${announced.id},'in_progress')">🔧 In progress</button> <button class="btn sm" onclick="ideaStatus(${announced.id},'implemented')">✅ Implemented — report back</button></div>`:''}
@@ -1666,6 +1673,11 @@ async function ideaQuickAdd(){
   catch(e){ toast(e.message); }
 }
 async function ideaVote(id){ try{ await api('/api/ideas/vote',{method:'POST',body:JSON.stringify({ideaId:id})}); toast('🗳 Vote cast'); viewStandup(); }catch(e){ toast(e.message); } }
+async function ideaVoteMonth(id){ try{ await api('/api/ideas/vote-month',{method:'POST',body:JSON.stringify({ideaId:id})}); toast('🥇 Monthly vote cast'); viewStandup(); }catch(e){ toast(e.message); } }
+async function ideaAnnounceMonth(){
+  if(!confirm('Close the monthly vote and crown the champion? Announced by name — it takes over the winner spotlight.'))return;
+  try{ const r=await api('/api/ideas/announce-month',{method:'POST'}); toast('🥇 '+(r.author||'Champion')+' — Idea of the Month ('+r.votes+' vote(s))'); viewStandup(); }catch(e){ toast(e.message); }
+}
 async function ideaPickDaily(id){ try{ const r=await api('/api/ideas/'+id+'/daily-winner',{method:'POST'}); toast('🏆 Daily winner set for '+r.date+' — recognize it at stand-up'); viewStandup(); }catch(e){ toast(e.message); } }
 async function ideaAnnounce(){
   if(!confirm('Close voting and announce this week\'s winner? The author is revealed and celebrated.'))return;

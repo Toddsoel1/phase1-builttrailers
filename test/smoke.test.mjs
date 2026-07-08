@@ -829,6 +829,49 @@ test('daily ideas: anonymous ranking, daily winner, voting without self-votes, r
   assert.match(done.implementedNote, /kitting bins/, 'the report-back rides with the winner');
 });
 
+test('monthly champion: weekly winners accumulate, the month vote crowns BY NAME and takes the spotlight', async () => {
+  const mk = async name => {
+    const u = await json(await api('/api/users', { method: 'POST', body: JSON.stringify({ name, titles: ['Idea Probe'], password: 'ideaPw12' }) }));
+    const l = await json(await fetch(BASE + '/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: u.username, password: 'ideaPw12' }) }));
+    return { id: u.id, H: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + l.token } };
+  };
+  const mia = await mk('Mia Monthly'), milo = await mk('Milo Champion');
+
+  // A second weekly winner (C) joins A from the weekly test on the monthly slate.
+  const C = await (await fetch(BASE + '/api/ideas', { method: 'POST', headers: milo.H, body: JSON.stringify({ text: 'Shadow boards at every station so tools stop walking off', category: 'Shop life' }) })).json();
+  await api('/api/ideas/' + C.id + '/daily-winner', { method: 'POST' });
+  assert.equal((await fetch(BASE + '/api/ideas/vote', { method: 'POST', headers: mia.H, body: JSON.stringify({ ideaId: C.id }) })).status, 200);
+  await api('/api/ideas/announce', { method: 'POST' });
+
+  const b1 = await json(await api('/api/ideas/board'));
+  assert.equal(b1.announced.kind, 'weekly', 'before the month closes, the weekly winner holds the spotlight');
+  assert.equal(b1.announced.id, C.id);
+  assert.equal(b1.monthlyVoting.open, true);
+  assert.ok(b1.monthlyVoting.slate.length >= 2, 'the month\'s weekly winners accumulate on the ballot');
+  assert.ok(b1.monthlyVoting.slate.every(s => typeof s.author === 'string' && s.author.length), 'monthly candidates show names — weekly winners are already public');
+
+  // No self-votes; most votes wins (C: 2, A: 1).
+  assert.equal((await fetch(BASE + '/api/ideas/vote-month', { method: 'POST', headers: milo.H, body: JSON.stringify({ ideaId: C.id }) })).status, 400, 'author cannot vote for their own');
+  const A = b1.monthlyVoting.slate.find(s => s.id !== C.id);
+  assert.equal((await fetch(BASE + '/api/ideas/vote-month', { method: 'POST', headers: milo.H, body: JSON.stringify({ ideaId: A.id }) })).status, 200, 'he can vote for a rival');
+  assert.equal((await fetch(BASE + '/api/ideas/vote-month', { method: 'POST', headers: mia.H, body: JSON.stringify({ ideaId: C.id }) })).status, 200);
+  assert.equal((await api('/api/ideas/vote-month', { method: 'POST', body: JSON.stringify({ ideaId: C.id }) })).status, 200); // admin's vote → C leads 2–1
+
+  assert.equal((await fetch(BASE + '/api/ideas/announce-month', { method: 'POST', headers: mia.H, body: '{}' })).status, 403, 'crowning is SM/GM/admin');
+  const crown = await json(await api('/api/ideas/announce-month', { method: 'POST' }));
+  assert.equal(crown.id, C.id);
+  assert.equal(crown.votes, 2);
+  assert.equal(crown.author, 'Milo Champion', 'the monthly champion is announced BY NAME');
+
+  const b2 = await json(await api('/api/ideas/board'));
+  assert.equal(b2.announced.kind, 'monthly', 'the monthly champion replaces the weekly winner in the spotlight');
+  assert.equal(b2.announced.id, C.id);
+  assert.equal(b2.announced.author, 'Milo Champion');
+  assert.ok(b2.winners.find(w => w.id === C.id).monthlyWinner, 'history carries the monthly crown');
+  assert.equal((await api('/api/ideas/announce-month', { method: 'POST' })).status, 400, 'the month closes once');
+  assert.equal((await api('/api/ideas/' + C.id + '/status', { method: 'POST', body: JSON.stringify({ status: 'in_progress', note: 'boards being cut' }) })).status, 200, 'implementation tracking follows the champion');
+});
+
 test('guarded reprints: reason required, permanent register, requeue with badge, MSO needs a buyer', async () => {
   const sr = await api('/api/auth/login', { method: 'POST', body: JSON.stringify({ username: 'aruiz', password: 'built2026' }) });
   const sales = (await sr.json()).token;

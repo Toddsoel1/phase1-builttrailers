@@ -240,6 +240,15 @@ const colMigrations = [
   `CREATE TABLE IF NOT EXISTS idea_vote (idea_id INT NOT NULL, user_id TEXT NOT NULL,
      week_of DATE NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
      PRIMARY KEY (user_id, week_of))`,
+  // The monthly layer: weekly winners accumulate into a month-end vote; the champion is
+  // announced BY NAME and takes over the announcement slot.
+  `ALTER TABLE idea ADD COLUMN IF NOT EXISTS month_of DATE`,
+  `ALTER TABLE idea ADD COLUMN IF NOT EXISTS monthly_winner BOOLEAN NOT NULL DEFAULT false`,
+  `ALTER TABLE idea ADD COLUMN IF NOT EXISTS weekly_announced_at TIMESTAMPTZ`,
+  `ALTER TABLE idea ADD COLUMN IF NOT EXISTS monthly_announced_at TIMESTAMPTZ`,
+  `CREATE TABLE IF NOT EXISTS idea_vote_month (idea_id INT NOT NULL, user_id TEXT NOT NULL,
+     month_of DATE NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+     PRIMARY KEY (user_id, month_of))`,
   // Safety log (SOP-SM-010): findings stay open until resolved; incidents drive the
   // "days since last incident" counter on the Owner dashboard.
   `CREATE TABLE IF NOT EXISTS safety_log (id SERIAL PRIMARY KEY, kind TEXT NOT NULL DEFAULT 'finding',

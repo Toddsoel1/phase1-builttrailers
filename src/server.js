@@ -1271,6 +1271,15 @@ app.post('/api/ideas/announce', authMiddleware, (req, res, next) => requireStand
   try { res.json(await ideas.announceWeekly(req.user)); }
   catch (e) { res.status(400).json({ error: e.message }); }
 });
+// The monthly layer: weekly winners accumulate → month-end vote → champion announced BY NAME.
+app.post('/api/ideas/vote-month', authMiddleware, async (req, res) => {
+  try { res.json(await ideas.castMonthlyVote(Number(req.body?.ideaId), req.user)); }
+  catch (e) { res.status(400).json({ error: e.message }); }
+});
+app.post('/api/ideas/announce-month', authMiddleware, (req, res, next) => requireStandupManager(req, res, next), async (req, res) => {
+  try { res.json(await ideas.announceMonthly(req.user)); }
+  catch (e) { res.status(400).json({ error: e.message }); }
+});
 app.post('/api/ideas/:id/status', authMiddleware, (req, res, next) => requireStandupManager(req, res, next), async (req, res) => {
   try { const r = await ideas.setStatus(Number(req.params.id), req.body?.status, req.body?.note, req.user);
     await audit(req, 'idea.status', `#${req.params.id} -> ${req.body?.status}`); res.json(r); }

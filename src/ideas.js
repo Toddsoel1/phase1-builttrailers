@@ -88,10 +88,62 @@ export async function announceWeekly(user) {
   const counts = Object.fromEntries(votes.map(v => [v.idea_id, Number(v.n)]));
   const winner = rows.slice().sort((a, b) => (counts[b.id] || 0) - (counts[a.id] || 0) || a.id - b.id)[0];
   await q(`UPDATE idea SET week_of=$1 WHERE id = ANY($2)`, [weekOf, rows.map(r => r.id)]);
-  await q(`UPDATE idea SET weekly_winner=true, status='weekly_winner' WHERE id=$1`, [winner.id]);
+  await q(`UPDATE idea SET weekly_winner=true, status='weekly_winner', weekly_announced_at=now() WHERE id=$1`, [winner.id]);
   await q('INSERT INTO audit_log(user_id,action,detail) VALUES ($1,$2,$3)',
     [user?.id || null, 'idea.weekly', `#${winner.id} wins week of ${weekOf} (${counts[winner.id] || 0} vote(s))`]).catch(() => {});
   return { id: winner.id, votes: counts[winner.id] || 0 };
+}
+
+// ---- The monthly layer: weekly winners accumulate; the month-end vote crowns a champion ----
+const firstOfMonth = dayStr => dayStr.slice(0, 7) + '-01';
+// Monthly voting opens on the first Monday of a new month (or under the hermetic test flag).
+const monthlyVotingOpen = () => {
+  if (process.env.IDEAS_VOTE_OPEN === '1') return true;
+  const today = todayStr();
+  return weekdayIn() === 'Mon' && Number(today.slice(8, 10)) <= 7;
+};
+// Candidates: the PRIOR month's weekly winners (they're already announced — names are public).
+// Under the test flag: any weekly winner not yet in a monthly contest.
+async function monthlySlate() {
+  const monthOf = firstOfMonth(todayStr()); // the contest key = the month the vote happens in
+  const crowned = await one(`SELECT id FROM idea WHERE monthly_winner=true AND month_of=$1`, [monthOf]);
+  if (crowned) return { monthOf, rows: [] }; // one champion per month — the ballot closes with the announcement
+  const rows = process.env.IDEAS_VOTE_OPEN === '1'
+    ? await all(`SELECT i.id, i.text, i.category, i.author_id, u.name AS author FROM idea i
+                   LEFT JOIN app_user u ON u.id=i.author_id
+                  WHERE i.weekly_winner=true AND i.monthly_winner=false
+                    AND (i.month_of IS NULL OR i.month_of=$1) ORDER BY i.week_of NULLS LAST, i.id`, [monthOf])
+    : await all(`SELECT i.id, i.text, i.category, i.author_id, u.name AS author FROM idea i
+                   LEFT JOIN app_user u ON u.id=i.author_id
+                  WHERE i.weekly_winner=true AND i.monthly_winner=false
+                    AND i.week_of >= ($1::date - INTERVAL '1 month') AND i.week_of < $1::date
+                    AND (i.month_of IS NULL OR i.month_of=$1) ORDER BY i.week_of, i.id`, [monthOf]);
+  return { monthOf, rows };
+}
+export async function castMonthlyVote(ideaId, user) {
+  if (!monthlyVotingOpen()) throw new Error('The monthly vote opens on the first Monday of the month — the slate is last month\'s weekly winners.');
+  const { monthOf, rows } = await monthlySlate();
+  const cand = rows.find(r => r.id === Number(ideaId));
+  if (!cand) throw new Error('That idea isn\'t on this month\'s ballot.');
+  if (cand.author_id === user.id) throw new Error('You can\'t vote for your own idea — let the merit speak.');
+  await q(`UPDATE idea SET month_of=$1 WHERE id = ANY($2)`, [monthOf, rows.map(r => r.id)]);
+  await q(`INSERT INTO idea_vote_month(idea_id, user_id, month_of) VALUES($1,$2,$3)
+           ON CONFLICT (user_id, month_of) DO UPDATE SET idea_id=$1, created_at=now()`, [ideaId, user.id, monthOf]);
+  return { ok: true };
+}
+export async function announceMonthly(user) {
+  const { monthOf, rows } = await monthlySlate();
+  if (!rows.length) throw new Error('No candidates — the month\'s weekly winners make the ballot.');
+  const votes = await all(`SELECT idea_id, COUNT(*)::int AS n FROM idea_vote_month WHERE month_of=$1 GROUP BY idea_id`, [monthOf]);
+  if (!votes.length) throw new Error('No monthly votes are in yet.');
+  const counts = Object.fromEntries(votes.map(v => [v.idea_id, Number(v.n)]));
+  const winner = rows.slice().sort((a, b) => (counts[b.id] || 0) - (counts[a.id] || 0) || a.id - b.id)[0];
+  await q(`UPDATE idea SET month_of=$1 WHERE id = ANY($2)`, [monthOf, rows.map(r => r.id)]);
+  await q(`UPDATE idea SET monthly_winner=true, monthly_announced_at=now(),
+                  status=CASE WHEN status='weekly_winner' THEN 'monthly_winner' ELSE status END WHERE id=$1`, [winner.id]);
+  await q('INSERT INTO audit_log(user_id,action,detail) VALUES ($1,$2,$3)',
+    [user?.id || null, 'idea.monthly', `#${winner.id} is the ${monthOf.slice(0, 7)} champion (${counts[winner.id] || 0} vote(s)) — ${winner.author}`]).catch(() => {});
+  return { id: winner.id, votes: counts[winner.id] || 0, author: winner.author };
 }
 
 // Winner implementation tracking: selected → in_progress → implemented (+ the report-back note).
@@ -116,12 +168,27 @@ export async function ideasBoard(user, isMgr) {
     ? Object.fromEntries((await all(`SELECT idea_id, COUNT(*)::int AS n FROM idea_vote WHERE week_of=$1 GROUP BY idea_id`, [weekOf])).map(v => [v.idea_id, Number(v.n)]))
     : {};
   const yWin = await one(`SELECT id, text, category FROM idea WHERE idea_date=$1 AND daily_winner=true LIMIT 1`, [yesterday]).catch(() => null);
-  const winners = (await all(`SELECT i.id, i.text, i.category, i.status, i.implemented_note, i.implemented_at, i.week_of, u.name AS author
+  const winners = (await all(`SELECT i.id, i.text, i.category, i.status, i.implemented_note, i.implemented_at, i.week_of,
+                                     i.monthly_winner, i.month_of, i.weekly_announced_at, i.monthly_announced_at, u.name AS author
                                 FROM idea i LEFT JOIN app_user u ON u.id=i.author_id
-                               WHERE i.weekly_winner=true ORDER BY i.week_of DESC NULLS LAST, i.id DESC LIMIT 6`, []))
+                               WHERE i.weekly_winner=true ORDER BY i.week_of DESC NULLS LAST, i.id DESC LIMIT 8`, []))
     .map(w => ({ id: w.id, text: w.text, category: w.category, status: w.status,
       author: w.author, weekOf: w.week_of ? dstr(w.week_of) : null,
+      monthlyWinner: !!w.monthly_winner, monthOf: w.month_of ? dstr(w.month_of) : null,
+      weeklyAnnouncedAt: w.weekly_announced_at, monthlyAnnouncedAt: w.monthly_announced_at,
       implementedNote: w.implemented_note, implementedAt: w.implemented_at }));
+  // The announcement slot: the MONTHLY champion takes over from the weekly winner when it's
+  // the fresher crowning (per the spec — the monthly reveal replaces what the weekly showed).
+  const latestWeekly = winners.slice().sort((a, b) => new Date(b.weeklyAnnouncedAt || 0) - new Date(a.weeklyAnnouncedAt || 0))[0] || null;
+  const latestMonthly = winners.filter(w => w.monthlyWinner)
+    .sort((a, b) => new Date(b.monthlyAnnouncedAt || 0) - new Date(a.monthlyAnnouncedAt || 0))[0] || null;
+  const announced = latestMonthly && (!latestWeekly || new Date(latestMonthly.monthlyAnnouncedAt || 0) >= new Date(latestWeekly.weeklyAnnouncedAt || 0))
+    ? { kind: 'monthly', ...latestMonthly } : latestWeekly ? { kind: 'weekly', ...latestWeekly } : null;
+  const { monthOf, rows: mRows } = await monthlySlate();
+  const myMonthlyVote = await one(`SELECT idea_id FROM idea_vote_month WHERE user_id=$1 AND month_of=$2`, [user.id, monthOf]).catch(() => null);
+  const monthlyCounts = isMgr
+    ? Object.fromEntries((await all(`SELECT idea_id, COUNT(*)::int AS n FROM idea_vote_month WHERE month_of=$1 GROUP BY idea_id`, [monthOf])).map(v => [v.idea_id, Number(v.n)]))
+    : {};
   return {
     mineToday: await mineToday(user.id),
     todayCount: Number((await one(`SELECT COUNT(*)::int AS n FROM idea WHERE idea_date=CURRENT_DATE`, []))?.n || 0),
@@ -130,6 +197,11 @@ export async function ideasBoard(user, isMgr) {
       slate: rows.map(r => ({ id: r.id, text: r.text, category: r.category,
         mine: r.author_id === user.id, myVote: myVote?.idea_id === r.id,
         ...(isMgr ? { votes: voteCounts[r.id] || 0 } : {}) })) },
+    monthlyVoting: { open: monthlyVotingOpen(), monthOf,
+      slate: mRows.map(r => ({ id: r.id, text: r.text, category: r.category, author: r.author, // weekly winners are already public
+        mine: r.author_id === user.id, myVote: myMonthlyVote?.idea_id === r.id,
+        ...(isMgr ? { votes: monthlyCounts[r.id] || 0 } : {}) })) },
+    announced,
     winners,
     categories: CATEGORIES,
     ...(isMgr ? { ranking: { today: await ideasFor(today), yesterday: await ideasFor(yesterday) } } : {}),
