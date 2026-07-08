@@ -54,6 +54,7 @@ import * as analytics from './analytics.js';
 import * as andon from './andon.js';
 import { runBackup } from './backup.js';
 import * as standup from './standup.js';
+import * as shopdash from './shopdash.js';
 import { myWork } from './mywork.js';
 import * as timesurvey from './timesurvey.js';
 
@@ -1242,6 +1243,26 @@ app.post('/api/trailer-types', authMiddleware, requireSales, async (req, res) =>
   await q('INSERT INTO trailer_type(name) VALUES ($1) ON CONFLICT DO NOTHING', [name]);
   await audit(req, 'type.add', name);
   res.json({ ok: true });
+});
+
+// ---- Shop Manager dashboard: labor efficiency, SOP compliance, red flags, bottlenecks ----
+app.get('/api/shopdash', authMiddleware, (req, res, next) => requireStandupManager(req, res, next), async (_req, res) => {
+  res.json(await shopdash.shopDashboard());
+});
+// SOP checkpoints: everyone reads + confirms (at Daily Update); SM/GM/admin manage the list.
+app.get('/api/sop', authMiddleware, async (_req, res) => res.json(await shopdash.sopList()));
+app.post('/api/sop/:id/confirm', authMiddleware, async (req, res) => {
+  try { res.json(await shopdash.sopConfirm(Number(req.params.id), req.user)); await audit(req, 'sop.confirm', req.params.id); }
+  catch (e) { res.status(400).json({ error: e.message }); }
+});
+app.post('/api/sop', authMiddleware, (req, res, next) => requireStandupManager(req, res, next), async (req, res) => {
+  try { const r = await shopdash.sopAdd(req.body?.text, req.body?.workstation, req.user);
+    await audit(req, 'sop.add', `#${r.id} ${String(req.body?.text || '').slice(0, 80)}`); res.json(r); }
+  catch (e) { res.status(400).json({ error: e.message }); }
+});
+app.delete('/api/sop/:id', authMiddleware, (req, res, next) => requireStandupManager(req, res, next), async (req, res) => {
+  res.json(await shopdash.sopRemove(Number(req.params.id)));
+  await audit(req, 'sop.remove', req.params.id);
 });
 
 // ---- Daily Stand-Up: auto-proposed tasks, SM approval, goal-vs-actual, effectiveness log ----

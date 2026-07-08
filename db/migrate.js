@@ -227,6 +227,14 @@ const colMigrations = [
   `ALTER TABLE model ADD COLUMN IF NOT EXISTS hitch_code TEXT`,
   `ALTER TABLE model ADD COLUMN IF NOT EXISTS body_code TEXT`,
   `ALTER TABLE model ADD COLUMN IF NOT EXISTS axles INT`,
+  // SOPs: standing checkpoints (optionally tied to a workstation) that the floor confirms
+  // once per day at Daily Update; the Shop Manager dashboard tracks % confirmed today.
+  `CREATE TABLE IF NOT EXISTS sop_checkpoint (id SERIAL PRIMARY KEY, workstation TEXT,
+     text TEXT NOT NULL, active BOOLEAN NOT NULL DEFAULT true,
+     created_by TEXT, created_at TIMESTAMPTZ NOT NULL DEFAULT now())`,
+  `CREATE TABLE IF NOT EXISTS sop_check_log (id SERIAL PRIMARY KEY, checkpoint_id INT NOT NULL,
+     log_date DATE NOT NULL DEFAULT CURRENT_DATE, user_id TEXT,
+     confirmed_at TIMESTAMPTZ NOT NULL DEFAULT now(), UNIQUE(checkpoint_id, log_date))`,
   // EFFECTIVE DATING: the price is frozen on each order at creation, so later catalog price
   // changes apply to FUTURE orders only — historical revenue, invoices, and margins never move.
   `ALTER TABLE sales_order ADD COLUMN IF NOT EXISTS unit_price NUMERIC(12,2)`,

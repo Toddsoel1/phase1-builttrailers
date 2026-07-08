@@ -666,6 +666,56 @@ test('job titles: rename carries assignments, access, and the legacy title text'
   assert.equal((await api('/api/roles/' + encodeURIComponent('New Title Name') + '/rename', { method: 'PATCH', body: JSON.stringify({ newName: 'Clash Title' }) })).status, 400, 'renaming onto an existing title refused');
 });
 
+test('shop manager dashboard: labor efficiency, SOP compliance, red flags, and bottlenecks', async () => {
+  // Gate: the dashboard is SM/GM/admin — a plain editor title gets nothing.
+  await api('/api/roles', { method: 'POST', body: JSON.stringify({ name: 'Dash Probe', tier: 'editor', sections: ['orders', 'daily'] }) });
+  const du = await json(await api('/api/users', { method: 'POST', body: JSON.stringify({ name: 'Dash Probe P', titles: ['Dash Probe'], password: 'dashPw12' }) }));
+  const dl = await json(await fetch(BASE + '/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: du.username, password: 'dashPw12' }) }));
+  const probeH = { 'Content-Type': 'application/json', Authorization: 'Bearer ' + dl.token };
+  assert.equal((await fetch(BASE + '/api/shopdash', { headers: probeH })).status, 403, 'dashboard is manager-only');
+
+  // SOP checkpoints: managers define, anyone confirms, once per day.
+  const cp1 = await json(await api('/api/sop', { method: 'POST', body: JSON.stringify({ text: 'Torque wrench calibrated' }) }));
+  await api('/api/sop', { method: 'POST', body: JSON.stringify({ text: 'Paint booth filters checked', workstation: 'Paint' }) });
+  assert.equal((await fetch(BASE + '/api/sop', { method: 'POST', headers: probeH, body: JSON.stringify({ text: 'nope' }) })).status, 403, 'only SM/GM/admin define checkpoints');
+  assert.equal((await fetch(BASE + '/api/sop/' + cp1.id + '/confirm', { method: 'POST', headers: probeH, body: '{}' })).status, 200, 'any staff member confirms');
+  assert.equal((await api('/api/sop/' + cp1.id + '/confirm', { method: 'POST' })).status, 200, 're-confirming the same day is idempotent');
+  const sop = await json(await api('/api/sop'));
+  assert.ok(sop.required >= 2 && sop.confirmed >= 1, 'confirmations counted once');
+  const cp1Row = sop.items.find(i => i.id === cp1.id);
+  assert.equal(cp1Row.confirmed, true);
+
+  // Labor efficiency + red flag: a stage completion earns the model's routed standard hours;
+  // 40 actual hours against them puts the worker under the threshold.
+  const custs = (await json(await api('/api/customers'))).filter(c => c.active !== false && c.allowed?.length);
+  const models = await json(await api('/api/models'));
+  let cust, model;
+  for (const c of custs) { const m = models.find(mm => c.allowed.includes(mm.category) && mm.laborCost > 0); if (m) { cust = c; model = m; break; } }
+  const slow = await json(await api('/api/users', { method: 'POST', body: JSON.stringify({ name: 'Slow Sam', titles: ['Dash Probe'] }) }));
+  const o = await json(await api('/api/orders', { method: 'POST', body: JSON.stringify({ customerId: cust.id, modelId: model.id, qty: 1 }) }));
+  assert.equal((await api('/api/work-log', { method: 'POST', body: JSON.stringify({ orderId: o.id, workstation: 'Weld', stage: 'Build', hours: 40, stageComplete: true, userId: slow.id }) })).status, 200);
+  const dash = await json(await api('/api/shopdash'));
+  assert.ok(dash.laborEff.today.actual >= 40, 'actual hours counted');
+  assert.ok(dash.laborEff.today.std > 0, 'stage completion earned standard hours');
+  assert.ok(dash.laborEff.byStation.find(s => s.ws === 'Weld'), 'station breakdown present');
+  assert.ok(dash.sop.required >= 2 && dash.sop.confirmed >= 1, 'SOP widget rolls up');
+  const flagged = dash.redFlags.find(u => u.userId === slow.id);
+  assert.ok(flagged && flagged.pct < dash.threshold, 'the slow day shows as a red flag');
+
+  // Bottleneck: cap a stage below its population and the widget names it with a duration.
+  const stages = (await json(await api('/api/orders'))).orders.filter(x => !x.billed && x.stage === 'Scheduled');
+  if (stages.length < 2) {
+    await api('/api/orders/stock', { method: 'POST', body: JSON.stringify({ modelId: model.id, qty: 1 }) });
+    await api('/api/orders/stock', { method: 'POST', body: JSON.stringify({ modelId: model.id, qty: 1 }) });
+  }
+  await api('/api/wip-limits', { method: 'POST', body: JSON.stringify({ Scheduled: 1 }) });
+  const dash2 = await json(await api('/api/shopdash'));
+  const bn = dash2.bottlenecks.find(b => b.stage === 'Scheduled');
+  assert.ok(bn && bn.count > bn.limit, 'over-limit stage surfaces');
+  assert.ok(bn.overForHours != null && bn.overForHours >= 0, 'with how long it has been over');
+  await api('/api/wip-limits', { method: 'POST', body: JSON.stringify({}) }); // clear for downstream tests
+});
+
 test('guarded reprints: reason required, permanent register, requeue with badge, MSO needs a buyer', async () => {
   const sr = await api('/api/auth/login', { method: 'POST', body: JSON.stringify({ username: 'aruiz', password: 'built2026' }) });
   const sales = (await sr.json()).token;

@@ -1440,12 +1440,32 @@ async function rejectCount(id){
 async function viewDaily(){
   $('pTitle').textContent='Daily Update';$('pSub').textContent='Log production by user & workstation — drives material consumption and WIP value';$('pActions').innerHTML='';
   const dateSel=window._dailyDate||new Date().toISOString().slice(0,10);
-  const [wsList,ordResp,report,wip]=await Promise.all([
+  const [wsList,ordResp,report,wip,sop]=await Promise.all([
     api('/api/workstations').catch(()=>[]),
     api('/api/orders'),
     api('/api/work-log/daily?date='+dateSel).catch(()=>({logs:[],byWorkstation:[],totalHours:0,totalMaterial:0,date:dateSel})),
-    api('/api/wip').catch(()=>[])
+    api('/api/wip').catch(()=>[]),
+    api('/api/sop').catch(()=>({required:0,confirmed:0,pct:null,items:[]}))
   ]);
+  const isSopMgr=isAdmin()||hasTitle('Shop Manager','General Manager');
+  const sopCard=(sop.items.length||isSopMgr)?`<div class="card" style="margin-bottom:16px;${sop.required&&sop.confirmed<sop.required?'border-color:var(--accent)':''}">
+    <h3>✅ SOP checkpoints — today ${sop.required?`<span class="badge ${sop.confirmed>=sop.required?'b-ok':'b-low'}">${sop.confirmed}/${sop.required}</span>`:''}</h3>
+    <p class="muted" style="font-size:12px;margin-bottom:8px">Standing checks confirmed once per day — compliance rolls up to the Shop Manager dashboard on Stand-Up.</p>
+    ${sop.items.map(i=>`<div style="display:flex;gap:10px;align-items:center;padding:6px 0;border-bottom:1px solid var(--line)">
+      <span>${i.confirmed?'✅':'⬜'}</span>
+      <span style="flex:1;font-size:13px;${i.confirmed?'opacity:.6':''}">${esc(i.text)}${i.workstation?` <span class="badge b-buy" style="font-size:9px">${esc(i.workstation)}</span>`:''}
+        ${i.confirmed?`<span class="muted" style="font-size:11px"> — ${esc(i.confirmedBy||'confirmed')} ${new Date(i.confirmedAt).toLocaleTimeString([],{hour:'numeric',minute:'2-digit'})}</span>`:''}</span>
+      ${!i.confirmed?`<button class="btn sm" onclick="sopConfirm(${i.id})">✓ Confirm</button>`:''}
+      ${isSopMgr?`<button class="btn sm sec" onclick="sopRemove(${i.id})" title="retire this checkpoint">✕</button>`:''}
+    </div>`).join('')||'<p class="muted" style="font-size:12.5px">No checkpoints yet.</p>'}
+    ${isSopMgr?`<div style="display:flex;gap:6px;margin-top:10px;flex-wrap:wrap">
+      <input id="sopNewText" placeholder="New checkpoint (e.g. Torque wrench calibrated)" style="flex:2;min-width:200px;padding:7px;border-radius:8px;border:1px solid var(--line);background:var(--panel2);color:var(--txt)">
+      <select id="sopNewWs" style="min-width:140px;padding:7px;border-radius:8px;border:1px solid var(--line);background:var(--panel2);color:var(--txt)">
+        <option value="">every station</option>${wsList.map(w=>`<option value="${esc(w)}">${esc(w)}</option>`).join('')}
+      </select>
+      <button class="btn sm" onclick="sopAdd()">＋ Add checkpoint</button>
+    </div>`:''}
+  </div>`:'';
   const STG=['Build','Paint/Powder Coat','Finish'];
   const live=ordResp.orders.filter(o=>!o.billed && !['Quote','Ready'].includes(o.stage)); // trailers available to log against
   const form=`<div class="card" style="margin-bottom:16px"><h3 style="margin:0 0 10px">＋ Log today's work</h3>
@@ -1473,7 +1493,18 @@ async function viewDaily(){
     <table><thead><tr><th>Order</th><th>Model</th><th class="center">Stage</th><th>Stages done</th><th class="right">WIP value</th></tr></thead><tbody>
     ${wip.map(o=>`<tr><td><b>${esc(o.id)}</b></td><td>${esc(o.model||'')}</td><td class="center">${stageBadge(o.stage)}</td><td class="muted" style="font-size:12px">${(o.doneStages||[]).join(', ')||'—'}</td><td class="right"><b>${money(o.wip)}</b></td></tr>`).join('')}
     </tbody></table></div>`:'';
-  $('content').innerHTML=form+`<div class="card">${dateBar}${wsTable}</div>`+lines+wipSec;
+  $('content').innerHTML=sopCard+form+`<div class="card">${dateBar}${wsTable}</div>`+lines+wipSec;
+}
+// ── ✅ SOP checkpoints (Daily Update) ──
+async function sopConfirm(id){ try{ await api('/api/sop/'+id+'/confirm',{method:'POST'}); toast('✓ Checkpoint confirmed'); viewDaily(); }catch(e){ toast(e.message); } }
+async function sopAdd(){
+  const text=($('sopNewText').value||'').trim(); if(text.length<3)return toast('Describe the checkpoint.');
+  try{ await api('/api/sop',{method:'POST',body:JSON.stringify({text,workstation:$('sopNewWs').value||undefined})}); toast('＋ Checkpoint added'); viewDaily(); }
+  catch(e){ toast(e.message); }
+}
+async function sopRemove(id){
+  if(!confirm('Retire this checkpoint? Past confirmations stay on record.'))return;
+  try{ await api('/api/sop/'+id,{method:'DELETE'}); toast('Checkpoint retired'); viewDaily(); }catch(e){ toast(e.message); }
 }
 async function saveWorkLog(){
   const orderId=$('wlOrder').value; if(!orderId)return toast('No trailer selected');
@@ -1492,11 +1523,12 @@ async function viewStandup(){
   const date=window._suDate||new Date().toISOString().slice(0,10);
   window._suDate=date;
   $('pActions').innerHTML=isMgr?`<input type="date" id="suDate" value="${date}" onchange="window._suDate=this.value;viewStandup()" style="padding:6px 8px;border-radius:8px;border:1px solid var(--line);background:var(--panel2);color:var(--txt)"> <button class="btn sm sec" onclick="suGenerate()">⚙ Generate plan</button>`:'';
-  let me,plan=null,report=[],station=null,tsp=null;
+  let me,plan=null,report=[],station=null,tsp=null,dash=null;
   try{
-    [me,report,station,tsp]=await Promise.all([api('/api/standup/me?date='+date),api('/api/standup/report?days=14').catch(()=>[]),
+    [me,report,station,tsp,dash]=await Promise.all([api('/api/standup/me?date='+date),api('/api/standup/report?days=14').catch(()=>[]),
       ME.workstation?api('/api/mystation').catch(()=>null):Promise.resolve(null),
-      api('/api/timesurvey/pending').catch(()=>null)]);
+      api('/api/timesurvey/pending').catch(()=>null),
+      isMgr?api('/api/shopdash').catch(()=>null):Promise.resolve(null)]);
     if(isMgr) plan=await api('/api/standup?date='+date);
   }catch(e){ $('content').innerHTML=`<div class="card"><p class="msg err">${esc(e.message)}</p></div>`; return; }
   window._tsp=tsp;
@@ -1567,7 +1599,29 @@ async function viewStandup(){
         <td class="right">${r.estHours}</td><td class="right">${r.actualHours}</td></tr>`).join('')}
     </tbody></table>`:'<p class="muted">No plan history yet — it builds automatically once days are approved and worked.</p>'}
   </div>`;
-  $('content').innerHTML=myCard+msCard+board+repCard;
+  // ── 🛠 Shop Manager dashboard: the four floor-truth widgets ──
+  let dashBand='';
+  if(isMgr&&dash){
+    const effColor=p=>p==null?'var(--muted)':p>=90?'var(--ok,#1a7f4b)':p>=dash.threshold?'var(--yellow,#e0a800)':'var(--red)';
+    const eff=dash.laborEff;
+    dashBand=`<div class="grid g4" style="margin-bottom:16px">
+      <div class="card" style="margin:0"><div class="muted" style="font-size:11px;text-transform:uppercase;letter-spacing:.5px">⚡ Labor efficiency — today</div>
+        <div style="font-size:24px;font-weight:800;color:${effColor(eff.today.pct)}">${eff.today.pct!=null?eff.today.pct+'%':'—'}</div>
+        <div class="muted" style="font-size:11.5px">${eff.today.std}h std ÷ ${eff.today.actual}h logged · 7-day ${eff.week.pct!=null?eff.week.pct+'%':'—'}</div>
+        ${eff.byStation.slice(0,4).map(s=>`<div style="display:flex;justify-content:space-between;font-size:11.5px;padding:1px 0"><span class="muted">${esc(s.ws)}</span><b style="color:${effColor(s.pct)}">${s.pct!=null?s.pct+'%':'—'}</b></div>`).join('')}</div>
+      <div class="card" style="margin:0"><div class="muted" style="font-size:11px;text-transform:uppercase;letter-spacing:.5px">✅ SOP compliance — today</div>
+        <div style="font-size:24px;font-weight:800;color:${dash.sop.pct==null?'var(--muted)':dash.sop.pct>=100?'var(--ok,#1a7f4b)':dash.sop.pct>=60?'var(--yellow,#e0a800)':'var(--red)'}">${dash.sop.pct!=null?dash.sop.pct+'%':'—'}</div>
+        <div class="muted" style="font-size:11.5px">${dash.sop.confirmed} of ${dash.sop.required} checkpoints confirmed</div>
+        <a class="lnk" style="font-size:11.5px" onclick="go('daily')">${dash.sop.required?dash.sop.confirmed<dash.sop.required?'confirm the rest at Daily Update →':'all confirmed 🎉':'add checkpoints at Daily Update →'}</a></div>
+      <div class="card" style="margin:0"><div class="muted" style="font-size:11px;text-transform:uppercase;letter-spacing:.5px">🚩 Red flags — under ${dash.threshold}% today</div>
+        ${dash.redFlags.length?dash.redFlags.slice(0,4).map(u=>`<div style="display:flex;justify-content:space-between;font-size:12.5px;padding:2px 0"><b>${esc(u.name)}</b><span style="color:var(--red)">${u.pct}% <span class="muted">(${u.std}÷${u.actual}h)</span></span></div>`).join('')
+          :'<div style="font-size:20px;font-weight:800;color:var(--ok,#1a7f4b)">None 🎉</div><div class="muted" style="font-size:11.5px">everyone with hours logged is above threshold</div>'}</div>
+      <div class="card" style="margin:0;${dash.bottlenecks.length?'border-color:var(--red)':''}"><div class="muted" style="font-size:11px;text-transform:uppercase;letter-spacing:.5px">🚧 Bottleneck station</div>
+        ${dash.bottlenecks.length?dash.bottlenecks.map(b=>`<div style="font-size:13px;padding:2px 0"><b style="color:var(--red)">${esc(b.stage)}</b> — ${b.count}/${b.limit} in stage${b.overForHours!=null?', over for <b>'+b.overForHours+'h</b>':''}</div>`).join('')+`<a class="lnk" style="font-size:11.5px" onclick="go('orders')">unstick on the board →</a>`
+          :'<div style="font-size:20px;font-weight:800;color:var(--ok,#1a7f4b)">Flow clear</div><div class="muted" style="font-size:11.5px">no stage over its WIP limit</div>'}</div>
+    </div>`;
+  }
+  $('content').innerHTML=dashBand+myCard+msCard+board+repCard;
 }
 async function msComplete(unitId,orderId){
   if(!confirm('Mark this stage complete for '+orderId+'? It moves to the next stage for the whole order.'))return;
