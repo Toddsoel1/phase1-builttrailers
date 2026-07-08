@@ -2587,6 +2587,19 @@ app.post('/api/boat-admin/cost', authMiddleware, requireBoatAdmin, async (req, r
   await q('UPDATE part SET cost=$1 WHERE id=$2', [Number(req.body.cost) || 0, req.body.partId]);
   res.json({ ok: true });
 });
+// 2027 standard price per boat per axle count. Blank/null price removes the row — that
+// configuration is then not offered in the builder.
+app.post('/api/boat-admin/boat-price', authMiddleware, requireBoatAdmin, async (req, res) => {
+  const { boatId, axleCount, price } = req.body || {};
+  if (!boatId || !['single', 'tandem', 'triple'].includes(axleCount)) return res.status(400).json({ error: 'boatId and axleCount (single|tandem|triple) required' });
+  if (price === null || price === undefined || price === '') {
+    await q('DELETE FROM boat_price WHERE boat_id=$1 AND axle_count=$2', [boatId, axleCount]);
+    return res.json({ ok: true, removed: true });
+  }
+  await q(`INSERT INTO boat_price(boat_id,axle_count,price) VALUES($1,$2,$3)
+           ON CONFLICT(boat_id,axle_count) DO UPDATE SET price=EXCLUDED.price`, [boatId, axleCount, Number(price) || 0]);
+  res.json({ ok: true });
+});
 app.post('/api/boat-admin/boat', authMiddleware, requireBoatAdmin, async (req, res) => {
   const b = req.body || {};
   if (!b.boatId) return res.status(400).json({ error: 'boatId required' });

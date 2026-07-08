@@ -113,6 +113,10 @@ const colMigrations = [
   `CREATE TABLE IF NOT EXISTS option_choice_part (id SERIAL PRIMARY KEY, choice_id TEXT NOT NULL, part_id TEXT NOT NULL, qty NUMERIC(12,3) NOT NULL DEFAULT 1, op TEXT NOT NULL DEFAULT 'add', per_axle BOOLEAN NOT NULL DEFAULT false)`,
   `CREATE UNIQUE INDEX IF NOT EXISTS idx_ocp_uq ON option_choice_part(choice_id, part_id, op)`,
   `CREATE INDEX IF NOT EXISTS idx_choice_group ON option_choice(group_id)`,
+  // 2027 standard pricing per boat per axle count (from the Nautique dealer-direct sheet;
+  // includes E/H brakes + two-rail ladder). A missing row = that configuration isn't offered.
+  `CREATE TABLE IF NOT EXISTS boat_price (boat_id TEXT NOT NULL, axle_count TEXT NOT NULL,
+     price NUMERIC(12,2) NOT NULL, PRIMARY KEY (boat_id, axle_count))`,
   `CREATE TABLE IF NOT EXISTS order_build (order_id TEXT PRIMARY KEY, boat_make TEXT, boat_model TEXT, boat_year INTEGER, boat_length NUMERIC(5,1), base_model_id TEXT, total_price NUMERIC(12,2) NOT NULL DEFAULT 0, note TEXT, created_by TEXT, created_at TIMESTAMPTZ NOT NULL DEFAULT now())`,
   `CREATE TABLE IF NOT EXISTS order_build_option (id SERIAL PRIMARY KEY, order_id TEXT NOT NULL, group_id TEXT, group_name TEXT, choice_id TEXT, choice_name TEXT, dealer_price NUMERIC(12,2) NOT NULL DEFAULT 0)`,
   `CREATE INDEX IF NOT EXISTS idx_obo_order ON order_build_option(order_id)`,

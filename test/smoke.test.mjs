@@ -1718,6 +1718,42 @@ test('boat builder: validate, reconcile BOM (no double-count), and submit', asyn
   assert.ok(s.orderId && s.orderId.startsWith('SO-'), 'configured order created');
 });
 
+test('2027 Nautique standard pricing: per-axle standard drives the base, inclusions default, unpriced configs blocked', async () => {
+  const cat = await json(await api('/api/boat-catalog'));
+  const g23 = cat.boats.find(b => b.id === 'NQ-G23');
+  assert.equal(g23.prices.tandem, 9575, 'G23 tandem = sheet 8,085 + EOH 965 + ladder 525');
+  assert.equal(g23.prices.triple, 10580, 'G23 triple = sheet 9,090 + EOH 965 + ladder 525');
+  assert.equal(cat.boats.find(b => b.id === 'PG-G25').prices.triple, 11920, 'P25 triple = 10,430 + 965 + 525');
+  // What Nautique sells as options is Built's included standard: EOH brakes + the two-rail ladder.
+  const lad = cat.groups.find(g => g.id === 'front_ladder').choices[0];
+  assert.ok(lad.is_default && /included/i.test(lad.name), 'two-rail ladder defaults on, marked included');
+  const eoh = cat.groups.find(g => g.id === 'brakes').choices.find(c => c.id === 'brk_eoh');
+  assert.ok(eoh.is_default && /included/i.test(eoh.name), 'EOH brakes default, marked included');
+
+  const selBase = { axle_count: 'ac_tandem', axle_type: 'axle_torsion', brakes: 'brk_eoh', paint_style: 'paint_single',
+    paint_color: 'color_mystic_white', wheels: 'wheel_std', fender_style: 'fender_squared',
+    winch: 'winch_dl_single', winch_stand: 'winch_f2', front_ladder: 'ladder_yes' };
+  const p1 = await json(await api('/api/boat-build/preview', { method: 'POST', body: JSON.stringify({ boatId: 'NQ-G23', selections: selBase }) }));
+  assert.equal(p1.ok, true);
+  assert.equal(p1.price.base, 9575, 'tandem quote starts at the 2027 standard');
+  assert.match(p1.price.baseNote, /2027 standard/);
+  const p2 = await json(await api('/api/boat-build/preview', { method: 'POST', body: JSON.stringify({ boatId: 'NQ-G23', selections: { ...selBase, axle_count: 'ac_triple' } }) }));
+  assert.equal(p2.price.base, 10580, 'switching to triple reprices the base');
+  // GS20 is tandem-only on the sheet — the single-axle config has no price and can't be quoted.
+  const p3 = await json(await api('/api/boat-build/preview', { method: 'POST', body: JSON.stringify({ boatId: 'NQ-GS20', selections: { ...selBase, axle_count: 'ac_single' } }) }));
+  assert.equal(p3.ok, false);
+  assert.ok(p3.errors.some(e => /isn't offered/i.test(e)), 'unpriced configuration is refused');
+  // A boat with no 2027 grid (Yamaha) still quotes from its base trailer model price.
+  const p4 = await json(await api('/api/boat-build/preview', { method: 'POST', body: JSON.stringify({ boatId: 'YA-27', selections: { ...selBase, axle_count: 'ac_triple' } }) }));
+  assert.equal(p4.price.baseNote, null);
+  assert.ok(Number(p4.price.base) > 0, 'fallback to the base model price');
+  // The office owns the grid: edits are live, and re-boot seeding never overwrites them.
+  assert.equal((await api('/api/boat-admin/boat-price', { method: 'POST', body: JSON.stringify({ boatId: 'NQ-G23', axleCount: 'tandem', price: 9999 }) })).status, 200);
+  const p5 = await json(await api('/api/boat-build/preview', { method: 'POST', body: JSON.stringify({ boatId: 'NQ-G23', selections: selBase }) }));
+  assert.equal(p5.price.base, 9999, 'office price edit drives the next quote');
+  await api('/api/boat-admin/boat-price', { method: 'POST', body: JSON.stringify({ boatId: 'NQ-G23', axleCount: 'tandem', price: 9575 }) });
+});
+
 test('boat builder: dealer configurator endpoints require dealer auth', async () => {
   assert.equal((await fetch(BASE + '/api/dealer/boat-catalog')).status, 401, 'dealer catalog needs auth');
   assert.equal((await fetch(BASE + '/api/dealer/boat-build', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })).status, 401, 'dealer submit needs auth');

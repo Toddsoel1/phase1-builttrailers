@@ -471,7 +471,7 @@ function renderBuild(){
     if(g.help) h+=`<div class="muted" style="font-size:12px;color:#6b7785;margin-bottom:2px">${g.help}</div>`;
     if(g.ui==='bool'){
       const c=g.choices[0];
-      h+=`<div class="chk"><input type="checkbox" id="opt_${g.id}" value="${c.id}" onchange="onBuildChange()"><label for="opt_${g.id}" style="margin:0;font-weight:500">${c.name}${priceTag(c)}</label></div>`;
+      h+=`<div class="chk"><input type="checkbox" id="opt_${g.id}" value="${c.id}"${c.is_default?' checked':''} onchange="onBuildChange()"><label for="opt_${g.id}" style="margin:0;font-weight:500">${c.name}${priceTag(c)}</label></div>`;
     } else {
       h+=`<select id="opt_${g.id}" onchange="onBuildChange()">${g.choices.map(c=>`<option value="${c.id}"${c.is_default?' selected':''}>${c.name}${priceTag(c)}</option>`).join('')}</select>`;
     }
@@ -489,18 +489,24 @@ function renderBuild(){
 function axleCountFor(boat){
   const len=Number(boat.length_ft)||0;
   const all=[['ac_single','Single Axle'],['ac_tandem','Tandem Axle'],['ac_triple','Triple Axle']];
-  const allowed=(len&&len<22)?all.filter(a=>a[0]!=='ac_triple'):(len>=22)?all.filter(a=>a[0]!=='ac_single'):all;
+  let allowed=(len&&len<22)?all.filter(a=>a[0]!=='ac_triple'):(len>=22)?all.filter(a=>a[0]!=='ac_single'):all;
+  // Boats with a 2027 price grid are offered ONLY in the configurations that carry a price.
+  const grid=boat.prices||{}; const key=id=>({ac_single:'single',ac_tandem:'tandem',ac_triple:'triple'})[id];
+  if(Object.keys(grid).length) allowed=allowed.filter(a=>grid[key(a[0])]!=null);
   const base=/triple/.test(boat.axle||'')?'ac_triple':/single/.test(boat.axle||'')?'ac_single':'ac_tandem';
-  const def=allowed.some(a=>a[0]===base)?base:allowed[allowed.length-1][0];
+  const def=allowed.some(a=>a[0]===base)?base:(allowed.length?allowed[allowed.length-1][0]:'ac_tandem');
   return {allowed,def};
+}
+function stdPriceFor(boat,acId){
+  const grid=(boat&&boat.prices)||{}; const key=({ac_single:'single',ac_tandem:'tandem',ac_triple:'triple'})[acId];
+  return grid[key]!=null?Number(grid[key]):null;
 }
 function populateAxleCount(){
   const sel=$('opt_axle_count'); if(!sel) return;
   const boat=(BCAT.boats||[]).find(b=>b.id===$('bBoat').value); if(!boat) return;
-  const grp=(BCAT.groups||[]).find(g=>g.id==='axle_count');
-  const priceOf=id=>{ const c=grp&&grp.choices.find(x=>x.id===id); return c&&Number(c.dealer_price)>0?` (+$${Number(c.dealer_price).toLocaleString()})`:''; };
   const {allowed,def}=axleCountFor(boat);
-  sel.innerHTML=allowed.map(a=>`<option value="${a[0]}"${a[0]===def?' selected':''}>${a[1]}${priceOf(a[0])}</option>`).join('');
+  sel.innerHTML=allowed.map(a=>{const std=stdPriceFor(boat,a[0]);
+    return `<option value="${a[0]}"${a[0]===def?' selected':''}>${a[1]}${std!=null?` — $${std.toLocaleString()}`:''}</option>`;}).join('');
   sel.value=def;
 }
 function onBoatChange(){ populateAxleCount(); onBuildChange(); }
@@ -512,11 +518,14 @@ function readBuildSel(){
 }
 function onBuildChange(){
   const boat=(BCAT.boats||[]).find(b=>b.id===$('bBoat').value);
-  if(boat) $('bBase').innerHTML=`Trailer: <b>${boat.base_model_name||boat.base_model_id}</b> · ${axleLabel(boat.axle)} · base $${Number(boat.base_price).toLocaleString()}`;
+  const acSel=$('opt_axle_count'); const std=boat&&acSel?stdPriceFor(boat,acSel.value):null;
+  if(boat) $('bBase').innerHTML=std!=null
+    ?`Trailer: <b>${boat.base_model_name||boat.base_model_id}</b> · 2027 standard <b>$${std.toLocaleString()}</b> — includes E/H brakes &amp; two-rail step ladder`
+    :`Trailer: <b>${boat.base_model_name||boat.base_model_id}</b> · ${axleLabel(boat.axle)} · base $${Number(boat.base_price).toLocaleString()}`;
   const ps=$('opt_paint_style'), twotone=ps&&ps.value==='paint_twotone';
   const fg=$('grp_paint_fender_color'); if(fg) fg.style.display=twotone?'':'none';
   const sel=readBuildSel();
-  let total=boat?Number(boat.base_price):0; const lines=[];
+  let total=boat?(std!=null?std:Number(boat.base_price)):0; const lines=[];
   for(const g of BCAT.groups){ const c=g.choices.find(x=>x.id===sel[g.id]);
     if(c&&Number(c.dealer_price)>0){ total+=Number(c.dealer_price); lines.push(`${g.name}: ${c.name} +$${Number(c.dealer_price).toLocaleString()}`); } }
   const errs=[];

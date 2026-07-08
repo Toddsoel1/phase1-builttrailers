@@ -3548,10 +3548,12 @@ async function viewBoatAdmin(){
   $('pTitle').textContent='Boat Builder';$('pSub').textContent='Option pricing, part costs, and the boat catalog';$('pActions').innerHTML='';
   let c; try{ c=await api('/api/boat-admin/catalog'); }catch(e){ $('content').innerHTML=`<div class="card"><p class="msg err">${esc(e.message)}</p></div>`; return; }
   const baseOpts=sel=>`<option value="">— none —</option>`+c.baseModels.map(m=>`<option value="${esc(m.id)}"${m.id===sel?' selected':''}>${esc(m.id)} · ${esc(m.name)}</option>`).join('');
+  const priceCell=(b,axle)=>`<td><input type="number" value="${b.prices&&b.prices[axle]!=null?b.prices[axle]:''}" style="width:76px" placeholder="—" title="Blank = not offered as ${axle}" onchange="saveBoatPrice('${b.id}','${axle}',this.value)"></td>`;
   const boatRows=c.boats.map(b=>`<tr>
     <td><b>${esc(b.name)}</b></td>
     <td><input type="number" value="${b.length_ft??''}" style="width:58px" onchange="saveBoat('${b.id}','lengthFt',this.value)"></td>
     <td><select onchange="saveBoat('${b.id}','baseModelId',this.value)">${baseOpts(b.base_model_id)}</select></td>
+    ${priceCell(b,'single')}${priceCell(b,'tandem')}${priceCell(b,'triple')}
     <td><input type="number" value="${b.beam_in??''}" style="width:56px" placeholder="in" onchange="saveBoat('${b.id}','beamIn',this.value)"></td>
     <td><input type="number" value="${b.dry_weight_lb??''}" style="width:74px" placeholder="lb" onchange="saveBoat('${b.id}','dryWeightLb',this.value)"></td>
   </tr>`).join('');
@@ -3561,9 +3563,9 @@ async function viewBoatAdmin(){
   const costRows=c.parts.length?c.parts.map(p=>`<tr><td>${esc(p.name)} <span class="muted" style="font-size:11px">${esc(p.id)}</span></td>
     <td style="white-space:nowrap">$ <input type="number" min="0" value="${Number(p.cost)||0}" style="width:88px" onchange="savePartCost('${p.id}',this.value)"></td></tr>`).join(''):`<tr><td class="muted">All builder parts have costs set.</td></tr>`;
   $('content').innerHTML=`
-    <div class="card"><h3>Boat catalog</h3>
-      <p class="muted" style="font-size:12px">The base trailer drives the BOM, inventory, and cost — confirm each mapping (several were inferred by size). Beam/weight are optional.</p>
-      <table><thead><tr><th>Boat</th><th>Length</th><th>Base trailer</th><th>Beam</th><th>Dry wt</th></tr></thead><tbody>${boatRows}</tbody></table></div>
+    <div class="card"><h3>Boat catalog & 2027 standard pricing</h3>
+      <p class="muted" style="font-size:12px">The base trailer drives the BOM, inventory, and cost — confirm each mapping (several were inferred by size). The Single/Tandem/Triple columns are the <b>2027 standard dealer prices</b> (E/H brakes &amp; two-rail step ladder included) — blank means that configuration isn't offered. Beam/weight are optional.</p>
+      <table><thead><tr><th>Boat</th><th>Length</th><th>Base trailer</th><th>Single $</th><th>Tandem $</th><th>Triple $</th><th>Beam</th><th>Dry wt</th></tr></thead><tbody>${boatRows}</tbody></table></div>
     <div class="card"><h3>Option pricing — dealer upcharge</h3>
       <p class="muted" style="font-size:12px">$0 = included / no charge. Saves automatically as you type.</p>
       <table><tbody>${priceRows}</tbody></table></div>
@@ -3574,6 +3576,7 @@ async function viewBoatAdmin(){
 async function saveOptPrice(id,v){ try{ await api('/api/boat-admin/price',{method:'POST',body:JSON.stringify({choiceId:id,dealerPrice:Number(v)||0})}); toast('Price saved'); }catch(e){ toast(e.message); } }
 async function savePartCost(id,v){ try{ await api('/api/boat-admin/cost',{method:'POST',body:JSON.stringify({partId:id,cost:Number(v)||0})}); toast('Cost saved'); }catch(e){ toast(e.message); } }
 async function saveBoat(id,field,v){ try{ await api('/api/boat-admin/boat',{method:'POST',body:JSON.stringify({boatId:id,[field]:v})}); toast('Saved'); }catch(e){ toast(e.message); } }
+async function saveBoatPrice(id,axle,v){ try{ await api('/api/boat-admin/boat-price',{method:'POST',body:JSON.stringify({boatId:id,axleCount:axle,price:v===''?null:Number(v)})}); toast(v===''?axle+' config removed':'2027 price saved'); }catch(e){ toast(e.message); } }
 
 // ── Print Center (office) — VIN labels + MSOs queued by the build stage ───────
 async function viewPrintCenter(){

@@ -52,6 +52,40 @@ const BOAT_MODELS = [
   ['YA-27', 'YA', "Yamaha 27'", 27, '27TR'],                   // ASSUMED triple (27TAN tandem also exists)
 ];
 
+// 2027 standard pricing, matched to the 2027 Nautique Dealer Direct sheet. Built's standard
+// includes what Nautique sells as options: Electric-over-Hydraulic brakes ($1,255, or $965 on
+// 10,000#+ GVWR models) and the two-rail bow step ladder w/ handrails ($525). So each figure =
+// sheet base price + EOH + $525. Pro Package rows are intentionally excluded. A missing axle
+// count means that configuration isn't offered (e.g. GS20 is tandem-only). Office-editable in
+// Boat Admin; seeding never overwrites an edit.
+//
+//   boat        sheet base (TA / Triple)    EOH        → standard (TA / Triple)
+//   Ski SA/TA   5,185 SA / 6,510 TA         1,255      → 6,965 single / 8,290 tandem
+//   GS20        6,630                       1,255      → 8,410
+//   GS22        6,940                       1,255      → 8,720
+//   GS24        6,995 / 8,985               1,255/965  → 8,775 / 10,475
+//   G21         7,005                       1,255      → 8,785
+//   S23         8,050 / 8,765               965        → 9,540 / 10,255
+//   S25         8,085 / 9,090               965        → 9,575 / 10,580
+//   G23         8,085 / 9,090               965        → 9,575 / 10,580
+//   G25         8,330 / 9,235               965        → 9,820 / 10,725
+//   P23         9,180 / 10,065              965        → 10,670 / 11,555
+//   P25         9,540 / 10,430              965        → 11,030 / 11,920
+const NAUTIQUE_2027 = {
+  'NQ-SKI': { single: 6965, tandem: 8290 },
+  'NQ-GS20': { tandem: 8410 },
+  'NQ-GS22': { tandem: 8720 },
+  'NQ-GS24': { tandem: 8775, triple: 10475 },
+  'NQ-G21': { tandem: 8785 },
+  'NQ-G23': { tandem: 9575, triple: 10580 },
+  'NQ-G25': { tandem: 9820, triple: 10725 },
+  'NQ-S23': { tandem: 9540, triple: 10255 },
+  'NQ-S25': { tandem: 9575, triple: 10580 },
+  'PG-G23': { tandem: 10670, triple: 11555 },
+  'PG-G25': { tandem: 11030, triple: 11920 },
+};
+export const STANDARD_INCLUDES = 'Includes E/H brakes & two-rail step ladder';
+
 const STANDARD_COLORS = ['Mystic White', 'Lunar White', 'Sahara Sand', 'Teton Green', 'Haze Grey',
   'Mojave Brown', 'Tungsten Grey', 'Jet Black', 'Victory Red', 'Canyon Red', 'Captiva Green',
   'Steel Blue', 'Canaveral Blue', 'Masters Blue', 'Mariner Blue'];
@@ -88,14 +122,14 @@ const GROUPS = [
       { id: 'axle_sprung', name: 'Sprung (Leaf Spring)', default: true, parts: [['BUY-AXL-3500', 1], ['BUY-SPR-3500', 2]] },
       { id: 'axle_torsion', name: 'Torsion', parts: [['BUY-AXL-3500T', 1]] },
     ] },
-  { id: 'brakes', name: 'Brakes', step: 3, ui: 'single', required: true, help: 'Electric-over-hydraulic is standard.',
+  { id: 'brakes', name: 'Brakes', step: 3, ui: 'single', required: true, help: 'Electric-over-hydraulic is included in the standard price.',
     choices: [
-      { id: 'brk_eoh', name: 'Electric Over Hydraulic', default: true, parts: [['BUY-BRK-EOH', 1]] },
+      { id: 'brk_eoh', name: 'Electric Over Hydraulic (Included)', default: true, parts: [['BUY-BRK-EOH', 1]] },
       { id: 'brk_surge', name: 'Surge', parts: [['BUY-BRK-SURGE', 1]] },
       { id: 'brk_disc', name: 'Disc', parts: [['BUY-BRK-DISC', 1]] },
     ] },
-  { id: 'front_ladder', name: 'Front Ladder', step: 4, ui: 'bool', required: false,
-    choices: [{ id: 'ladder_yes', name: 'Front Ladder', parts: [['BUY-LAD-001', 1]] }] },
+  { id: 'front_ladder', name: 'Two-Rail Step Ladder', step: 4, ui: 'bool', required: false, help: 'Included in the standard price.',
+    choices: [{ id: 'ladder_yes', name: 'Two-Rail Bow Step Ladder (Included)', default: true, parts: [['BUY-LAD-001', 1]] }] },
   { id: 'spare_tire', name: 'Spare Tire', step: 4, ui: 'bool', required: false, help: 'Includes the spare tire mount.',
     choices: [{ id: 'spare_yes', name: 'Spare Tire + Mount', parts: [['BUY-SPM-001', 1], ['BUY-TIR-001', 1]] }] },
   { id: 'nonskid_mat', name: 'Non-Skid Mat', step: 4, ui: 'single', required: false, help: '3-layer bunk matting.',
@@ -150,6 +184,10 @@ export async function ensureBoatCatalog() {
   // still seed on first boot.
   for (const [id, make, name, len, base] of BOAT_MODELS)
     await q(`INSERT INTO boat_model(id,make_id,name,length_ft,base_model_id,sort) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT(id) DO NOTHING`, [id, make, name, len, base, bs++]);
+  // 2027 standard prices: insert-only, so an office correction in Boat Admin sticks.
+  for (const [boatId, byAxle] of Object.entries(NAUTIQUE_2027))
+    for (const [axle, price] of Object.entries(byAxle))
+      await q(`INSERT INTO boat_price(boat_id,axle_count,price) VALUES($1,$2,$3) ON CONFLICT(boat_id,axle_count) DO NOTHING`, [boatId, axle, price]);
   // Part mappings are entirely code-owned — reset them so they always match this file.
   await q(`DELETE FROM option_choice_part`).catch(() => {});
   let gs = 0;
@@ -178,6 +216,12 @@ export async function getCatalog() {
             m.name AS base_model_name, m.axle, m.price AS base_price
        FROM boat_model b LEFT JOIN model m ON m.id = b.base_model_id
       WHERE b.active ORDER BY b.sort, b.length_ft`, []);
+  // 2027 standard prices per axle count ride with each boat; {} = no grid → base model price.
+  const priceRows = await all('SELECT boat_id, axle_count, price FROM boat_price', []);
+  for (const b of boats) {
+    b.prices = {};
+    for (const r of priceRows.filter(p => p.boat_id === b.id)) b.prices[r.axle_count] = Number(r.price);
+  }
   const groups = await all('SELECT id,name,step,ui,required,exclusive,help FROM option_group WHERE active ORDER BY step,sort', []);
   const choices = await all('SELECT id, group_id, name, dealer_price, is_default, sort, note FROM option_choice WHERE active ORDER BY group_id, sort', []);
   const parts = await all('SELECT choice_id, part_id, qty, op FROM option_choice_part', []);
@@ -205,21 +249,32 @@ export async function validateBuild(payload, cat) {
   const len = boat ? Number(boat.length_ft) || 0 : 0;
   if (len && len < 22 && sel.axle_count === 'ac_triple') errors.push('Boats under 22 ft use a single or tandem axle.');
   if (len >= 22 && sel.axle_count === 'ac_single') errors.push('Boats 22 ft and over need a tandem or triple axle.');
+  // Offered configurations only: a boat with a 2027 price grid can't quote an axle count
+  // that has no price — that configuration isn't on the sheet (e.g. GS20 is tandem-only).
+  if (boat && sel.axle_count && boat.prices && Object.keys(boat.prices).length && boat.prices[axleKey(sel)] == null) {
+    errors.push(`${boat.name} isn't offered with a ${axleKey(sel)} axle — no 2027 standard price for that configuration.`);
+  }
   return { ok: errors.length === 0, errors };
 }
 
-// Dealer price = base trailer price + the dealer_price of each selected upcharge choice.
+// The selected axle count as a boat_price key ('single'|'tandem'|'triple').
+const axleKey = sel => ({ ac_single: 'single', ac_tandem: 'tandem', ac_triple: 'triple' })[(sel || {}).axle_count] || 'tandem';
+
+// Dealer price = the boat's 2027 standard price for the chosen axle count (falls back to the
+// base trailer model price when no grid exists) + the dealer_price of each upcharge choice.
 export async function priceBuild(payload, cat) {
   cat ||= await getCatalog();
   const sel = payload.selections || {};
   const boat = cat.boats.find(b => b.id === payload.boatId);
-  const base = boat ? Number(boat.base_price) || 0 : 0;
+  const std = boat && boat.prices ? boat.prices[axleKey(sel)] : null;
+  const base = std != null ? std : (boat ? Number(boat.base_price) || 0 : 0);
   const lines = [];
   for (const g of cat.groups) {
     const c = g.choices.find(x => x.id === sel[g.id]);
     if (c && Number(c.dealer_price) > 0) lines.push({ group: g.name, choice: c.name, price: Number(c.dealer_price) });
   }
-  return { base, lines, total: base + lines.reduce((s, l) => s + l.price, 0) };
+  return { base, baseNote: std != null ? `2027 standard — ${STANDARD_INCLUDES.toLowerCase()}` : null,
+           lines, total: base + lines.reduce((s, l) => s + l.price, 0) };
 }
 
 // Final BOM for a configured trailer + the signed deltas vs the base model BOM (what gets stored
