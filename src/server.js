@@ -55,6 +55,7 @@ import * as andon from './andon.js';
 import { runBackup } from './backup.js';
 import * as standup from './standup.js';
 import * as shopdash from './shopdash.js';
+import * as ownerdash from './ownerdash.js';
 import { myWork } from './mywork.js';
 import * as timesurvey from './timesurvey.js';
 
@@ -1330,6 +1331,49 @@ app.post('/api/standup/task/:id/complete', authMiddleware, async (req, res) => {
 });
 // 📜 My Work — an employee's own completed-work record (trailers by step down to VIN, made
 // parts by part number, grouped tasks, hours) over any window. SM/GM/admin may view anyone's.
+// Daily Scorecard: what did I touch today, how am I doing against standard, and WHY.
+// Self always; the SM/GM/admin can open anyone's.
+app.get('/api/scorecard', authMiddleware, async (req, res) => {
+  try {
+    let target = req.user.id;
+    if (req.query.userId && req.query.userId !== req.user.id) {
+      const titles = req.user.titles || [];
+      const mgr = req.user.role === 'admin' || titles.includes('Shop Manager') || titles.includes('General Manager');
+      if (!mgr) return res.status(403).json({ error: 'You can only view your own scorecard.' });
+      target = req.query.userId;
+    }
+    const day = req.query.date || new Date().toISOString().slice(0, 10);
+    const [card, work, u] = await Promise.all([
+      shopdash.dailyScorecard(target, day),
+      myWork(target, day, day),
+      one('SELECT id, name FROM app_user WHERE id=$1', [target]),
+    ]);
+    res.json({ user: { id: target, name: u?.name || target }, ...card,
+      trailersTouched: work.steps, unitsTouched: work.totals?.unitsTouched || 0,
+      partsBuilt: work.partsBuilt, tasksCompleted: work.tasks || [] });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+// Owner dashboard — restricted to the owner seat: General Manager title or admin.
+function requireOwner(req, res, next) {
+  const ok = req.user.role === 'admin' || (req.user.titles || []).includes('General Manager');
+  if (!ok) return res.status(403).json({ error: 'The Owner dashboard is for the General Manager or an admin.' });
+  next();
+}
+app.get('/api/ownerdash', authMiddleware, requireOwner, async (_req, res) => res.json(await ownerdash.ownerDashboard()));
+// Safety log: SM/GM/admin record findings and incidents; resolution is audited.
+app.post('/api/safety', authMiddleware, (req, res, next) => requireStandupManager(req, res, next), async (req, res) => {
+  try { const r = await ownerdash.safetyAdd(req.body || {}, req.user);
+    await audit(req, 'safety.add', `#${r.id} ${r.kind}: ${String(req.body?.description || '').slice(0, 80)}`); res.json(r); }
+  catch (e) { res.status(400).json({ error: e.message }); }
+});
+app.post('/api/safety/:id/resolve', authMiddleware, (req, res, next) => requireStandupManager(req, res, next), async (req, res) => {
+  try { const r = await ownerdash.safetyResolve(Number(req.params.id), req.body?.resolution, req.user);
+    await audit(req, 'safety.resolve', req.params.id); res.json(r); }
+  catch (e) { res.status(400).json({ error: e.message }); }
+});
+app.get('/api/safety', authMiddleware, (req, res, next) => requireStandupManager(req, res, next), async (_req, res) => {
+  res.json(await ownerdash.safetyList());
+});
 app.get('/api/mywork', authMiddleware, async (req, res) => {
   try {
     let target = req.user.id;

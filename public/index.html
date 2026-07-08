@@ -249,7 +249,7 @@ $('liPass').addEventListener('keydown',e=>{if(e.key==='Enter')login();});
 })();
 
 // ---- nav/render ----
-const NAV=[['dashboard','📊 Dashboard'],['orders','🔨 Production Flow'],['standup','📣 Stand-Up'],['mywork','📜 My Work'],['daily','📋 Daily Update'],['performance','📈 Performance'],['neworder','➕ New Order'],['customers','🏬 Customers & Dealers'],['parts','📦 Parts Master'],['predict','🤖 Predictive Ordering'],['pos','🧾 Purchase Orders'],['boms','🧩 BOMs & Cost'],['inventory','📈 Inventory Value'],['accounting','💵 Accounting'],['trailers','🚛 Trailers & Warranty'],['printcenter','🖨️ Print Center'],['boatadmin','🚤 Boat Builder'],['testdata','🧪 Test Data'],['team','👷 Team & Payroll'],['timeoff','📅 Schedule & Time Off'],['outcomes','🎯 Goals & Outcomes'],['wins','🎉 Wins'],['forecast','🔮 Forecasting & Planning'],['notify','💬 Notifications'],['support','🆘 Support'],['users','👤 Users & Roles']];
+const NAV=[['dashboard','📊 Dashboard'],['orders','🔨 Production Flow'],['standup','📣 Stand-Up'],['mywork','📜 My Work'],['daily','📋 Daily Update'],['performance','📈 Performance'],['neworder','➕ New Order'],['customers','🏬 Customers & Dealers'],['parts','📦 Parts Master'],['predict','🤖 Predictive Ordering'],['pos','🧾 Purchase Orders'],['boms','🧩 BOMs & Cost'],['inventory','📈 Inventory Value'],['accounting','💵 Accounting'],['ownerdash','🏛 Owner Dashboard'],['trailers','🚛 Trailers & Warranty'],['printcenter','🖨️ Print Center'],['boatadmin','🚤 Boat Builder'],['testdata','🧪 Test Data'],['team','👷 Team & Payroll'],['timeoff','📅 Schedule & Time Off'],['outcomes','🎯 Goals & Outcomes'],['wins','🎉 Wins'],['forecast','🔮 Forecasting & Planning'],['notify','💬 Notifications'],['support','🆘 Support'],['users','👤 Users & Roles']];
 function canSee(section){
   if(isAdmin()) return true;
   if(!ME.sections) return true; // null = all sections (admin)
@@ -262,6 +262,7 @@ const pickableRoles=rs=>isAdmin()?rs:rs.filter(r=>r.tier!=='admin'); // non-admi
 function navVisible(n){
   if(n[0]==='users') return canManageUsers();
   if(n[0]==='neworder') return canSell()&&canSee('neworder');
+  if(n[0]==='ownerdash') return isAdmin()||hasTitle('General Manager');
   if(n[0]==='printcenter') return hasTitle('Office Manager','General Manager')||isAdmin()||sectionGrant('printcenter');
   if(n[0]==='boatadmin') return hasTitle('Office Manager','General Manager')||isAdmin()||sectionGrant('boatadmin');
   if(n[0]==='testdata') return isAdmin();
@@ -275,7 +276,7 @@ const NAV_GROUPS = [
   ['Production', ['orders','standup','mywork','daily','performance','trailers','printcenter']],
   ['Sales', ['neworder','boatadmin','customers']],
   ['Inventory', ['parts','boms','inventory','predict','pos']],
-  ['Finance', ['accounting','forecast']],
+  ['Finance', ['accounting','ownerdash','forecast']],
   ['People', ['team','timeoff','outcomes','wins']],
   ['Updates', ['notify','support']],
   ['Admin', ['users','testdata']],
@@ -390,7 +391,7 @@ document.addEventListener('keydown',e=>{
 });
 async function render(){
   renderNav();
-  const map={dashboard:viewDash,orders:viewOrders,standup:viewStandup,mywork:viewMyWork,daily:viewDaily,performance:viewPerformance,neworder:viewNewOrder,customers:viewCustomers,parts:viewParts,predict:viewPredict,pos:viewPOs,boms:viewBoms,inventory:viewInv,accounting:viewAccounting,trailers:viewTrailers,printcenter:viewPrintCenter,boatadmin:viewBoatAdmin,testdata:viewTestData,team:viewTeam,timeoff:viewTimeoff,outcomes:viewOutcomes,wins:viewWins,forecast:viewForecast,notify:viewNotify,support:viewSupport,users:viewUsers};
+  const map={dashboard:viewDash,orders:viewOrders,standup:viewStandup,mywork:viewMyWork,daily:viewDaily,performance:viewPerformance,neworder:viewNewOrder,customers:viewCustomers,parts:viewParts,predict:viewPredict,pos:viewPOs,boms:viewBoms,inventory:viewInv,accounting:viewAccounting,ownerdash:viewOwnerDash,trailers:viewTrailers,printcenter:viewPrintCenter,boatadmin:viewBoatAdmin,testdata:viewTestData,team:viewTeam,timeoff:viewTimeoff,outcomes:viewOutcomes,wins:viewWins,forecast:viewForecast,notify:viewNotify,support:viewSupport,users:viewUsers};
   try{
     await (map[page]||viewDash)();
     const pa=$('pActions');
@@ -1788,11 +1789,12 @@ async function viewMyWork(){
   const isMgr=isAdmin()||hasTitle('Shop Manager','General Manager');
   if(!window._mwRange) window._mwRange=mwRange('week');
   const r=window._mwRange, who=window._mwWho||'';
-  let d,users=[];
+  let d,users=[],card=null;
   try{
-    [d,users]=await Promise.all([
+    [d,users,card]=await Promise.all([
       api('/api/mywork?from='+r.from+'&to='+r.to+(who?'&userId='+encodeURIComponent(who):'')),
       isMgr?api('/api/users').catch(()=>[]):Promise.resolve([]),
+      api('/api/scorecard'+(who?'?userId='+encodeURIComponent(who):'')).catch(()=>null),
     ]);
   }catch(e){ $('content').innerHTML=`<div class="card"><p class="msg err">${esc(e.message)}</p></div>`; return; }
   const preset=(p)=>`<button class="btn sm ${JSON.stringify(mwRange(p))===JSON.stringify(r)?'':'sec'}" onclick="window._mwRange=mwRange('${p}');viewMyWork()">${p==='week'?'This week':p==='month'?'This month':'This year'}</button>`;
@@ -1827,7 +1829,36 @@ async function viewMyWork(){
     ${d.tasks.map(t=>`<tr><td>${esc(t.description)}</td><td class="center">${t.count}</td>
       <td class="right">${t.estHours}</td><td class="muted" style="font-size:12px">${new Date(t.lastAt).toLocaleDateString()}</td></tr>`).join('')}
     </tbody></table>`:'<p class="muted">No completed plan tasks in this window.</p>'}</div>`;
-  $('content').innerHTML=`<p class="muted" style="margin-bottom:10px;font-size:12.5px">${esc(d.user)} · ${esc(d.from)} → ${esc(d.to)}</p>`
+  // ── 📇 Daily Scorecard: today against standard, with the WHY behind the number ──
+  let scoreCard='';
+  if(card){
+    const FLAG={green:['var(--ok,#1a7f4b)','On standard 🎉'],yellow:['var(--yellow,#e0a800)','Close — see what slipped'],red:['var(--red)','Under standard — see why below'],none:['var(--muted)','No hours logged yet today']};
+    const [fc,fl]=FLAG[card.flag]||FLAG.none;
+    const spark=card.trend.map(t=>{const h=t.pct==null?4:Math.max(6,Math.min(46,Math.round(t.pct*0.4)));
+      const c=t.pct==null?'var(--line)':t.pct>=100?'var(--ok,#1a7f4b)':t.pct>=85?'var(--yellow,#e0a800)':'var(--red)';
+      return `<div title="${t.date}: ${t.pct==null?'—':t.pct+'%'}" style="width:16px;height:${h}px;background:${c};border-radius:3px 3px 0 0"></div>`;}).join('');
+    scoreCard=`<div class="card" style="margin-bottom:14px;border-left:4px solid ${fc}">
+      <div style="display:flex;gap:18px;align-items:flex-end;flex-wrap:wrap">
+        <div><div class="muted" style="font-size:11px;text-transform:uppercase;letter-spacing:.5px">📇 Today's scorecard — ${esc(card.user.name)}</div>
+          <div style="font-size:30px;font-weight:800;color:${fc}">${card.effPct!=null?card.effPct+'%':'—'}</div>
+          <div class="muted" style="font-size:11.5px">${card.stdEarned}h standard earned ÷ ${card.hoursLogged}h logged · ${esc(fl)}</div></div>
+        <div style="display:flex;gap:3px;align-items:flex-end;height:48px" title="last 7 days">${spark}</div>
+        <div style="font-size:12px;line-height:1.8;min-width:150px">
+          <div>🚛 Units touched: <b>${card.unitsTouched}</b></div>
+          <div>🔩 Parts built: <b>${(card.partsBuilt||[]).reduce((a,p)=>a+p.qty,0)}</b></div>
+          <div>✅ Tasks done: <b>${(card.tasksCompleted||[]).reduce((a,t)=>a+t.count,0)}</b></div>
+        </div>
+      </div>
+      ${card.drill.length?`<details style="margin-top:8px"><summary class="lnk" style="font-size:12px;cursor:pointer">What's behind the number — today's ${card.drill.length} log line(s)</summary>
+        <table style="margin-top:6px"><thead><tr><th>Order</th><th>Station / stage</th><th class="right">Hours</th><th class="right">Std earned</th></tr></thead><tbody>
+        ${card.drill.map(l=>`<tr><td><b>${esc(l.orderId||'—')}</b> <span class="muted" style="font-size:11px">${esc(l.model||'')}</span></td>
+          <td style="font-size:12px">${esc(l.workstation||'—')} · ${esc(l.stage||'')}${l.stageComplete?' <span class="badge b-ok" style="font-size:9px">stage ✓</span>':''}</td>
+          <td class="right">${l.hours}</td><td class="right" style="color:${l.earnedStd>0?'var(--ok,#1a7f4b)':'var(--muted)'}">${l.earnedStd||'—'}</td></tr>`).join('')}
+        </tbody></table>
+        <p class="muted" style="font-size:11px;margin-top:6px">Standard hours come from the model's labor routing when a stage is completed — hours logged without a completion earn 0 until the stage lands.</p></details>`:''}
+    </div>`;
+  }
+  $('content').innerHTML=scoreCard+`<p class="muted" style="margin-bottom:10px;font-size:12.5px">${esc(d.user)} · ${esc(d.from)} → ${esc(d.to)}</p>`
     +kpis+(stepCards||'<div class="card" style="margin-bottom:16px"><p class="muted">No trailer step completions in this window — they accrue automatically when you complete stages while signed in.</p></div>')
     +partsCard+tasksCard;
 }
@@ -3042,6 +3073,69 @@ async function saveNewVendor(){
 }
 
 // ============ PHASE 4: ACCOUNTING (QuickBooks) + OCR INVOICES ============
+// ── 🏛 Owner Dashboard: is the BUSINESS healthy (not: is today's production on track) ──
+async function viewOwnerDash(){
+  $('pTitle').textContent='Owner Dashboard';$('pSub').textContent='Business health — frozen transaction values, so trends never rewrite themselves';$('pActions').innerHTML='';
+  let d; try{ d=await api('/api/ownerdash'); }catch(e){ $('content').innerHTML=`<div class="card"><p class="msg err">${esc(e.message)}</p></div>`; return; }
+  const bar=(v,max,color)=>`<div style="width:18px;height:${max>0?Math.max(3,Math.round(v/max*52)):3}px;background:${color};border-radius:3px 3px 0 0"></div>`;
+  const maxUnits=Math.max(1,...d.weeks.map(w=>w.units));
+  const tputBars=d.weeks.map(w=>`<div title="wk of ${w.weekOf}: ${w.units} unit(s)" style="display:flex;flex-direction:column;justify-content:flex-end">${bar(w.units,maxUnits,'var(--accent)')}</div>`).join('');
+  const otBars=d.weeks.map(w=>`<div title="wk of ${w.weekOf}: ${w.onTimePct==null?'no dated deliveries':w.onTimePct+'% on time'}" style="display:flex;flex-direction:column;justify-content:flex-end">${w.onTimePct==null?`<div style="width:18px;height:3px;background:var(--line)"></div>`:bar(w.onTimePct,100,w.onTimePct>=90?'var(--ok,#1a7f4b)':w.onTimePct>=70?'var(--yellow,#e0a800)':'var(--red)')}</div>`).join('');
+  const maxWc=Math.max(1,...d.warranty.map(m=>m.cost));
+  const wcBars=d.warranty.map(m=>`<div title="${m.month}: ${money(m.cost)} across ${m.claims} claim(s)" style="display:flex;flex-direction:column;justify-content:flex-end;align-items:center;gap:2px">${bar(m.cost,maxWc,'var(--red)')}<span class="muted" style="font-size:9px">${m.month.slice(5)}</span></div>`).join('');
+  $('content').innerHTML=`
+   <div class="grid g4" style="margin-bottom:14px">
+    ${kpi('Net through the books',money(d.cash.net),money(d.cash.invoiced)+' billed − '+money(d.cash.bills)+' bills')}
+    ${kpi('Batch AR outstanding',money(d.cash.batchAR),'invoiced, not yet paid (payments live in QuickBooks)')}
+    ${kpi('Gross margin',d.margin.marginPct!=null?d.margin.marginPct+'%':'—',money(d.margin.margin)+' on '+money(d.margin.revenue)+' invoiced')}
+    ${kpi('Inventory turns',d.turns.turns!=null?d.turns.turns+'×/yr':'—',money(d.turns.annualizedCOGS)+' ann. COGS ÷ '+money(d.turns.inventoryValue))}
+   </div>
+   <div class="grid g4" style="grid-template-columns:1fr 1fr;margin-bottom:14px">
+    <div class="card" style="margin:0"><h3>📈 Throughput — 12 weeks</h3>
+      <div style="display:flex;gap:4px;align-items:flex-end;height:60px;margin-top:8px">${tputBars}</div>
+      <p class="muted" style="font-size:11px;margin-top:6px">Units reaching Ready per week (stage stamps — frozen history).</p></div>
+    <div class="card" style="margin:0"><h3>⏱ On-time delivery — 12 weeks</h3>
+      <div style="display:flex;gap:4px;align-items:flex-end;height:60px;margin-top:8px">${otBars}</div>
+      <p class="muted" style="font-size:11px;margin-top:6px">% of dated orders that reached Ready by their due date.</p></div>
+   </div>
+   <div class="grid g4" style="grid-template-columns:1fr 1fr;margin-bottom:14px">
+    <div class="card" style="margin:0;${d.safety.openFindings?'border-color:var(--red)':''}"><h3>🦺 Safety</h3>
+      <div style="display:flex;gap:22px;margin:8px 0">
+        <div><div style="font-size:26px;font-weight:800;color:${d.safety.daysSinceIncident==null?'var(--ok,#1a7f4b)':d.safety.daysSinceIncident>=30?'var(--ok,#1a7f4b)':'var(--red)'}">${d.safety.daysSinceIncident==null?'—':d.safety.daysSinceIncident}</div><div class="muted" style="font-size:11px">days since last incident${d.safety.daysSinceIncident==null?' (none on record)':''}</div></div>
+        <div><div style="font-size:26px;font-weight:800;color:${d.safety.openFindings?'var(--red)':'var(--ok,#1a7f4b)'}">${d.safety.openFindings}</div><div class="muted" style="font-size:11px">open findings</div></div>
+      </div>
+      ${d.safety.open.map(s=>`<div style="display:flex;gap:8px;align-items:center;padding:5px 0;border-bottom:1px solid var(--line);font-size:12.5px">
+        <span>${s.kind==='incident'?'🚨':'⚠️'}</span><span style="flex:1">${esc(s.description)} <span class="muted" style="font-size:11px">${String(s.occurredOn).slice(0,10)}${s.loggedBy?' · '+esc(s.loggedBy):''}</span></span>
+        <button class="btn sm sec" onclick="safetyResolve(${s.id})">✓ Resolve</button></div>`).join('')||'<p class="muted" style="font-size:12px">Nothing open.</p>'}
+      <div style="display:flex;gap:6px;margin-top:10px;flex-wrap:wrap">
+        <select id="sfKind" style="padding:7px;border-radius:8px;border:1px solid var(--line);background:var(--panel2);color:var(--txt)"><option value="finding">⚠️ Finding</option><option value="incident">🚨 Incident</option></select>
+        <input id="sfDesc" placeholder="what happened / what was found" style="flex:1;min-width:180px;padding:7px;border-radius:8px;border:1px solid var(--line);background:var(--panel2);color:var(--txt)">
+        <button class="btn sm" onclick="safetyAdd()">＋ Log</button>
+      </div></div>
+    <div class="card" style="margin:0"><h3>🛠 Warranty cost — 6 months</h3>
+      ${d.warranty.length?`<div style="display:flex;gap:8px;align-items:flex-end;height:74px;margin-top:8px">${wcBars}</div>
+      <p class="muted" style="font-size:11px;margin-top:6px">Parts + labor + shipping on claims, by month opened.</p>`:'<p class="muted" style="font-size:12.5px;margin-top:8px">No claims in the window. 🎉</p>'}</div>
+   </div>
+   <div class="card"><h3>📊 Gross margin by model — invoiced orders ${csvBtn('owner_margin_by_model',d.margin.byModel)}</h3>
+    ${d.margin.byModel.length?`<table><thead><tr><th>Model</th><th class="right">Revenue</th><th class="right">COGS</th><th class="right">Margin</th><th class="right">%</th></tr></thead><tbody>
+    ${d.margin.byModel.map(m=>`<tr><td><b>${esc(m.model)}</b></td><td class="right">${money(m.revenue)}</td><td class="right">${money(m.cogs)}</td>
+      <td class="right" style="color:${m.margin>=0?'var(--ok,#1a7f4b)':'var(--red)'}">${money(m.margin)}</td>
+      <td class="right">${m.marginPct!=null?m.marginPct+'%':'—'}</td></tr>`).join('')}
+    <tr><td><b>Company-wide</b></td><td class="right"><b>${money(d.margin.revenue)}</b></td><td class="right"><b>${money(d.margin.cogs)}</b></td>
+      <td class="right"><b>${money(d.margin.margin)}</b></td><td class="right"><b>${d.margin.marginPct!=null?d.margin.marginPct+'%':'—'}</b></td></tr>
+    </tbody></table>`:'<p class="muted">No invoiced orders yet — margins appear as orders bill.</p>'}
+   </div>`;
+}
+async function safetyAdd(){
+  const description=($('sfDesc').value||'').trim(); if(description.length<3)return toast('Describe it first.');
+  try{ await api('/api/safety',{method:'POST',body:JSON.stringify({kind:$('sfKind').value,description})}); toast('🦺 Logged'); viewOwnerDash(); }
+  catch(e){ toast(e.message); }
+}
+async function safetyResolve(id){
+  const resolution=prompt('How was it resolved? (optional)'); if(resolution===null)return;
+  try{ await api('/api/safety/'+id+'/resolve',{method:'POST',body:JSON.stringify({resolution:resolution||undefined})}); toast('✓ Resolved'); viewOwnerDash(); }
+  catch(e){ toast(e.message); }
+}
 async function viewAccounting(){
   $('pTitle').textContent='Accounting';$('pSub').textContent='QuickBooks sync — invoices on ship, bills on PO receipt; OCR invoice intake updates costs';
   $('pActions').innerHTML=(canEdit()?`<button class="btn" onclick="pullFromQB()">⬇ Pull from QuickBooks</button>&nbsp;<button class="btn sec" onclick="syncQB()">⟳ Push pending</button>`:'')+(canSee('accounting')?`&nbsp;<button class="btn sec" onclick="pushTrailerCosts()">⬆ Push trailer costs</button>`:'');

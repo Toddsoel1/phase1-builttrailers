@@ -716,6 +716,64 @@ test('shop manager dashboard: labor efficiency, SOP compliance, red flags, and b
   await api('/api/wip-limits', { method: 'POST', body: JSON.stringify({}) }); // clear for downstream tests
 });
 
+test('owner dashboard: GM/admin only — cash, margin, 12-week trends, safety log, inventory turns', async () => {
+  await api('/api/roles', { method: 'POST', body: JSON.stringify({ name: 'Owner Probe', tier: 'editor', sections: ['orders'] }) });
+  const pu = await json(await api('/api/users', { method: 'POST', body: JSON.stringify({ name: 'Owner Probe P', titles: ['Owner Probe'], password: 'ownPw123' }) }));
+  const pl = await json(await fetch(BASE + '/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: pu.username, password: 'ownPw123' }) }));
+  assert.equal((await fetch(BASE + '/api/ownerdash', { headers: { Authorization: 'Bearer ' + pl.token } })).status, 403, 'owner page is GM/admin only');
+
+  const d = await json(await api('/api/ownerdash'));
+  assert.equal(typeof d.cash.net, 'number');
+  assert.ok(d.cash.invoiced > 0, 'billed revenue flows from the ledger');
+  assert.ok(d.margin.revenue > 0 && d.margin.cogs > 0, 'margin from posted invoices + COGS');
+  assert.ok(Array.isArray(d.margin.byModel) && d.margin.byModel.length >= 1, 'by-model margin present');
+  assert.equal(d.weeks.length, 12, 'twelve weekly buckets');
+  assert.ok(d.weeks.reduce((a, w) => a + w.units, 0) >= 1, 'units reaching Ready counted');
+  assert.ok('turns' in d.turns && 'inventoryValue' in d.turns, 'inventory turns computed');
+  assert.ok(Array.isArray(d.warranty), 'warranty trend series');
+
+  // Safety: findings stay open until resolved; incidents drive days-since.
+  const tenAgo = new Date(Date.now() - 10 * 864e5).toISOString().slice(0, 10);
+  const f = await json(await api('/api/safety', { method: 'POST', body: JSON.stringify({ kind: 'finding', description: 'Extension cord across walkway' }) }));
+  await api('/api/safety', { method: 'POST', body: JSON.stringify({ kind: 'incident', description: 'Minor cut — first aid', occurredOn: tenAgo }) });
+  const s = await json(await api('/api/safety'));
+  assert.ok(s.openFindings >= 1, 'finding counts as open');
+  assert.equal(s.daysSinceIncident, 10, 'days since last incident from the occurrence date');
+  assert.equal((await api('/api/safety/' + f.id + '/resolve', { method: 'POST', body: JSON.stringify({ resolution: 'taped and rerouted' }) })).status, 200);
+  assert.equal((await api('/api/safety/' + f.id + '/resolve', { method: 'POST', body: '{}' })).status, 400, 'double resolve refused');
+  const s2 = await json(await api('/api/safety'));
+  assert.equal(s2.openFindings, s.openFindings - 1, 'resolving closes the finding');
+});
+
+test('daily scorecard: standard vs actual with the drill-down; self always, managers for anyone', async () => {
+  const carl = await json(await api('/api/users', { method: 'POST', body: JSON.stringify({ name: 'Card Carl', titles: ['Owner Probe'], password: 'carlPw12' }) }));
+  const custs = (await json(await api('/api/customers'))).filter(c => c.active !== false && c.allowed?.length);
+  const models = await json(await api('/api/models'));
+  let cust, model;
+  for (const c of custs) { const m = models.find(mm => c.allowed.includes(mm.category) && mm.laborCost > 0); if (m) { cust = c; model = m; break; } }
+  const o = await json(await api('/api/orders', { method: 'POST', body: JSON.stringify({ customerId: cust.id, modelId: model.id, qty: 1 }) }));
+  await api('/api/work-log', { method: 'POST', body: JSON.stringify({ orderId: o.id, workstation: 'Weld', stage: 'Build', hours: 8, stageComplete: true, userId: carl.id }) });
+
+  const card = await json(await api('/api/scorecard?userId=' + carl.id));
+  assert.equal(card.user.id, carl.id);
+  assert.ok(card.hoursLogged >= 8, 'hours logged counted');
+  assert.ok(card.stdEarned > 0, 'the stage completion earned standard hours');
+  assert.equal(card.effPct, Math.round((card.stdEarned / card.hoursLogged) * 100), 'efficiency math checks out');
+  const expectFlag = card.effPct >= 100 ? 'green' : card.effPct >= 85 ? 'yellow' : 'red';
+  assert.equal(card.flag, expectFlag, 'flag matches the 100/85 thresholds');
+  assert.equal(card.trend.length, 7, 'seven-day sparkline');
+  assert.equal(card.trend[6].pct, card.effPct, 'today is the last sparkline point');
+  assert.ok(card.drill.length >= 1 && card.drill.some(l => l.stageComplete && l.earnedStd > 0), 'the drill-down shows WHICH lines earned the hours');
+  assert.ok(Array.isArray(card.trailersTouched) && Array.isArray(card.partsBuilt) && Array.isArray(card.tasksCompleted), 'My Work slices ride along');
+
+  // Carl sees his own card; he cannot open someone else's.
+  const cl = await json(await fetch(BASE + '/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: carl.username, password: 'carlPw12' }) }));
+  const own = await json(await fetch(BASE + '/api/scorecard', { headers: { Authorization: 'Bearer ' + cl.token } }));
+  assert.equal(own.user.id, carl.id, 'self view works for everyone');
+  const gm = (await json(await api('/api/users'))).find(x => x.role === 'admin');
+  assert.equal((await fetch(BASE + '/api/scorecard?userId=' + gm.id, { headers: { Authorization: 'Bearer ' + cl.token } })).status, 403, 'peeking at others is manager-only');
+});
+
 test('guarded reprints: reason required, permanent register, requeue with badge, MSO needs a buyer', async () => {
   const sr = await api('/api/auth/login', { method: 'POST', body: JSON.stringify({ username: 'aruiz', password: 'built2026' }) });
   const sales = (await sr.json()).token;

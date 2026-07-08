@@ -227,6 +227,12 @@ const colMigrations = [
   `ALTER TABLE model ADD COLUMN IF NOT EXISTS hitch_code TEXT`,
   `ALTER TABLE model ADD COLUMN IF NOT EXISTS body_code TEXT`,
   `ALTER TABLE model ADD COLUMN IF NOT EXISTS axles INT`,
+  // Safety log (SOP-SM-010): findings stay open until resolved; incidents drive the
+  // "days since last incident" counter on the Owner dashboard.
+  `CREATE TABLE IF NOT EXISTS safety_log (id SERIAL PRIMARY KEY, kind TEXT NOT NULL DEFAULT 'finding',
+     description TEXT NOT NULL, occurred_on DATE NOT NULL DEFAULT CURRENT_DATE,
+     logged_by TEXT, created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+     resolved_at TIMESTAMPTZ, resolved_by TEXT, resolution TEXT)`,
   // SOPs: standing checkpoints (optionally tied to a workstation) that the floor confirms
   // once per day at Daily Update; the Shop Manager dashboard tracks % confirmed today.
   `CREATE TABLE IF NOT EXISTS sop_checkpoint (id SERIAL PRIMARY KEY, workstation TEXT,
