@@ -1006,6 +1006,7 @@ async function editPartModal(id){
     <div class="row">
       <div class="field"><label>Primary vendor</label><select id="epVendor" class="inp"><option value="">— none —</option>${vOpts}</select></div>
       <div class="field"><label>Vendor part #</label><input id="epVpn" class="inp" value="${esc(p.vendorPartNo||'')}" placeholder="their number, goes on POs"></div>
+      <div class="field"><label>Manufacturer part #</label><input id="epMpn" class="inp" value="${esc(p.mfrPartNo||'')}" placeholder="the maker's own number"></div>
     </div>
     <div class="row">
       <div class="field"><label>Unit cost $</label><input id="epCost" class="inp" type="number" min="0" step="0.01" value="${p.cost}"></div>
@@ -1026,7 +1027,7 @@ async function editPartModal(id){
 async function saveEditPart(id){
   const newId=($('epId').value||'').trim();
   const body={name:($('epName').value||'').trim(),type:$('epType').value,vendorId:$('epVendor').value||null,
-    vendorPartNo:($('epVpn').value||'').trim(),cost:Number($('epCost').value)||0,uom:($('epUom').value||'').trim(),
+    vendorPartNo:($('epVpn').value||'').trim(),mfrPartNo:($('epMpn').value||'').trim(),cost:Number($('epCost').value)||0,uom:($('epUom').value||'').trim(),
     spec:($('epSpec').value||'').trim(),reorder:Number($('epReorder').value)||0,cushion:Number($('epCushion').value)||0,
     lot:Math.max(1,Number($('epLot').value)||1)};
   if(newId&&newId!==id){
@@ -1223,7 +1224,7 @@ async function showBom(id){
      <button class="btn sm sec" onclick="editModelPrice('${id}',${m.price})">✏️ Change price</button>
      <span class="muted" style="font-size:11.5px">Applies to <b>future orders only</b> — every existing order keeps the price frozen on it when it was placed.</span>
    </div>`:''}
-   <div class="card"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px"><h3 style="margin:0">${esc(m.name)} — Bill of Materials</h3>${isAdmin()?`<button class="btn sm" onclick="addBomLine('${id}')">+ Propose Part</button>`:''}</div>
+   <div class="card"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;gap:8px;flex-wrap:wrap"><h3 style="margin:0">${esc(m.name)} — Bill of Materials</h3><span style="display:flex;gap:6px"><button class="btn sm sec" onclick="engView('${id}')">📐 Engineering package</button>${isAdmin()?`<button class="btn sm" onclick="addBomLine('${id}')">+ Propose Part</button>`:''}</span></div>
    <table><thead><tr><th>Part</th><th>Stage</th><th class="right">Qty</th><th class="right">Unit cost</th><th class="right">Ext.</th>${isAdmin()?'<th></th>':''}</tr></thead><tbody>
    ${m.bom.map(b=>`<tr>
      <td>${esc(b.name)}${b.type==='M'?' <span class="badge b-mfg">MAKE</span>':''}</td>
@@ -1351,6 +1352,136 @@ async function saveNewLaborStep(modelId){
   const m=_bomModels.find(x=>x.id===modelId);
   try{await api('/api/bom-change-requests',{method:'POST',body:JSON.stringify({modelId,modelName:m?.name,op:'add_labor',payload:{ws,hours,rate}})});closeModal();toast('Change submitted for accounting review');showBom(modelId);}
   catch(e){toast(e.message);}
+}
+
+// ── 📐 Engineering package: worksheet + numbered cut list + steel + welds + revisions ──
+async function engView(id){
+  let p; try{ p=await api('/api/engineering/'+id); }catch(e){ return toast(e.message); }
+  window._eng=p;
+  const canEd=canEditParts();
+  const wsRows=p.worksheet.map(r=>`<tr>
+    <td><b>${esc(r.partId)}</b><div class="muted" style="font-size:11px">${esc(r.name)}</div></td>
+    <td>${r.type==='M'?'<span class="badge b-mfg">MAKE</span>':'<span class="badge b-buy">BUY</span>'}</td>
+    <td>${esc(r.stage)}</td><td class="right">${r.qty} ${esc(r.uom||'')}</td>
+    <td class="right">${money2(r.unitCost)}</td><td class="right">${money2(r.extCost)}</td>
+    <td>${esc(r.vendor||'—')}</td><td style="font-size:12px">${esc(r.vendorPartNo||'—')}</td><td style="font-size:12px">${esc(r.mfrPartNo||'—')}</td>
+  </tr>`).join('');
+  const weldments=[...new Set(p.cutList.map(c=>c.weldmentId))];
+  const clRows=p.cutList.map(c=>`<tr>
+    <td><b>${esc(c.no)}</b></td><td style="font-size:12px">${esc(c.weldment)}</td><td>${esc(c.description)}</td>
+    <td>${esc(c.profile||'—')}</td><td class="right">${esc(c.length)}</td>
+    <td class="right">${c.qtyPerAsm} × ${c.asmPerTrailer}</td><td class="right"><b>${c.qtyPerTrailer}</b></td>
+    <td class="right">${c.weldIn}"</td>
+    ${canEd?`<td><button class="btn sm sec" onclick="engEditCut(${c.cutId},'${id}')">✏️</button> <button class="btn sm sec" onclick="engDelCut(${c.cutId},'${id}')">✕</button></td>`:''}
+  </tr>`).join('');
+  const stRows=p.steel.map(s=>`<tr><td>${esc(s.profile)}</td><td class="right">${s.cuts}</td><td class="right">${s.totalFt} ft</td>
+    <td class="right">${s.lbPerFt!=null?s.lbPerFt:'—'}</td><td class="right"><b>${s.weightLb!=null?s.weightLb+' lb':'—'}</b></td>
+    <td class="right">${s.sticks!=null?s.sticks+' × '+s.stockLengthFt+"'":'—'}${s.oversize?' <span class="badge b-below" title="Cut longer than stock — special order">'+s.oversize+' oversize</span>':''}</td>
+    <td class="right">${s.yieldPct!=null?s.yieldPct+'%':'—'}</td></tr>`).join('');
+  const revRows=p.revHistory.map(r=>`<div style="display:flex;gap:8px;font-size:12px;padding:3px 0;border-bottom:1px solid var(--line)">
+    <span class="badge b-buy">Rev ${r.rev}</span><span style="flex:1">${esc(r.change)}</span>
+    <span class="muted">${esc(r.by||'')} · ${new Date(r.created_at).toLocaleDateString()}</span></div>`).join('');
+  modal('📐 Engineering — '+esc(p.model.name),`<div style="width:min(960px,88vw);max-height:72vh;overflow:auto;padding-right:6px">
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px">
+      <span class="badge" style="background:var(--txt);color:var(--panel);font-weight:700">REV ${p.model.rev}</span>
+      <span class="muted" style="font-size:12px">${p.totals.cutCount} cuts · ${p.totals.steelWeightLb} lb steel · ${p.welds.totalIn}" weld · material ${money2(p.totals.materialCost)} · ${p.totals.laborHours}h labor</span>
+      <span style="flex:1"></span>
+      <button class="btn sm sec" onclick="engCsv('worksheet')">⬇ BOM CSV</button>
+      <button class="btn sm sec" onclick="engCsv('cuts')">⬇ Cut list CSV</button>
+      <button class="btn sm sec" onclick="engPrint()">🖨 Print worksheet</button>
+    </div>
+    <h3 style="margin:6px 0">Bill of materials</h3>
+    <table><thead><tr><th>Part</th><th>Type</th><th>Stage</th><th class="right">Qty</th><th class="right">Unit $</th><th class="right">Ext $</th><th>Vendor</th><th>Vendor #</th><th>Mfr #</th></tr></thead>
+    <tbody>${wsRows}<tr><td colspan="5" class="right"><b>Material total</b></td><td class="right"><b>${money2(p.totals.materialCost)}</b></td><td colspan="3"></td></tr></tbody></table>
+    <h3 style="margin:14px 0 6px">Cut list ${canEd&&weldments.length?`<span style="font-weight:400;font-size:12px">· <a class="lnk" onclick="engAddCut('${id}')">+ add a cut</a></span>`:''}</h3>
+    ${p.cutList.length?`<table><thead><tr><th>No.</th><th>Weldment</th><th>Cut</th><th>Profile</th><th class="right">Length</th><th class="right">Per asm × asms</th><th class="right">Per trailer</th><th class="right">Weld</th>${canEd?'<th></th>':''}</tr></thead><tbody>${clRows}</tbody></table>`
+      :`<p class="muted" style="font-size:13px">No cut items on this model's weldments yet.${canEd?` <a class="lnk" onclick="engAddCut('${id}')">Add the first cut</a> — pick the weldment, profile, and length.`:''}</p>`}
+    ${p.steel.length?`<h3 style="margin:14px 0 6px">Steel — weight &amp; yield</h3>
+    <table><thead><tr><th>Profile</th><th class="right">Cuts</th><th class="right">Total</th><th class="right">lb/ft</th><th class="right">Weight</th><th class="right">Sticks</th><th class="right">Yield</th></tr></thead><tbody>${stRows}
+    <tr><td colspan="4" class="right"><b>Estimated steel weight</b></td><td class="right"><b>${p.totals.steelWeightLb} lb</b></td><td colspan="2"></td></tr></tbody></table>
+    <p class="muted" style="font-size:11px">Yield = cut inches ÷ purchased stick inches (first-fit packing, ⅛" kerf). Weights are published lb/ft — edit profiles below.</p>`:''}
+    <h3 style="margin:14px 0 6px">Weld length</h3>
+    <p style="font-size:13px;margin:0 0 4px"><b>${p.welds.totalIn}" (${p.welds.totalFt} ft)</b> of weld per trailer${Object.keys(p.welds.byWeldment).length?': '+Object.entries(p.welds.byWeldment).map(([w,n])=>esc(w)+' '+n+'"').join(' · '):''}</p>
+    ${canEd?`<details style="margin-top:12px"><summary class="lnk" style="cursor:pointer;font-size:13px">Steel profiles (${p.profiles.length}) — lb/ft &amp; stock length</summary>
+      <div style="margin-top:6px">${p.profiles.map(pr=>`<div style="display:flex;gap:8px;align-items:center;padding:3px 0;font-size:13px">
+        <span style="flex:1">${esc(pr.profile)}</span>
+        <input type="number" step="0.01" value="${pr.lbPerFt}" style="width:80px" onchange="engSaveProfile('${esc(pr.profile)}',this.value,${pr.stockLengthFt},'${id}')"> lb/ft
+        <input type="number" step="0.5" value="${pr.stockLengthFt}" style="width:70px" onchange="engSaveProfile('${esc(pr.profile)}',${pr.lbPerFt},this.value,'${id}')"> ft stock
+      </div>`).join('')}
+      <div style="display:flex;gap:8px;margin-top:8px"><input id="engNewProf" placeholder="New profile e.g. HSS 2x5x3/16" style="flex:1"><input id="engNewLb" type="number" step="0.01" placeholder="lb/ft" style="width:90px"><input id="engNewStock" type="number" step="0.5" placeholder="stock ft" value="24" style="width:90px"><button class="btn sm" onclick="engSaveProfile($('engNewProf').value,$('engNewLb').value,$('engNewStock').value,'${id}')">Add</button></div>
+    </details>`:''}
+    <details style="margin-top:10px"><summary class="lnk" style="cursor:pointer;font-size:13px">Revision history (Rev ${p.model.rev})</summary>
+      <div style="margin-top:6px">${revRows||'<p class="muted" style="font-size:12px">No changes recorded yet — Rev 1 is the seeded BOM.</p>'}</div></details>
+  </div>`);
+}
+function engCsv(what){
+  const p=window._eng; if(!p)return;
+  const esc2=v=>{v=String(v??'');return /[",\n]/.test(v)?'"'+v.replace(/"/g,'""')+'"':v;};
+  let head,rows,name;
+  if(what==='cuts'){ head=['No','Weldment','Cut','Profile','Length (in)','Qty per assembly','Assemblies per trailer','Qty per trailer','Weld (in)'];
+    rows=p.cutList.map(c=>[c.no,c.weldment,c.description,c.profile||'',c.lengthIn,c.qtyPerAsm,c.asmPerTrailer,c.qtyPerTrailer,c.weldIn]); name=p.model.id+'-cutlist'; }
+  else { head=['Part ID','Name','Type','Stage','Qty','UOM','Unit cost','Ext cost','Vendor','Vendor part #','Mfr part #'];
+    rows=p.worksheet.map(r=>[r.partId,r.name,r.type,r.stage,r.qty,r.uom||'',r.unitCost,r.extCost,r.vendor||'',r.vendorPartNo||'',r.mfrPartNo||'']); name=p.model.id+'-bom'; }
+  const csv=[head,...rows].map(r=>r.map(esc2).join(',')).join('\n');
+  const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv'}));a.download=name+'-rev'+p.model.rev+'.csv';a.click();
+}
+function engPrint(){
+  const p=window._eng; if(!p)return;
+  const w=window.open('','_blank'); if(!w)return toast('Allow pop-ups to print');
+  const row=(cells,tag='td')=>'<tr>'+cells.map(c=>`<${tag}>${c}</${tag}>`).join('')+'</tr>';
+  w.document.write(`<!doctype html><title>${esc(p.model.id)} Rev ${p.model.rev}</title><style>
+    body{font-family:-apple-system,system-ui,sans-serif;color:#111;margin:24px}
+    table{border-collapse:collapse;width:100%;margin:8px 0 18px}th,td{border:1px solid #bbb;padding:4px 7px;font-size:11.5px;text-align:left}
+    th{background:#eee}h1{font-size:18px;margin:0}h2{font-size:14px;margin:14px 0 2px}.muted{color:#555;font-size:11px}</style>
+    <h1>${esc(p.model.name)} — Fabrication worksheet <span style="border:2px solid #111;padding:1px 8px;border-radius:6px">REV ${p.model.rev}</span></h1>
+    <p class="muted">${p.totals.cutCount} cuts · ${p.totals.steelWeightLb} lb steel · ${p.welds.totalIn}&quot; weld · printed ${new Date().toLocaleDateString()}</p>
+    <h2>Bill of materials</h2><table>${row(['Part','Name','Type','Stage','Qty','UOM','Vendor #','Mfr #'],'th')}
+    ${p.worksheet.map(r=>row([esc(r.partId),esc(r.name),r.type,esc(r.stage),r.qty,esc(r.uom||''),esc(r.vendorPartNo||''),esc(r.mfrPartNo||'')])).join('')}</table>
+    <h2>Cut list</h2><table>${row(['No.','Weldment','Cut','Profile','Length','Per trailer','Weld'],'th')}
+    ${p.cutList.map(c=>row([c.no,esc(c.weldment),esc(c.description),esc(c.profile||''),esc(c.length),c.qtyPerTrailer,c.weldIn+'&quot;'])).join('')}</table>
+    ${p.steel.length?`<h2>Steel</h2><table>${row(['Profile','Total ft','Weight','Sticks','Yield'],'th')}
+    ${p.steel.map(s=>row([esc(s.profile),s.totalFt,(s.weightLb??'—')+' lb',s.sticks!=null?s.sticks+' × '+s.stockLengthFt+"'":'—',(s.yieldPct??'—')+'%'])).join('')}</table>`:''}
+  `);
+  w.document.close();w.focus();w.print();
+}
+function engAddCut(modelId){
+  const p=window._eng;
+  const mk=[...new Map(p.cutList.map(c=>[c.weldmentId,c.weldment])).entries()];
+  const mkOpts=(mk.length?mk:p.worksheet.filter(r=>r.type==='M').map(r=>[r.partId,r.name])).map(([pid,nm])=>`<option value="${esc(pid)}">${esc(pid)} — ${esc(nm)}</option>`).join('');
+  const profOpts=p.profiles.map(pr=>`<option>${esc(pr.profile)}</option>`).join('');
+  modal('Add a cut',`
+    <div class="field"><label>Weldment (made part)</label><select id="ecPart">${mkOpts}</select></div>
+    <div class="field"><label>Description</label><input id="ecDesc" placeholder="e.g. Main rail"></div>
+    <div class="row"><div class="field"><label>Profile</label><input id="ecProf" list="ecProfL" placeholder="HSS 2x3x3/16"><datalist id="ecProfL">${profOpts}</datalist></div>
+      <div class="field"><label>Length (in)</label><input id="ecLen" type="number" step="0.25" min="0.25"></div></div>
+    <div class="row"><div class="field"><label>Qty per assembly</label><input id="ecQty" type="number" value="1" min="1"></div>
+      <div class="field"><label>Weld (in, per piece)</label><input id="ecWeld" type="number" value="0" min="0"></div></div>
+    <button class="btn" onclick="engSaveCut('${modelId}')">Add cut</button>`);
+}
+async function engSaveCut(modelId){
+  try{ await api('/api/parts/'+encodeURIComponent($('ecPart').value)+'/cuts',{method:'POST',body:JSON.stringify({description:$('ecDesc').value,profile:$('ecProf').value,lengthIn:Number($('ecLen').value),qty:Number($('ecQty').value)||1,weldIn:Number($('ecWeld').value)||0})});
+    closeModal();toast('Cut added');engView(modelId); }catch(e){toast(e.message);}
+}
+function engEditCut(cutId,modelId){
+  const c=window._eng.cutList.find(x=>x.cutId===cutId); if(!c)return;
+  modal('Edit cut '+esc(c.no),`
+    <div class="field"><label>Description</label><input id="euDesc" value="${esc(c.description)}"></div>
+    <div class="row"><div class="field"><label>Profile</label><input id="euProf" value="${esc(c.profile||'')}" list="euProfL"><datalist id="euProfL">${window._eng.profiles.map(pr=>`<option>${esc(pr.profile)}</option>`).join('')}</datalist></div>
+      <div class="field"><label>Length (in)</label><input id="euLen" type="number" step="0.25" value="${c.lengthIn}"></div></div>
+    <div class="row"><div class="field"><label>Qty per assembly</label><input id="euQty" type="number" value="${c.qtyPerAsm}" min="1"></div>
+      <div class="field"><label>Weld (in, per piece)</label><input id="euWeld" type="number" value="${c.weldPerAsm}" min="0"></div></div>
+    <button class="btn" onclick="engApplyCut(${cutId},'${modelId}')">Save</button>`);
+}
+async function engApplyCut(cutId,modelId){
+  try{ await api('/api/cuts/'+cutId,{method:'PATCH',body:JSON.stringify({description:$('euDesc').value,profile:$('euProf').value,lengthIn:Number($('euLen').value),qty:Number($('euQty').value)||1,weldIn:Number($('euWeld').value)||0})});
+    closeModal();toast('Cut updated');engView(modelId); }catch(e){toast(e.message);}
+}
+async function engDelCut(cutId,modelId){
+  if(!confirm('Remove this cut from the weldment?'))return;
+  try{ await api('/api/cuts/'+cutId,{method:'DELETE'}); toast('Cut removed'); engView(modelId); }catch(e){toast(e.message);}
+}
+async function engSaveProfile(profile,lb,stock,modelId){
+  try{ await api('/api/engineering/profiles',{method:'POST',body:JSON.stringify({profile,lbPerFt:Number(lb),stockLengthFt:Number(stock)})}); toast('Profile saved'); engView(modelId); }catch(e){toast(e.message);}
 }
 
 async function viewInv(){

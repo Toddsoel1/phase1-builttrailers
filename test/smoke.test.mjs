@@ -1754,6 +1754,72 @@ test('2027 Nautique standard pricing: per-axle standard drives the base, inclusi
   await api('/api/boat-admin/boat-price', { method: 'POST', body: JSON.stringify({ boatId: 'NQ-G23', axleCount: 'tandem', price: 9575 }) });
 });
 
+test('📐 engineering package: worksheet with part numbers & costs, numbered cut list, steel weight/yield, welds, revisions', async () => {
+  // Cut items are office data on MADE parts — enter them through the API (exercises the CRUD).
+  const add = (partId, body) => api('/api/parts/' + partId + '/cuts', { method: 'POST', body: JSON.stringify(body) });
+  assert.equal((await add('BUY-TIR-001', { description: 'x', lengthIn: 10 })).status, 400, 'cuts belong to weldments, not purchased parts');
+  await add('MAKE-FRM-G23TR', { description: 'Main rail', profile: 'HSS 2x3x3/16', lengthIn: 276, qty: 2, weldIn: 18 });
+  await add('MAKE-FRM-G23TR', { description: 'Crossmember', profile: 'HSS 2x2x3/16', lengthIn: 80, qty: 5, weldIn: 14 });
+  const tng = await json(await add('MAKE-TNG-G23TR', { description: 'Tongue tube', profile: 'HSS 4x4x1/4', lengthIn: 84, qty: 1, weldIn: 28 }));
+
+  const p = await json(await api('/api/engineering/G23TR'));
+  assert.equal(p.model.rev, 1, 'seeded BOM starts at Rev 1');
+  // Worksheet: every component with cost fields plus supplier & manufacturer part numbers.
+  const frame = p.worksheet.find(r => r.partId === 'MAKE-FRM-G23TR');
+  assert.ok(frame && typeof frame.unitCost === 'number' && frame.extCost === +(frame.unitCost * frame.qty).toFixed(2));
+  assert.ok('vendorPartNo' in frame && 'mfrPartNo' in frame && 'vendor' in frame);
+  assert.ok(p.totals.materialCost > 0 && p.totals.laborHours > 0);
+  // Cut list: auto-numbered, expanded by BOM quantity.
+  assert.deepEqual(p.cutList.map(c => c.no), ['C01', 'C02', 'C03'], 'automatically numbered');
+  const rail = p.cutList.find(c => c.description === 'Main rail');
+  assert.equal(rail.qtyPerTrailer, 2);
+  assert.equal(rail.length, "23' 0\"");
+  // Steel: published lb/ft × length; sticks by first-fit packing; yield vs purchased stock.
+  const s23 = p.steel.find(s => s.profile === 'HSS 2x3x3/16');
+  assert.equal(s23.totalFt, 46);
+  assert.equal(s23.weightLb, 257.1, '46 ft × 5.59 lb/ft');
+  assert.equal(s23.sticks, 2, "two 23' rails can't share a 24' stick");
+  assert.equal(s23.yieldPct, 95.8);
+  const s22 = p.steel.find(s => s.profile === 'HSS 2x2x3/16');
+  assert.equal(s22.sticks, 2, "five 80\" crossmembers pack into two 24' sticks");
+  assert.equal(s22.yieldPct, 69.4);
+  assert.ok(Math.abs(p.totals.steelWeightLb - (257.1 + 144 + 83.8)) < 0.2, 'estimated steel weight sums the profiles');
+  // Welds: per-piece inches × pieces per trailer.
+  assert.equal(p.welds.totalIn, 18 * 2 + 14 * 5 + 28);
+  assert.equal(p.welds.byWeldment['Main Frame Weldment'], 106);
+
+  // Revision tracking: a structural BOM change bumps the rev and logs who/what.
+  await api('/api/models/G23TR/bom/BUY-LUG-001', { method: 'PATCH', body: JSON.stringify({ qty: 12 }) });
+  const p2 = await json(await api('/api/engineering/G23TR'));
+  assert.equal(p2.model.rev, 2);
+  assert.match(p2.revHistory[0].change, /BUY-LUG-001 qty → 12/);
+  await api('/api/models/G23TR/bom/BUY-LUG-001', { method: 'PATCH', body: JSON.stringify({ qty: 10 }) }); // restore → rev 3
+
+  // Cut edit + delete flow.
+  const railId = p.cutList.find(c => c.description === 'Main rail').cutId;
+  await api('/api/cuts/' + railId, { method: 'PATCH', body: JSON.stringify({ lengthIn: 280 }) });
+  await api('/api/cuts/' + tng.id, { method: 'DELETE' });
+  const p3 = await json(await api('/api/engineering/G23TR'));
+  assert.equal(p3.cutList.length, 2);
+  assert.equal(p3.cutList.find(c => c.description === 'Main rail').lengthIn, 280);
+
+  // Manufacturer part number rides the worksheet.
+  await api('/api/parts/BUY-AXL-3500T', { method: 'PATCH', body: JSON.stringify({ mfrPartNo: 'DX-35T-KIT' }) });
+  assert.equal((await json(await api('/api/engineering/G23TR'))).worksheet.find(r => r.partId === 'BUY-AXL-3500T').mfrPartNo, 'DX-35T-KIT');
+
+  // The office can add a steel profile; it shows up for the calculators.
+  await api('/api/engineering/profiles', { method: 'POST', body: JSON.stringify({ profile: 'HSS 2x5x3/16', lbPerFt: 8.15, stockLengthFt: 24 }) });
+  assert.ok((await json(await api('/api/engineering/G23TR'))).profiles.some(x => x.profile === 'HSS 2x5x3/16'));
+
+  // Fabricator copy on the traveler QR: public, phone-friendly, and carries NO dollar figures.
+  const pub = await fetch(BASE + '/u/' + vinUnitId + '/bom');
+  assert.equal(pub.status, 200);
+  const html = await pub.text();
+  assert.match(html, /Fabrication worksheet/);
+  assert.match(html, /REV \d/);
+  assert.ok(!/\$\s?\d/.test(html), 'no prices on the floor copy');
+});
+
 test('boat builder: dealer configurator endpoints require dealer auth', async () => {
   assert.equal((await fetch(BASE + '/api/dealer/boat-catalog')).status, 401, 'dealer catalog needs auth');
   assert.equal((await fetch(BASE + '/api/dealer/boat-build', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })).status, 401, 'dealer submit needs auth');

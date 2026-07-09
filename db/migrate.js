@@ -274,6 +274,26 @@ const colMigrations = [
   `ALTER TABLE sales_order ADD COLUMN IF NOT EXISTS unit_price NUMERIC(12,2)`,
   // The vendor's own part number — what actually goes on POs and vendor communication.
   `ALTER TABLE part ADD COLUMN IF NOT EXISTS vendor_part_no TEXT`,
+  // ── Engineering package ─────────────────────────────────────────────────────────────────
+  // The manufacturer's part number (vs. the vendor's catalog number — a distributor may sell
+  // the same Dexter axle under its own SKU).
+  `ALTER TABLE part ADD COLUMN IF NOT EXISTS mfr_part_no TEXT`,
+  // Steel profiles: published weight per foot + the stock length Built buys. Drives estimated
+  // steel weight and material-yield (stick) calculations on the cut list.
+  `CREATE TABLE IF NOT EXISTS steel_profile (profile TEXT PRIMARY KEY, lb_per_ft NUMERIC(8,3) NOT NULL,
+     stock_length_ft NUMERIC(6,1) NOT NULL DEFAULT 24)`,
+  // Cut items: the sticks cut from stock for one MADE part (weldment). The model cut list is
+  // these rows expanded by the BOM quantity, auto-numbered.
+  `CREATE TABLE IF NOT EXISTS cut_item (id SERIAL PRIMARY KEY, part_id TEXT NOT NULL, seq INT NOT NULL DEFAULT 0,
+     description TEXT NOT NULL, profile TEXT, length_in NUMERIC(8,2) NOT NULL DEFAULT 0,
+     qty NUMERIC(8,2) NOT NULL DEFAULT 1, weld_in NUMERIC(8,1) NOT NULL DEFAULT 0)`,
+  `CREATE INDEX IF NOT EXISTS idx_cut_part ON cut_item(part_id)`,
+  // BOM revision tracking: every structural BOM change bumps the model's rev and logs what
+  // changed, who, and when — the worksheet carries the rev so the floor can spot stale prints.
+  `ALTER TABLE model ADD COLUMN IF NOT EXISTS bom_rev INT NOT NULL DEFAULT 1`,
+  `CREATE TABLE IF NOT EXISTS bom_revision (id SERIAL PRIMARY KEY, model_id TEXT NOT NULL, rev INT NOT NULL,
+     change TEXT NOT NULL, changed_by TEXT, created_at TIMESTAMPTZ NOT NULL DEFAULT now())`,
+  `CREATE INDEX IF NOT EXISTS idx_bomrev_model ON bom_revision(model_id)`,
   // Bill-to vs ship-to per dealership: some dealers bill through a corporate/parent entity.
   // Blank bill_name = bill the dealership itself. The MSO's Sold-to and every invoice use the
   // bill-to; the Bill of Lading and deliveries use the dealership's own (ship-to) address.

@@ -39,6 +39,7 @@ import * as dealer from './dealer.js';
 import * as owner from './owner.js';
 import * as inventory from './inventory.js';
 import * as boatbuilder from './boatbuilder.js';
+import * as engineering from './engineering.js';
 import QRCode from 'qrcode';
 import * as dealernotify from './dealernotify.js';
 import * as storage from './storage.js';
@@ -345,6 +346,43 @@ app.get('/u/:id', portalLimiter, async (req, res) => {
   </div>` : ''}
   ${probBanner}
   ${actionCard}
+  <a href="/u/${e(req.params.id)}/bom" style="display:block;text-align:center;margin-top:16px;padding:12px;background:#fff;border:1px solid #e2e7ec;border-radius:14px;text-decoration:none;color:#1a2230;font-weight:600">📐 BOM worksheet &amp; cut list →</a>
+</div></body>`);
+});
+// Fabricator worksheet — the engineering package for this unit's model, phone-friendly and
+// read-only. Public like the traveler itself, so NO dollar figures or vendor pricing here;
+// the office sees costs in the staff app's Engineering view.
+app.get('/u/:id/bom', portalLimiter, async (req, res) => {
+  const t = await one('SELECT model_id FROM trailer WHERE id=$1', [req.params.id]).catch(() => null);
+  const pkg = t?.model_id ? await engineering.engineeringPackage(t.model_id) : null;
+  if (!pkg) return res.status(404).type('html').send('<p style="font-family:system-ui;margin:40px">Trailer unit not found.</p>');
+  const e = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  const td = 'padding:6px 8px;border-bottom:1px solid #edf0f3;font-size:12.5px';
+  const th = 'padding:6px 8px;border-bottom:2px solid #dfe4e9;font-size:11px;text-transform:uppercase;letter-spacing:.4px;color:#6b7785;text-align:left';
+  const wsRows = pkg.worksheet.map(r => `<tr><td style="${td}"><b>${e(r.partId)}</b><br><span style="color:#6b7785">${e(r.name)}</span></td>
+      <td style="${td}">${r.type === 'M' ? 'Make' : 'Buy'}</td><td style="${td};text-align:right">${r.qty} ${e(r.uom || '')}</td><td style="${td}">${e(r.stage)}</td>
+      <td style="${td}">${e(r.mfrPartNo || r.vendorPartNo || '')}</td></tr>`).join('');
+  const clRows = pkg.cutList.map(c => `<tr><td style="${td}"><b>${e(c.no)}</b></td><td style="${td}">${e(c.weldment)}</td>
+      <td style="${td}">${e(c.description)}</td><td style="${td}">${e(c.profile || '—')}</td>
+      <td style="${td};text-align:right">${e(c.length)}</td><td style="${td};text-align:right">${c.qtyPerTrailer}</td>
+      <td style="${td};text-align:right">${c.weldIn}"</td></tr>`).join('');
+  const stRows = pkg.steel.map(s => `<tr><td style="${td}">${e(s.profile)}</td><td style="${td};text-align:right">${s.totalFt} ft</td>
+      <td style="${td};text-align:right">${s.weightLb != null ? s.weightLb + ' lb' : '—'}</td>
+      <td style="${td};text-align:right">${s.sticks != null ? s.sticks + ' × ' + s.stockLengthFt + "'" : '—'}${s.oversize ? ' ⚠' : ''}</td>
+      <td style="${td};text-align:right">${s.yieldPct != null ? s.yieldPct + '%' : '—'}</td></tr>`).join('');
+  res.set('Cache-Control', 'no-store').type('html').send(`<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>BOM — ${e(pkg.model.name)}</title>
+<body style="margin:0;background:#f4f6f8"><div style="font-family:-apple-system,system-ui,sans-serif;max-width:640px;margin:0 auto;padding:24px 16px 40px;color:#1a2230">
+  <h2 style="margin:0">BUILT <span style="color:#ff7a18">TRAILERS</span></h2>
+  <p style="color:#6b7785;margin:2px 0 4px">Fabrication worksheet — ${e(pkg.model.name)}</p>
+  <p style="margin:0 0 14px"><span style="background:#1a2230;color:#fff;border-radius:6px;padding:2px 9px;font-size:12px;font-weight:700">REV ${pkg.model.rev}</span>
+    <span style="color:#6b7785;font-size:12px"> · ${pkg.totals.cutCount} cuts · ${pkg.totals.steelWeightLb} lb steel · ${pkg.welds.totalIn}" weld</span></p>
+  <div style="background:#fff;border:1px solid #e2e7ec;border-radius:14px;padding:14px;overflow-x:auto"><b style="font-size:14px">Bill of materials</b>
+    <table style="border-collapse:collapse;width:100%;margin-top:6px"><thead><tr><th style="${th}">Part</th><th style="${th}">Type</th><th style="${th};text-align:right">Qty</th><th style="${th}">Stage</th><th style="${th}">Mfr / vendor #</th></tr></thead><tbody>${wsRows}</tbody></table></div>
+  <div style="background:#fff;border:1px solid #e2e7ec;border-radius:14px;padding:14px;margin-top:14px;overflow-x:auto"><b style="font-size:14px">Cut list</b>
+    ${pkg.cutList.length ? `<table style="border-collapse:collapse;width:100%;margin-top:6px"><thead><tr><th style="${th}">No.</th><th style="${th}">Weldment</th><th style="${th}">Cut</th><th style="${th}">Profile</th><th style="${th};text-align:right">Length</th><th style="${th};text-align:right">Qty</th><th style="${th};text-align:right">Weld</th></tr></thead><tbody>${clRows}</tbody></table>` : '<p style="color:#6b7785;font-size:13px">No cut items defined for this model\'s weldments yet — the office adds them in BOMs &amp; Cost → Engineering.</p>'}</div>
+  ${pkg.steel.length ? `<div style="background:#fff;border:1px solid #e2e7ec;border-radius:14px;padding:14px;margin-top:14px;overflow-x:auto"><b style="font-size:14px">Steel</b>
+    <table style="border-collapse:collapse;width:100%;margin-top:6px"><thead><tr><th style="${th}">Profile</th><th style="${th};text-align:right">Total</th><th style="${th};text-align:right">Weight</th><th style="${th};text-align:right">Sticks</th><th style="${th};text-align:right">Yield</th></tr></thead><tbody>${stRows}</tbody></table></div>` : ''}
+  <a href="/u/${e(req.params.id)}" style="display:block;text-align:center;margin-top:16px;color:#6b7785;font-size:13px">← back to the unit</a>
 </div></body>`);
 });
 // PIN-gated stage advance from the station page. loginLimiter throttles PIN guessing.
@@ -915,7 +953,7 @@ app.get('/api/parts', authMiddleware, async (_req, res) => {
                             FROM part p LEFT JOIN vendor v ON v.id=p.vendor_id ORDER BY p.type DESC, p.id`, []);
   res.json(rows.map(p => ({
     id: p.id, name: p.name, type: p.type, vendor: p.vendor_name, vendorId: p.vendor_id, vendorStatus: p.vendor_status, leadDays: p.lead_days,
-    uom: p.uom, spec: p.spec, cost: Number(p.cost), onHand: p.on_hand, reorder: p.reorder, vendorPartNo: p.vendor_part_no,
+    uom: p.uom, spec: p.spec, cost: Number(p.cost), onHand: p.on_hand, reorder: p.reorder, vendorPartNo: p.vendor_part_no, mfrPartNo: p.mfr_part_no,
     cushion: p.cushion, lot: p.lot, active: p.active !== false, extValue: Number(p.cost) * p.on_hand,
     status: p.on_hand < p.reorder ? 'below' : (p.on_hand < p.reorder + p.cushion ? 'low' : 'ok')
   })));
@@ -959,19 +997,20 @@ function requirePartsEdit(req, res, next) {
 app.patch('/api/parts/:id', authMiddleware, requirePartsEdit, async (req, res) => {
   const cur = await one('SELECT * FROM part WHERE id=$1', [req.params.id]);
   if (!cur) return res.status(404).json({ error: 'not found' });
-  const { name, cost, uom, spec, type, reorder, cushion, lot, active, vendorId, vendorPartNo, newId } = req.body || {};
+  const { name, cost, uom, spec, type, reorder, cushion, lot, active, vendorId, vendorPartNo, mfrPartNo, newId } = req.body || {};
   if (vendorId !== undefined && vendorId && !await one('SELECT id FROM vendor WHERE id=$1', [vendorId]))
     return res.status(400).json({ error: 'Vendor not found' });
   if (type !== undefined && !['B', 'M'].includes(type)) return res.status(400).json({ error: "type must be 'B' (buy) or 'M' (make)" });
   const newVendorId = vendorId !== undefined ? (vendorId || null) : cur.vendor_id;
   await q(`UPDATE part SET name=$1, cost=$2, uom=$3, spec=$4, type=$5, reorder=$6, cushion=$7, lot=$8, active=$9,
-                           vendor_id=$10, vendor_part_no=$11 WHERE id=$12`,
+                           vendor_id=$10, vendor_part_no=$11, mfr_part_no=$12 WHERE id=$13`,
     [String(name ?? cur.name).trim() || cur.name, cost ?? cur.cost,
      uom !== undefined ? (String(uom).trim() || null) : cur.uom,
      spec !== undefined ? (String(spec).trim() || null) : cur.spec,
      type ?? cur.type, reorder ?? cur.reorder, cushion ?? cur.cushion, lot ?? cur.lot,
      active !== undefined ? !!active : (cur.active !== false), newVendorId,
      vendorPartNo !== undefined ? (String(vendorPartNo).trim() || null) : cur.vendor_part_no,
+     mfrPartNo !== undefined ? (String(mfrPartNo).trim() || null) : cur.mfr_part_no,
      req.params.id]);
   if (cost != null && Number(cost) !== Number(cur.cost))
     await audit(req, 'part.cost', `${req.params.id}: ${cur.cost} -> ${cost}`);
@@ -1044,6 +1083,7 @@ app.post('/api/models/:id/bom', authMiddleware, requireTier('admin'), async (req
   await q('INSERT INTO bom_line(model_id,part_id,qty) VALUES ($1,$2,$3) ON CONFLICT(model_id,part_id) DO UPDATE SET qty=$3',
     [req.params.id, partId, Number(qty)]);
   await audit(req, 'bom.update', `${req.params.id}+${partId} qty=${qty}`);
+  await engineering.bumpBomRev(req.params.id, `${partId} set to qty ${qty}`, req.user.id);
   res.json({ ok: true });
 });
 app.patch('/api/models/:id/bom/:partId', authMiddleware, requireTier('admin'), async (req, res) => {
@@ -1051,12 +1091,38 @@ app.patch('/api/models/:id/bom/:partId', authMiddleware, requireTier('admin'), a
   if (!qty) return res.status(400).json({ error: 'qty required' });
   await q('UPDATE bom_line SET qty=$1 WHERE model_id=$2 AND part_id=$3', [Number(qty), req.params.id, req.params.partId]);
   await audit(req, 'bom.update', `${req.params.id} ${req.params.partId} qty=${qty}`);
+  await engineering.bumpBomRev(req.params.id, `${req.params.partId} qty → ${qty}`, req.user.id);
   res.json({ ok: true });
 });
 app.delete('/api/models/:id/bom/:partId', authMiddleware, requireTier('admin'), async (req, res) => {
   await q('DELETE FROM bom_line WHERE model_id=$1 AND part_id=$2', [req.params.id, req.params.partId]);
   await audit(req, 'bom.delete', `${req.params.id} ${req.params.partId}`);
+  await engineering.bumpBomRev(req.params.id, `${req.params.partId} removed`, req.user.id);
   res.json({ ok: true });
+});
+
+// ---- 📐 engineering package: worksheet + cut list + steel + welds + revisions ----
+app.get('/api/engineering/:modelId', authMiddleware, async (req, res) => {
+  const pkg = await engineering.engineeringPackage(req.params.modelId);
+  if (!pkg) return res.status(404).json({ error: 'Model not found' });
+  res.json(pkg);
+});
+app.post('/api/parts/:id/cuts', authMiddleware, requirePartsEdit, async (req, res) => {
+  try { res.json(await engineering.addCut(req.params.id, req.body || {})); await audit(req, 'cut.add', `${req.params.id}: ${req.body?.description}`); }
+  catch (e) { res.status(400).json({ error: e.message }); }
+});
+app.patch('/api/cuts/:cutId', authMiddleware, requirePartsEdit, async (req, res) => {
+  try { res.json(await engineering.updateCut(req.params.cutId, req.body || {})); await audit(req, 'cut.update', `#${req.params.cutId}`); }
+  catch (e) { res.status(400).json({ error: e.message }); }
+});
+app.delete('/api/cuts/:cutId', authMiddleware, requirePartsEdit, async (req, res) => {
+  await engineering.deleteCut(req.params.cutId);
+  await audit(req, 'cut.delete', `#${req.params.cutId}`);
+  res.json({ ok: true });
+});
+app.post('/api/engineering/profiles', authMiddleware, requirePartsEdit, async (req, res) => {
+  try { res.json(await engineering.upsertProfile(req.body?.profile, req.body?.lbPerFt, req.body?.stockLengthFt)); }
+  catch (e) { res.status(400).json({ error: e.message }); }
 });
 app.post('/api/models/:id/labor', authMiddleware, requireTier('admin'), async (req, res) => {
   const { ws, hours, rate } = req.body || {};
@@ -1131,6 +1197,12 @@ app.post('/api/bom-change-requests/:id/approve', authMiddleware, requireSection(
   const u = req.user;
   await q(`UPDATE bom_change_request SET status='approved',reviewed_by=$1,reviewer_name=$2,reviewed_at=now() WHERE id=$3`, [u.id, u.name, cr.id]);
   await audit(req, 'bom.approved', `CR#${cr.id} ${cr.model_id} ${cr.op}`);
+  // Structural BOM changes bump the model's engineering revision (labor edits don't change
+  // what the floor builds, so they don't).
+  if (['update_qty', 'add_part', 'remove_part'].includes(cr.op)) {
+    const what = cr.op === 'update_qty' ? `${p.partId} qty → ${p.newQty}` : cr.op === 'add_part' ? `${p.partId} added (qty ${p.qty})` : `${p.partId} removed`;
+    await engineering.bumpBomRev(cr.model_id, `${what} (CR#${cr.id} by ${cr.requester_name || 'staff'})`, u.id);
+  }
   res.json({ ok: true });
 });
 
@@ -2839,6 +2911,7 @@ await ensureSchema();
   // Boat Trailer Builder catalog (Nautique boats + options) — idempotent, never overwrites
   // office-edited prices. After ensureSchema so its tables + the part table exist.
   await boatbuilder.ensureBoatCatalog().catch(e => log('warn', 'boatCatalog', { error: e.message }));
+  await engineering.ensureEngineering().catch(e => log('warn', 'engineering', { error: e.message }));
   // Built Trailers' real dealer network -> customer table for the public locator. One-time
   // (app_config flag) so later office edits to a dealer aren't overwritten on the next reboot.
   await ensureDealers().catch(e => log('warn', 'dealerSeed', { error: e.message }));
