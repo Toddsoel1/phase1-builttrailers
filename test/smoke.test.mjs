@@ -2156,4 +2156,29 @@ test('🔩 dealer parts channel: tiered pricing, VIN lookup, lifecycle → invoi
   // Gates: dealer endpoints need dealer auth; the staff queue needs Sales.
   assert.equal((await fetch(BASE + '/api/dealer/parts-catalog?q=x')).status, 401);
   assert.equal((await fetch(BASE + '/api/dealer/parts-orders', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })).status, 401);
+
+  // "Call for price": unpriced parts never quote $0 — they take a price request instead.
+  await api('/api/parts', { method: 'POST', body: JSON.stringify({ id: 'MK-PROBE-NEW', name: 'Probe Unpriced Bracket', cost: 0 }) });
+  const cat2 = await json(await fetch(BASE + '/api/dealer/parts-catalog?q=Probe%20Unpriced', { headers: d1.H }));
+  const up = cat2.lines.find(l => l.partId === 'MK-PROBE-NEW');
+  assert.equal(up.unpriced, true);
+  assert.equal(up.dealerPrice, null, 'no $0 quotes');
+  assert.equal(up.priceRequested, false);
+  assert.equal((await fetch(BASE + '/api/dealer/parts-orders', { method: 'POST', headers: d1.H,
+    body: JSON.stringify({ method: 'pickup', lines: [{ partId: 'MK-PROBE-NEW', qty: 1 }] }) })).status, 400, 'unpriced parts cannot be ordered');
+  assert.equal((await fetch(BASE + '/api/dealer/price-requests', { method: 'POST', headers: d1.H, body: JSON.stringify({ partId: 'MK-PROBE-NEW', note: 'customer asking' }) })).status, 200);
+  assert.equal((await fetch(BASE + '/api/dealer/price-requests', { method: 'POST', headers: d1.H, body: JSON.stringify({ partId: 'MK-PROBE-NEW' }) })).status, 400, 'one open request per part per dealership');
+  const cat3 = await json(await fetch(BASE + '/api/dealer/parts-catalog?q=Probe%20Unpriced', { headers: d1.H }));
+  assert.equal(cat3.lines.find(l => l.partId === 'MK-PROBE-NEW').priceRequested, true, 'the dealer sees their request is in');
+  // Staff queue → publish a cost → pricing live, request resolved.
+  const reqs = await json(await api('/api/price-requests'));
+  const pr = reqs.find(r => r.partId === 'MK-PROBE-NEW');
+  assert.ok(pr && pr.dealership === 'Parts Test Dealership 1');
+  assert.equal((await api('/api/price-requests/' + pr.id + '/resolve', { method: 'POST', body: '{}' })).status, 400, 'resolving without a cost would send them back to Call-for-price');
+  const pub = await json(await api('/api/price-requests/' + pr.id + '/resolve', { method: 'POST', body: JSON.stringify({ cost: 60 }) }));
+  assert.equal(pub.dealerPrice, 160, '60 / 0.5 / 0.75 publishes instantly');
+  const cat4 = await json(await fetch(BASE + '/api/dealer/parts-catalog?q=Probe%20Unpriced', { headers: d1.H }));
+  const nowPriced = cat4.lines.find(l => l.partId === 'MK-PROBE-NEW');
+  assert.ok(!nowPriced.unpriced && nowPriced.dealerPrice === 160 && nowPriced.msrp === 320 && nowPriced.map === 266.67);
+  assert.equal((await json(await api('/api/price-requests'))).filter(r => r.partId === 'MK-PROBE-NEW').length, 0, 'request leaves the queue');
 });

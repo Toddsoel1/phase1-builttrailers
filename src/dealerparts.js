@@ -27,8 +27,62 @@ export function partPricing(cost) {
   return { dealerPrice, msrp: r2(dealerPrice / (1 - MSRP_MARGIN)), map: r2(dealerPrice / (1 - MAP_MARGIN)) };
 }
 
-const priced = p => ({ partId: p.part_id || p.id, name: p.name, uom: p.uom || 'EA',
-  stage: p.stage || null, qty: p.qty != null ? Number(p.qty) : null, ...partPricing(p.cost) });
+// Cost 0 = pricing not yet populated: the catalog says "Call for price" instead of quoting $0,
+// and the part can't be ordered until Built publishes a cost.
+const priced = p => {
+  const base = { partId: p.part_id || p.id, name: p.name, uom: p.uom || 'EA',
+    stage: p.stage || null, qty: p.qty != null ? Number(p.qty) : null };
+  if (!(Number(p.cost) > 0)) return { ...base, unpriced: true, dealerPrice: null, msrp: null, map: null };
+  return { ...base, ...partPricing(p.cost) };
+};
+
+// Flag which unpriced lines this dealership has already asked about.
+export async function annotateRequested(lines, customerId) {
+  if (!customerId || !Array.isArray(lines) || !lines.some(l => l.unpriced)) return lines;
+  const open = new Set((await all(`SELECT part_id FROM price_request WHERE customer_id=$1 AND status='open'`, [customerId])).map(r => r.part_id));
+  for (const l of lines) if (l.unpriced) l.priceRequested = open.has(l.partId);
+  return lines;
+}
+
+export async function requestPrice(d, partId, note) {
+  if (!d.customer_id) throw new Error('Your account is not linked to a dealer record yet — contact Built Trailers.');
+  const p = await one('SELECT id, cost, active FROM part WHERE id=$1', [String(partId || '').trim()]);
+  if (!p || p.active === false) throw new Error('Part not found in the catalog.');
+  if (Number(p.cost) > 0) throw new Error('This part is already priced — refresh the catalog.');
+  if (await one(`SELECT id FROM price_request WHERE part_id=$1 AND customer_id=$2 AND status='open'`, [p.id, d.customer_id]))
+    throw new Error('You already have a price request in for this part — Built Trailers is on it.');
+  await q('INSERT INTO price_request(part_id, customer_id, dealer_user_id, note) VALUES ($1,$2,$3,$4)',
+    [p.id, d.customer_id, d.id || null, String(note || '').trim() || null]);
+  return { ok: true, requested: true };
+}
+
+export async function listPriceRequests() {
+  return (await all(
+    `SELECT r.id, r.part_id, r.note, r.created_at, c.name AS dealership, p.name AS part_name, p.cost
+       FROM price_request r JOIN customer c ON c.id=r.customer_id JOIN part p ON p.id=r.part_id
+      WHERE r.status='open' ORDER BY r.id`, [])).map(r => ({
+    id: r.id, partId: r.part_id, partName: r.part_name, dealership: r.dealership,
+    note: r.note, at: r.created_at, currentCost: Number(r.cost) || 0,
+  }));
+}
+
+// Resolving usually means publishing the cost right here — pricing goes live for every dealer
+// the moment it lands. Any open request for the same part resolves with it.
+export async function resolvePriceRequest(id, cost, user) {
+  const r = await one(`SELECT * FROM price_request WHERE id=$1 AND status='open'`, [id]);
+  if (!r) throw new Error('Price request not found (or already resolved).');
+  if (cost != null && cost !== '') {
+    if (!(Number(cost) > 0)) throw new Error('Cost must be greater than zero.');
+    await q('UPDATE part SET cost=$1 WHERE id=$2', [Number(cost), r.part_id]);
+  }
+  const priced2 = Number((await one('SELECT cost FROM part WHERE id=$1', [r.part_id]))?.cost) > 0;
+  if (!priced2) throw new Error('Set the part\'s cost first (or enter one here) — resolving without a price would send the dealer back to "Call for price".');
+  await q(`UPDATE price_request SET status='resolved', resolved_at=now(), resolved_by=$1 WHERE part_id=$2 AND status='open'`,
+    [user?.id || null, r.part_id]);
+  await q('INSERT INTO audit_log(user_id,action,detail) VALUES ($1,$2,$3)',
+    [user?.id || null, 'dealerparts.price', `${r.part_id} priced${cost != null && cost !== '' ? ' at $' + Number(cost) : ''} — request #${id} resolved`]).catch(() => {});
+  return { ok: true, ...partPricing(Number((await one('SELECT cost FROM part WHERE id=$1', [r.part_id])).cost)) };
+}
 
 // A model's current parts list (optionally with one order's configured deltas applied — the
 // exact build). Dealers get pricing tiers only; Built's cost never leaves this module.
@@ -126,6 +180,7 @@ export async function submitPartsOrder(d, { vin, method, note, lines }) {
     if (!Number.isFinite(l.qty) || l.qty <= 0) throw new Error(`Quantity for ${l.partId} must be greater than zero.`);
     const p = await one('SELECT id, name, cost, active FROM part WHERE id=$1', [l.partId]);
     if (!p || p.active === false) throw new Error(`Part ${l.partId} isn't in the current catalog.`);
+    if (!(Number(p.cost) > 0)) throw new Error(`${l.partId} is "Call for price" — submit a price request from the catalog and Built Trailers will publish it.`);
     rows.push({ ...l, unitPrice: partPricing(p.cost).dealerPrice }); // price frozen NOW
   }
   const total = r2(rows.reduce((s, l) => s + l.qty * l.unitPrice, 0));

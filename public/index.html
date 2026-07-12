@@ -2585,7 +2585,7 @@ async function viewOrders(){
   $('pTitle').textContent='Production Flow';
   $('pSub').textContent=ordView==='queue'?('Production priority — '+(canReorder()?'use ↑ ↓ to resequence':'read-only')):('Production Flow pipeline — '+(canEdit()?'drag a card to change its stage':'read-only'));
   $('pActions').innerHTML=(canEdit()?`<button class="btn sm sec" onclick="wipLimitsModal()" title="Cap how many orders may sit in each production stage">🚧 WIP limits</button> `:'')+(canSell()?`<button class="btn" onclick="go('neworder')">➕ New Order</button>`:'');
-  const [{stages,orders,wipLimits={}},stockReqs,partsOrders]=await Promise.all([api('/api/orders'),api('/api/stock-requests').catch(()=>[]),canSell()?api('/api/parts-orders').catch(()=>[]):Promise.resolve([])]);
+  const [{stages,orders,wipLimits={}},stockReqs,partsOrders,priceReqs]=await Promise.all([api('/api/orders'),api('/api/stock-requests').catch(()=>[]),canSell()?api('/api/parts-orders').catch(()=>[]):Promise.resolve([]),canSell()?api('/api/price-requests').catch(()=>[]):Promise.resolve([])]);
   window._wipLimits=wipLimits;
   const live=orders.filter(o=>!o.billed && o.stage!=='Cancelled'); // invoiced + rejected drop off the board
   const reqCard=stockReqs.length?`<div class="card" style="margin-bottom:14px;border-color:var(--accent)"><h3>🏷️ Dealer stock requests <span class="badge b-low">${stockReqs.length}</span></h3>
@@ -2608,9 +2608,18 @@ async function viewOrders(){
       ${p.status==='ready'?`<button class="btn sm" onclick="advPartsOrder(${p.id},'complete')">${p.method==='ship'?'🚚 Shipped — invoice':'🤝 Picked up — invoice'}</button>`:''}
       <button class="btn sm sec" onclick="advPartsOrder(${p.id},'cancel')">✕ Cancel</button>
     </div>`;}).join('')}</div>`:'';
+  const prCard=(priceReqs||[]).length?`<div class="card" style="margin-bottom:14px;border-color:var(--accent)"><h3>📞 Dealer price requests <span class="badge b-low">${priceReqs.length}</span></h3>
+    <p class="muted" style="font-size:12px;margin-bottom:8px">These parts show “Call for price” in the dealer catalog. Publish a cost and the dealer/MSRP/MAP pricing goes live for everyone instantly.</p>
+    ${priceReqs.map(r=>`<div style="display:flex;gap:10px;align-items:center;padding:8px 0;border-bottom:1px solid var(--line);flex-wrap:wrap">
+      <div style="flex:1;min-width:220px"><b style="font-size:13.5px">${esc(r.partId)}</b> ${esc(r.partName)}
+        <div class="muted" style="font-size:11.5px">${esc(r.dealership)} · ${new Date(r.at).toLocaleDateString()}${r.note?' — “'+esc(r.note)+'”':''}</div></div>
+      ${canEditParts()?`<span style="white-space:nowrap">$ <input type="number" id="prc_${r.id}" min="0.01" step="0.01" placeholder="our cost" style="width:90px"></span>
+      <button class="btn sm" onclick="resolvePriceReq(${r.id})">💲 Set cost &amp; publish</button>`
+      :`<button class="btn sm sec" onclick="resolvePriceReq(${r.id})" title="Needs the cost already set in the Parts Master">✓ Resolve (cost already set)</button>`}
+    </div>`).join('')}</div>`:'';
   const rejected=orders.filter(o=>o.stage==='Cancelled');
   const viewToggle=`<div class="tabs" style="margin-bottom:12px"><button class="${ordView==='board'?'active':''}" onclick="ordView='board';viewOrders()">🗂️ Board</button><button class="${ordView==='queue'?'active':''}" onclick="ordView='queue';viewOrders()">🏭 Production Queue</button>${rejected.length?`<button class="${ordView==='rejected'?'active':''}" onclick="ordView='rejected';viewOrders()">🚫 Rejected <span style="opacity:.7">${rejected.length}</span></button>`:''}</div>`;
-  if(ordView==='queue'){ $('content').innerHTML=viewToggle+reqCard+partsCard+renderQueue(orders); return; }
+  if(ordView==='queue'){ $('content').innerHTML=viewToggle+reqCard+partsCard+prCard+renderQueue(orders); return; }
   if(ordView==='rejected'){ $('content').innerHTML=viewToggle+renderRejected(rejected); return; }
   const types=['All',...Array.from(new Set(live.map(o=>o.type)))];
   const filtered=ordFilter==='All'?live:live.filter(o=>o.type===ordFilter);
@@ -2628,7 +2637,14 @@ async function viewOrders(){
    <table><thead><tr><th>Type</th><th class="right">Open orders</th><th class="right">Units</th><th class="right">Backlog value</th></tr></thead><tbody>
    ${Array.from(new Set(live.map(o=>o.type))).map(t=>{const os=live.filter(o=>o.type===t);return `<tr><td><b>${t}</b></td><td class="right">${os.length}</td><td class="right">${os.reduce((a,o)=>a+o.qty,0)}</td><td class="right">${money(os.reduce((a,o)=>a+o.revenue,0))}</td></tr>`;}).join('')}
    </tbody></table></div>`;
-  $('content').innerHTML=viewToggle+reqCard+partsCard+tabs+board+summary;
+  $('content').innerHTML=viewToggle+reqCard+partsCard+prCard+tabs+board+summary;
+}
+async function resolvePriceReq(id){
+  const el=$('prc_'+id); const cost=el?Number(el.value):null;
+  if(el&&!(cost>0)){toast('Enter our cost — pricing publishes from it');return;}
+  try{ const r=await api('/api/price-requests/'+id+'/resolve',{method:'POST',body:JSON.stringify(el?{cost}:{})});
+    toast('Published — dealer '+money2(r.dealerPrice)+' / MSRP '+money2(r.msrp)+' / MAP '+money2(r.map)); viewOrders(); }
+  catch(e){ toast(e.message); }
 }
 async function advPartsOrder(id,action,short){
   if(action==='cancel'&&!confirm('Cancel this dealer parts order? Fulfilled stock goes back on the shelf.'))return;

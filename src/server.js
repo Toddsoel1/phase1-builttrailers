@@ -526,14 +526,36 @@ app.post('/api/dealer/orders', dealer.dealerAuth, dealer.dealerRole('sales'), as
 // or by part number / description / build stage. Pricing tiers only — cost never leaves.
 app.get('/api/dealer/parts-catalog', dealer.dealerAuth, async (req, res) => {
   try {
-    if (req.query.vin) return res.json(await dealerparts.vinLookup(req.query.vin, req.dealer.customer_id));
+    const cid = req.dealer.customer_id;
+    if (req.query.vin) {
+      const out = await dealerparts.vinLookup(req.query.vin, cid);
+      if (out.lines) await dealerparts.annotateRequested(out.lines, cid);
+      return res.json(out);
+    }
     if (req.query.modelId) {
       const m = await one('SELECT id, name FROM model WHERE id=$1', [req.query.modelId]);
       if (!m) return res.status(404).json({ error: 'Model not found' });
-      return res.json({ suggested: true, modelId: m.id, modelName: m.name, lines: await dealerparts.catalogForModel(m.id) });
+      return res.json({ suggested: true, modelId: m.id, modelName: m.name,
+        lines: await dealerparts.annotateRequested(await dealerparts.catalogForModel(m.id), cid) });
     }
-    res.json({ lines: await dealerparts.catalogSearch({ q: req.query.q, stage: req.query.stage }) });
+    res.json({ lines: await dealerparts.annotateRequested(await dealerparts.catalogSearch({ q: req.query.q, stage: req.query.stage }), cid) });
   } catch (e) { res.status(400).json({ error: e.message }); }
+});
+// "Call for price": a dealer asks Built to publish pricing for an unpriced part.
+app.post('/api/dealer/price-requests', dealer.dealerAuth, async (req, res) => {
+  try { res.json(await dealerparts.requestPrice(req.dealer, req.body?.partId, req.body?.note)); }
+  catch (e) { res.status(400).json({ error: e.message }); }
+});
+app.get('/api/price-requests', authMiddleware, requireSales, async (_req, res) => {
+  res.json(await dealerparts.listPriceRequests());
+});
+app.post('/api/price-requests/:id/resolve', authMiddleware, requireSales, async (req, res) => {
+  const settingCost = req.body?.cost != null && req.body.cost !== '';
+  const mayEditCost = req.user.role === 'admin'
+    || (req.user.role !== 'viewer' && Array.isArray(req.user.sections) && req.user.sections.includes('parts_edit'));
+  if (settingCost && !mayEditCost) return res.status(403).json({ error: "Setting a part's cost needs the 'Parts — edit' grant or an admin." });
+  try { res.json(await dealerparts.resolvePriceRequest(Number(req.params.id), settingCost ? req.body.cost : null, req.user)); }
+  catch (e) { res.status(400).json({ error: e.message }); }
 });
 app.post('/api/dealer/parts-orders', dealer.dealerAuth, dealer.dealerRole('sales'), async (req, res) => {
   try { res.json(await dealerparts.submitPartsOrder(req.dealer, req.body || {})); }

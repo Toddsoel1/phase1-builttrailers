@@ -308,6 +308,13 @@ const colMigrations = [
   `CREATE TABLE IF NOT EXISTS dealer_parts_line (id SERIAL PRIMARY KEY, order_id INT NOT NULL,
      part_id TEXT NOT NULL, qty NUMERIC(12,2) NOT NULL, unit_price NUMERIC(12,2) NOT NULL,
      unit_cost NUMERIC(12,2))`,
+  // Unpriced parts (cost 0) show "Call for price" in the dealer catalog — a dealer can submit
+  // a price request; resolving it (usually by setting the part's cost) publishes the pricing.
+  `CREATE TABLE IF NOT EXISTS price_request (id SERIAL PRIMARY KEY, part_id TEXT NOT NULL,
+     customer_id TEXT NOT NULL, dealer_user_id TEXT, note TEXT,
+     status TEXT NOT NULL DEFAULT 'open', created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+     resolved_at TIMESTAMPTZ, resolved_by TEXT)`,
+  `CREATE INDEX IF NOT EXISTS idx_preq_status ON price_request(status)`,
   `CREATE INDEX IF NOT EXISTS idx_dpl_order ON dealer_parts_line(order_id)`,
   `CREATE INDEX IF NOT EXISTS idx_dpo_status ON dealer_parts_order(status)`,
   // Bill-to vs ship-to per dealership: some dealers bill through a corporate/parent entity.
