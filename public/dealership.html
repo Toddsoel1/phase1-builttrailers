@@ -121,6 +121,7 @@ footer a{color:var(--accent)}
       <button id="tabOrders" class="active" onclick="showDash('orders')">Orders</button>
       <button id="tabBuild" onclick="showDash('build')">🚤 Build a Boat</button>
       <button id="tabStock" onclick="showDash('stock')">🏷️ Stock</button>
+      <button id="tabParts" onclick="showDash('parts')">🔩 Parts</button>
       <button id="tabReg" onclick="showDash('reg')">Register a Trailer</button>
       <button id="tabMine" onclick="showDash('mine')">My Registrations</button>
       <button id="tabClaims" onclick="showDash('claims')">Claims</button>
@@ -173,6 +174,12 @@ footer a{color:var(--accent)}
       <h2>Stock trailers</h2>
       <p class="lead">Unsold builds in the models you carry — finished units you can take today, plus what's coming through production. Request one and Built Trailers confirms it; first come, first served.</p>
       <div id="stockBody"><p class="lead">Loading…</p></div>
+    </div>
+
+    <div id="paneParts" class="card hidden">
+      <h2>🔩 Parts</h2>
+      <p class="lead">Enter a VIN to see the exact parts on that trailer, or search by part number, description, or the build stage it's used in. Your price is <b>Dealer</b>; quote your customer with <b>MSRP</b> (don't advertise below <b>MAP</b>).</p>
+      <div id="partsBody"><p class="lead">Loading…</p></div>
     </div>
 
     <div id="paneReg" class="card">
@@ -244,7 +251,7 @@ async function api(path,opts={}){
   if(!r.ok) throw new Error(d.error||('Error '+r.status)); return d;
 }
 function showAuth(t){['login','signup','forgot','reset'].forEach(p=>$('pane'+p[0].toUpperCase()+p.slice(1)).classList.toggle('hidden',p!==t));$('tabLogin').classList.toggle('active',t==='login');$('tabSignup').classList.toggle('active',t==='signup');}
-function showDash(t){for(const k of ['orders','build','stock','reg','mine','claims','invoices','docs','team','notif']){const pe=$('pane'+k[0].toUpperCase()+k.slice(1)),tb=$('tab'+k[0].toUpperCase()+k.slice(1));if(pe)pe.classList.toggle('hidden',k!==t);if(tb)tb.classList.toggle('active',k===t);}({orders:loadOrders,build:loadBuild,stock:loadStock,mine:loadMine,claims:loadClaims,notif:loadNotifs,invoices:loadInvoices,docs:loadDocs,team:loadTeam}[t]||(()=>{}))();}
+function showDash(t){for(const k of ['orders','build','stock','parts','reg','mine','claims','invoices','docs','team','notif']){const pe=$('pane'+k[0].toUpperCase()+k.slice(1)),tb=$('tab'+k[0].toUpperCase()+k.slice(1));if(pe)pe.classList.toggle('hidden',k!==t);if(tb)tb.classList.toggle('active',k===t);}({orders:loadOrders,build:loadBuild,stock:loadStock,parts:loadParts,mine:loadMine,claims:loadClaims,notif:loadNotifs,invoices:loadInvoices,docs:loadDocs,team:loadTeam}[t]||(()=>{}))();}
 async function loadInvoices(){
   try{const r=await api('/api/dealer/invoices');
     $('invBody').innerHTML=`<div class="row" style="margin-bottom:14px">
@@ -444,6 +451,126 @@ async function trackOrder(id){
     ${(p.vins&&p.vins.length)?`<div class="mono" style="font-size:12px;margin-bottom:10px">VIN${p.vins.length>1?'s':''}: ${p.vins.join(', ')}</div>`:''}
     ${steps}
     <button class="btn sec" style="width:100%;margin-top:14px" onclick="dclose()">Close</button>`);
+}
+
+// ---- 🔩 Dealer parts catalog & ordering ----
+let PCART=[], PLOOK=null, PLINES=[];
+const p$=n=>'$'+Number(n||0).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});
+function loadParts(){
+  $('partsBody').innerHTML=`
+    <div class="row" style="align-items:flex-end;gap:10px;flex-wrap:wrap">
+      <div style="flex:1;min-width:200px"><label>VIN — exact parts for a trailer</label><input id="pVin" placeholder="17-character VIN" maxlength="17" style="text-transform:uppercase"></div>
+      <button class="btn" onclick="partsVin()">Look up VIN</button>
+    </div>
+    <div class="row" style="align-items:flex-end;gap:10px;flex-wrap:wrap;margin-top:10px">
+      <div style="flex:2;min-width:200px"><label>Search parts — number or description</label><input id="pQ" placeholder="e.g. hub, 15513, LED lamp" onkeydown="if(event.key==='Enter')partsSearch()"></div>
+      <div><label>Portion of the trailer</label><select id="pStage"><option value="">Any</option><option>Build</option><option>Paint/Powder Coat</option><option>Finish</option></select></div>
+      <button class="btn" onclick="partsSearch()">Search</button>
+    </div>
+    <div id="pNote"></div>
+    <div id="pResults" style="margin-top:12px"></div>
+    <div id="pCart" style="margin-top:16px"></div>
+    <h3 style="margin:22px 0 6px">My parts orders</h3>
+    <div id="pOrders"><p class="lead">Loading…</p></div>`;
+  renderPCart(); loadPartsOrders();
+}
+async function partsVin(){
+  const vin=$('pVin').value.trim(); if(!vin) return;
+  $('pNote').innerHTML='<p class="lead">Looking up…</p>';
+  try{ PLOOK=await api('/api/dealer/parts-catalog?vin='+encodeURIComponent(vin)); renderPLookup(); }
+  catch(e){ $('pNote').innerHTML='<p class="msg err">'+e.message+'</p>'; $('pResults').innerHTML=''; }
+}
+function renderPLookup(){
+  const d=PLOOK;
+  let note='';
+  if(d.exact) note=`<p class="msg ok">✓ ${d.modelName} — exact parts for VIN ${d.vin}.</p>`;
+  else if(d.suggested) note=`<p class="msg" style="background:#fff7ed;border-color:#fdba74">${d.note} <b>${d.modelName||''}</b>${(d.altModels||[]).length?` · also matches: ${d.altModels.map(m=>`<a href="#" onclick="partsModel('${m.id}');return false">${m.id}</a>`).join(', ')}`:''}</p>`;
+  else if(d.unknown) note=`<p class="msg" style="background:#fff7ed;border-color:#fdba74">${d.note}</p>
+    <select id="pPick" style="max-width:340px">${(d.models||[]).map(m=>`<option value="${m.id}">${m.category} · ${m.id} — ${m.name}</option>`).join('')}</select>
+    <button class="btn" style="margin-left:6px" onclick="partsModel($('pPick').value)">Show parts</button>`;
+  $('pNote').innerHTML=note;
+  renderPartsTable(d.lines||[]);
+}
+async function partsModel(modelId){
+  try{ PLOOK=await api('/api/dealer/parts-catalog?modelId='+encodeURIComponent(modelId));
+    $('pNote').innerHTML=`<p class="msg" style="background:#fff7ed;border-color:#fdba74">Current parts for <b>${PLOOK.modelName}</b> — suggested for pre-system trailers of this model.</p>`;
+    renderPartsTable(PLOOK.lines||[]); }catch(e){ $('pNote').innerHTML='<p class="msg err">'+e.message+'</p>'; }
+}
+async function partsSearch(){
+  const q=$('pQ').value.trim(), st=$('pStage').value;
+  if(!q&&!st) return;
+  $('pResults').innerHTML='<p class="lead">Searching…</p>';
+  try{ const d=await api('/api/dealer/parts-catalog?q='+encodeURIComponent(q)+(st?'&stage='+encodeURIComponent(st):''));
+    PLOOK=null; $('pNote').innerHTML=''; renderPartsTable(d.lines||[]); }
+  catch(e){ $('pResults').innerHTML='<p class="msg err">'+e.message+'</p>'; }
+}
+function renderPartsTable(lines){
+  PLINES=lines;
+  if(!lines.length){ $('pResults').innerHTML='<p class="lead">No parts found.</p>'; return; }
+  $('pResults').innerHTML=`<div style="overflow-x:auto"><table style="border-collapse:collapse;width:100%">
+    <thead><tr>${['Part #','Description',lines.some(l=>l.qty!=null)?'Qty on trailer':'','Stage','Dealer','MSRP','MAP','',''].filter(h=>h!=='').map(h=>`<th style="text-align:left;padding:6px 8px;border-bottom:2px solid #e2e7ec;font-size:11px;text-transform:uppercase;color:#6b7785">${h}</th>`).join('')}</tr></thead>
+    <tbody>${lines.map(l=>`<tr>
+      <td style="padding:6px 8px;border-bottom:1px solid #eef1f4"><b>${l.partId}</b></td>
+      <td style="padding:6px 8px;border-bottom:1px solid #eef1f4">${l.name}</td>
+      ${lines.some(x=>x.qty!=null)?`<td style="padding:6px 8px;border-bottom:1px solid #eef1f4">${l.qty!=null?l.qty+' '+(l.uom||''):''}</td>`:''}
+      <td style="padding:6px 8px;border-bottom:1px solid #eef1f4;font-size:12px;color:#6b7785">${l.stage||'—'}</td>
+      <td style="padding:6px 8px;border-bottom:1px solid #eef1f4"><b>${p$(l.dealerPrice)}</b></td>
+      <td style="padding:6px 8px;border-bottom:1px solid #eef1f4">${p$(l.msrp)}</td>
+      <td style="padding:6px 8px;border-bottom:1px solid #eef1f4;color:#6b7785">${p$(l.map)}</td>
+      <td style="padding:6px 8px;border-bottom:1px solid #eef1f4"><input type="number" id="pq_${l.partId}" value="${l.qty!=null?Math.max(1,Math.round(l.qty)):1}" min="1" style="width:58px"></td>
+      <td style="padding:6px 8px;border-bottom:1px solid #eef1f4"><button class="btn" style="padding:4px 10px;font-size:12px" onclick="pAdd('${l.partId}')">Add</button></td>
+    </tr>`).join('')}</tbody></table></div>`;
+}
+function pAdd(partId){
+  const src=PLINES.find(l=>l.partId===partId); if(!src) return;
+  const qty=Math.max(1,Number(($('pq_'+partId)||{}).value)||1);
+  const ex=PCART.find(l=>l.partId===partId);
+  if(ex) ex.qty+=qty; else PCART.push({partId,name:src.name,qty,price:src.dealerPrice});
+  renderPCart();
+}
+function pRemove(i){ PCART.splice(i,1); renderPCart(); }
+function renderPCart(){
+  const el=$('pCart'); if(!el) return;
+  if(!PCART.length){ el.innerHTML='<p class="lead">Cart is empty — add parts above to build an order.</p>'; return; }
+  const total=PCART.reduce((s,l)=>s+l.qty*l.price,0);
+  el.innerHTML=`<div style="border:1px solid #e2e7ec;border-radius:12px;padding:14px;background:#f8fafc">
+    <b>Parts order</b>
+    ${PCART.map((l,i)=>`<div style="display:flex;gap:8px;align-items:center;padding:5px 0;border-bottom:1px solid #eef1f4;font-size:14px">
+      <span style="flex:1"><b>${l.qty}×</b> ${l.name} <span style="color:#6b7785;font-size:12px">${l.partId}</span></span>
+      <span>${p$(l.qty*l.price)}</span>
+      <button class="btn" style="padding:2px 8px;font-size:12px;background:#c0392b" onclick="pRemove(${i})">✕</button>
+    </div>`).join('')}
+    <div style="display:flex;gap:14px;align-items:center;margin-top:10px;flex-wrap:wrap">
+      <b style="font-size:18px">Total ${p$(total)}</b>
+      <label style="margin:0"><input type="radio" name="pMeth" value="pickup" checked> Pickup</label>
+      <label style="margin:0"><input type="radio" name="pMeth" value="ship"> Ship</label>
+      <input id="pNoteTxt" placeholder="Note (optional)" style="flex:1;min-width:160px">
+      <button class="btn" onclick="pSubmit()">Submit parts order</button>
+    </div>
+    <div id="pMsg" class="msg"></div></div>`;
+}
+async function pSubmit(){
+  const method=(document.querySelector('input[name=pMeth]:checked')||{}).value||'pickup';
+  try{
+    const d=await api('/api/dealer/parts-orders',{method:'POST',body:JSON.stringify({vin:PLOOK&&PLOOK.vin||null,method,note:$('pNoteTxt').value,lines:PCART.map(l=>({partId:l.partId,qty:l.qty}))})});
+    PCART=[]; renderPCart(); setMsg('pMsg','ok','✓ '+d.ref+' submitted — Built Trailers has received it.');
+    loadPartsOrders();
+  }catch(e){ const m=$('pMsg'); if(m){m.className='msg err';m.textContent=e.message;} }
+}
+async function loadPartsOrders(){
+  try{
+    const list=await api('/api/dealer/parts-orders');
+    $('pOrders').innerHTML=list.length?list.map(o=>`<div style="border:1px solid #e2e7ec;border-radius:12px;padding:12px;margin-bottom:10px">
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <b>${o.ref}</b>
+        <span style="background:${o.status==='completed'?'#e8f6ee;color:#1a7f4b':o.status==='cancelled'?'#fdeaea;color:#c0392b':'#eef4fd;color:#2563eb'};border-radius:999px;padding:2px 10px;font-size:12px;font-weight:600">${o.statusLabel}</span>
+        <span style="color:#6b7785;font-size:12px">${new Date(o.createdAt).toLocaleDateString()}${o.vin?' · VIN '+o.vin:''} · ${o.method==='ship'?'Ship':'Pickup'}</span>
+        <span style="flex:1"></span><b>${p$(o.total)}</b>
+        ${o.invoiceRef?`<span style="color:#6b7785;font-size:12px">Invoice ${o.invoiceRef}</span>`:''}
+      </div>
+      <div style="color:#6b7785;font-size:13px;margin-top:4px">${o.lines.map(l=>l.qty+'× '+l.name).join(' · ')}</div>
+    </div>`).join(''):'<p class="lead">No parts orders yet.</p>';
+  }catch(e){ $('pOrders').innerHTML='<p class="msg err">'+e.message+'</p>'; }
 }
 
 // ---- Boat Trailer Builder (configurator) ----

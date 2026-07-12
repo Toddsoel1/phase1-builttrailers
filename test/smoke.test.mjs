@@ -2068,3 +2068,92 @@ test('permissions: cycle counts (ops/managers) and stock orders (Sales/office) a
   assert.equal((await fetch(BASE + '/api/orders/stock', { method: 'POST', headers: H(rep), body: JSON.stringify({ modelId: models[0].id, qty: 1 }) })).status, 403, 'rep specialist cannot create stock orders');
   assert.equal((await fetch(BASE + '/api/orders/stock', { method: 'POST', headers: H(office), body: JSON.stringify({ modelId: models[0].id, qty: 1 }) })).status, 200, 'office manager can create stock orders');
 });
+
+test('🔩 dealer parts channel: tiered pricing, VIN lookup, lifecycle → invoice + dealer-fulfillment bucket', async () => {
+  // A dealership with a portal login (same flow as the stock-request test).
+  const mk = async n => {
+    const cust = await json(await api('/api/customers', { method: 'POST', body: JSON.stringify({ name: `Parts Test Dealership ${n}`, kind: 'Dealership', allowed: ['Boat'] }) }));
+    await fetch(BASE + '/api/dealer/signup', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: `parts${n}@x.test`, password: 'partsPw1', name: `Parts ${n}`, dealershipName: `Parts Test Dealership ${n}`, address: '1 Main St', city: 'Provo', state: 'UT', zip: '84601' }) });
+    const signup = (await json(await api('/api/dealers/pending'))).find(d => d.email === `parts${n}@x.test`);
+    await api('/api/dealers/' + signup.id + '/approve', { method: 'POST', body: JSON.stringify({ customerId: cust.id }) });
+    const login = await json(await fetch(BASE + '/api/dealer/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: `parts${n}@x.test`, password: 'partsPw1' }) }));
+    return { cust, H: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + login.token } };
+  };
+  const d1 = await mk(1);
+
+  // Tiered pricing from cost: dealer = 50% margin + additional 25%; MSRP = 50% over dealer; MAP = 40%.
+  await api('/api/parts', { method: 'POST', body: JSON.stringify({ id: 'MK-PROBE-HUB', name: 'Probe Hub Kit', cost: 90 }) });
+  const cat = await json(await fetch(BASE + '/api/dealer/parts-catalog?q=Probe%20Hub', { headers: d1.H }));
+  const hub = cat.lines.find(l => l.partId === 'MK-PROBE-HUB');
+  assert.equal(hub.dealerPrice, 240, '90 / 0.5 / 0.75');
+  assert.equal(hub.msrp, 480, 'dealer / 0.5');
+  assert.equal(hub.map, 400, 'dealer / 0.6');
+  assert.ok(!('cost' in hub), "Built's cost never reaches a dealer");
+  // "Portion of the trailer" filter runs.
+  assert.equal((await fetch(BASE + '/api/dealer/parts-catalog?q=&stage=Build', { headers: d1.H })).status, 200);
+
+  // VIN paths: someone else's unit → model suggestion (no exact config leak);
+  const curVin = (await json(await api('/api/trailers'))).registry.find(t => t.id === vinUnitId).vin;
+  const other = await json(await fetch(BASE + '/api/dealer/parts-catalog?vin=' + encodeURIComponent(curVin), { headers: d1.H }));
+  assert.equal(other.found, true);
+  assert.equal(other.suggested, true, 'not their unit — current model parts, not the factory build');
+  assert.ok(other.lines.length > 0 && other.lines.every(l => l.dealerPrice > 0 || l.dealerPrice === 0));
+  // unknown VIN → pick-a-model flow;
+  const unk = await json(await fetch(BASE + '/api/dealer/parts-catalog?vin=NOPE123', { headers: d1.H }));
+  assert.equal(unk.unknown, true);
+  assert.ok(unk.models.length > 0);
+  const byModel = await json(await fetch(BASE + '/api/dealer/parts-catalog?modelId=G23TR', { headers: d1.H }));
+  assert.ok(byModel.suggested && byModel.lines.length > 10, 'model pick returns its current BOM priced');
+  // pre-app 7XJ VIN → decoded to the same trailer model's current parts.
+  await api('/api/models/G23TR/specs', { method: 'PATCH', body: JSON.stringify({ bodyCode: 'B', hitchCode: 'B', lengthFt: 23, axles: 3, gvwrLbs: 10000 }) });
+  const decoded = await json(await fetch(BASE + '/api/dealer/parts-catalog?vin=7XJBB233XSS000001', { headers: d1.H }));
+  assert.equal(decoded.suggested, true, 'pre-app VIN decodes to a model suggestion');
+  assert.equal(decoded.modelId, 'G23TR');
+
+  // Order lifecycle. Price freezes at submission (effective dating).
+  const dp = await json(await fetch(BASE + '/api/dealer/parts-orders', { method: 'POST', headers: d1.H,
+    body: JSON.stringify({ vin: '7XJBB233XSS000001', method: 'ship', note: 'customer waiting', lines: [{ partId: 'MK-PROBE-HUB', qty: 2 }] }) }));
+  assert.equal(dp.status, 'received');
+  assert.equal(dp.total, 480, '2 × frozen dealer price 240');
+  await api('/api/parts/MK-PROBE-HUB', { method: 'PATCH', body: JSON.stringify({ cost: 999 }) });
+  let staffQ = await json(await api('/api/parts-orders'));
+  let o = staffQ.find(x => x.id === dp.id);
+  assert.equal(o.lines[0].unitPrice, 240, 'a later cost change never rewrites a submitted order');
+  assert.equal(o.lines[0].short, true, 'queue flags short stock (0 on hand, need 2)');
+  await api('/api/parts/MK-PROBE-HUB', { method: 'PATCH', body: JSON.stringify({ cost: 90 }) });
+
+  // fulfill: blocked while short unless forced; then stock relieved + value parks in the bucket.
+  assert.equal((await api('/api/parts-orders/' + dp.id + '/advance', { method: 'POST', body: JSON.stringify({ action: 'fulfill' }) })).status, 400, 'short stock blocks fulfillment');
+  assert.equal((await api('/api/parts-orders/' + dp.id + '/advance', { method: 'POST', body: JSON.stringify({ action: 'complete' }) })).status, 400, 'cannot skip ahead in the flow');
+  assert.equal((await api('/api/parts-orders/' + dp.id + '/advance', { method: 'POST', body: JSON.stringify({ action: 'fulfill', force: true }) })).status, 200);
+  const hubAfter = (await json(await api('/api/parts'))).find(p => p.id === 'MK-PROBE-HUB');
+  assert.equal(hubAfter.onHand, -2, 'forced fulfillment relieves inventory');
+  let inv = await json(await api('/api/inventory/summary'));
+  assert.equal(inv.dealerFulfillment, 180, 'picked value (2 × $90 cost) sits in the Dealer fulfillment line');
+
+  // ready → shipped: auto-invoice + COGS, bucket empties, dealer sees it all.
+  await api('/api/parts-orders/' + dp.id + '/advance', { method: 'POST', body: JSON.stringify({ action: 'ready' }) });
+  const done = await json(await api('/api/parts-orders/' + dp.id + '/advance', { method: 'POST', body: JSON.stringify({ action: 'complete' }) }));
+  assert.equal(done.statusLabel, 'Shipped');
+  inv = await json(await api('/api/inventory/summary'));
+  assert.equal(inv.dealerFulfillment, 0, 'invoicing takes it off the inventory reports');
+  const acct = await json(await api('/api/accounting'));
+  assert.ok(acct.events.find(e => e.kind === 'invoice' && e.ref === 'DP-' + dp.id && Number(e.amount) === 480), 'invoice posts automatically on ship');
+  assert.ok(acct.events.find(e => e.kind === 'cogs' && e.ref === 'DP-' + dp.id), 'COGS journal rides along');
+  const mine = await json(await fetch(BASE + '/api/dealer/parts-orders', { headers: d1.H }));
+  const m1 = mine.find(x => x.id === dp.id);
+  assert.equal(m1.statusLabel, 'Shipped');
+  assert.equal(m1.invoiceRef, 'DP-' + dp.id, 'dealer sees the invoice reference');
+
+  // Cancelling a fulfilled order restocks.
+  const dp2 = await json(await fetch(BASE + '/api/dealer/parts-orders', { method: 'POST', headers: d1.H,
+    body: JSON.stringify({ method: 'pickup', lines: [{ partId: 'MK-PROBE-HUB', qty: 1 }] }) }));
+  await api('/api/parts-orders/' + dp2.id + '/advance', { method: 'POST', body: JSON.stringify({ action: 'fulfill', force: true }) });
+  await api('/api/parts-orders/' + dp2.id + '/advance', { method: 'POST', body: JSON.stringify({ action: 'cancel' }) });
+  assert.equal((await json(await api('/api/parts'))).find(p => p.id === 'MK-PROBE-HUB').onHand, -2, 'cancel puts the picked part back');
+
+  // Gates: dealer endpoints need dealer auth; the staff queue needs Sales.
+  assert.equal((await fetch(BASE + '/api/dealer/parts-catalog?q=x')).status, 401);
+  assert.equal((await fetch(BASE + '/api/dealer/parts-orders', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })).status, 401);
+});

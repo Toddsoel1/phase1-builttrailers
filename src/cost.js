@@ -1,7 +1,7 @@
 // Cost rollup engine — single source of truth for trailer cost & inventory valuation.
 // Manufactured parts store raw-material cost directly; build labor comes from each
 // model's labor routing × a burdened blended rate (real payroll arrives in Phase 5).
-import { all } from './db.js';
+import { all, one } from './db.js';
 import { orderWipMap } from './wip.js';
 
 export const LABOR_RATE = Number(process.env.LABOR_RATE || 37); // fallback $/hr if a workstation has no staff
@@ -96,10 +96,16 @@ export async function inventoryValuation() {
     if (v <= 0) continue;
     if (o.stage === 'Ready') finishedValue += v; else wipValue += v;
   }
+  // Dealer fulfillment: parts picked for dealer parts orders but not yet invoiced. Fulfilling
+  // decremented on_hand (value left raw/make stock), so this bucket holds it until the order
+  // ships / is picked up and invoices — then it drops off the inventory reports entirely.
+  const dealerFulfillment = Number((await one(
+    `SELECT COALESCE(SUM(cost_total),0) AS v FROM dealer_parts_order WHERE status IN ('fulfilled','ready')`, [])
+    .catch(() => null))?.v || 0);
   const onHandValue = rawPurchased + makeParts;
   return {
-    totalValue: onHandValue + wipValue + finishedValue,
-    onHandValue, rawPurchased, makeParts, wipValue, finishedValue,
+    totalValue: onHandValue + wipValue + finishedValue + dealerFulfillment,
+    onHandValue, rawPurchased, makeParts, wipValue, finishedValue, dealerFulfillment,
     skuCount: parts.length,
     purchased: parts.filter(p => p.type === 'P').length,
     manufactured: parts.filter(p => p.type === 'M').length,

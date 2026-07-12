@@ -40,6 +40,7 @@ import * as owner from './owner.js';
 import * as inventory from './inventory.js';
 import * as boatbuilder from './boatbuilder.js';
 import * as engineering from './engineering.js';
+import * as dealerparts from './dealerparts.js';
 import QRCode from 'qrcode';
 import * as dealernotify from './dealernotify.js';
 import * as storage from './storage.js';
@@ -520,6 +521,37 @@ app.post('/api/dealer/orders', dealer.dealerAuth, dealer.dealerRole('sales'), as
 // Boat Trailer Builder (dealer): the configurator catalog (internal part mappings stripped) and
 // submit, which checks the dealership is authorized for the boat's trailer category, then creates
 // a Quote order under the dealer's account for Built Trailers to approve.
+// ---- 🔩 dealer parts channel ----
+// Catalog lookup: by VIN (exact build for the owning dealership, model suggestion otherwise)
+// or by part number / description / build stage. Pricing tiers only — cost never leaves.
+app.get('/api/dealer/parts-catalog', dealer.dealerAuth, async (req, res) => {
+  try {
+    if (req.query.vin) return res.json(await dealerparts.vinLookup(req.query.vin, req.dealer.customer_id));
+    if (req.query.modelId) {
+      const m = await one('SELECT id, name FROM model WHERE id=$1', [req.query.modelId]);
+      if (!m) return res.status(404).json({ error: 'Model not found' });
+      return res.json({ suggested: true, modelId: m.id, modelName: m.name, lines: await dealerparts.catalogForModel(m.id) });
+    }
+    res.json({ lines: await dealerparts.catalogSearch({ q: req.query.q, stage: req.query.stage }) });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+app.post('/api/dealer/parts-orders', dealer.dealerAuth, dealer.dealerRole('sales'), async (req, res) => {
+  try { res.json(await dealerparts.submitPartsOrder(req.dealer, req.body || {})); }
+  catch (e) { res.status(400).json({ error: e.message }); }
+});
+app.get('/api/dealer/parts-orders', dealer.dealerAuth, async (req, res) => {
+  if (!req.dealer.customer_id) return res.json([]);
+  res.json(await dealerparts.dealerPartsOrders(req.dealer.customer_id));
+});
+// Staff (Sales) processing queue.
+app.get('/api/parts-orders', authMiddleware, requireSales, async (req, res) => {
+  res.json(await dealerparts.staffPartsOrders(req.query.status || null));
+});
+app.post('/api/parts-orders/:id/advance', authMiddleware, requireSales, async (req, res) => {
+  try { res.json(await dealerparts.advancePartsOrder(Number(req.params.id), req.body?.action, { force: !!req.body?.force }, req.user)); }
+  catch (e) { res.status(400).json({ error: e.message }); }
+});
+
 app.get('/api/dealer/boat-catalog', dealer.dealerAuth, dealer.dealerRole('sales'), async (_req, res) => {
   const cat = await boatbuilder.getCatalog();
   res.json({ makes: cat.makes, boats: cat.boats, groups: cat.groups.map(g => ({ ...g, choices: g.choices.map(({ parts, ...c }) => c) })) });

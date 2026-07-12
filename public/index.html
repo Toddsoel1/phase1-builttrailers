@@ -1507,15 +1507,15 @@ async function viewInv(){
   </div>`:'';
   const top=parts.slice().sort((a,b)=>b.extValue-a.extValue).slice(0,15);
   $('content').innerHTML=`<div class="grid g4">
-    ${kpi('Total inventory value',money(inv.totalValue),'raw + WIP + finished')}
+    ${kpi('Total inventory value',money(inv.totalValue),'raw + WIP + finished'+(inv.dealerFulfillment?' + dealer fulfillment':''))}
     ${kpi('Raw materials',money(inv.rawPurchased),'purchased parts on hand')}
     ${kpi('Make parts',money(inv.makeParts),'manufactured stock on hand')}
     ${kpi('Work in process',money(inv.wipValue),'in production')}
    </div>
    <div class="grid g4" style="margin-top:8px">
     ${kpi('Finished, not invoiced',money(inv.finishedValue),'Ready to bill')}
-    ${kpi('On-hand stock',money(inv.onHandValue),inv.skuCount+' SKUs')}
-    ${kpi('Below reorder',inv.belowReorder,'need replenishment')}
+    ${kpi('Dealer fulfillment',money(inv.dealerFulfillment||0),'picked for dealer parts orders — clears when invoiced')}
+    ${kpi('On-hand stock',money(inv.onHandValue),inv.skuCount+' SKUs · '+inv.belowReorder+' below reorder')}
     ${kpi('Make vs buy',inv.manufactured+' / '+inv.purchased,'manufactured / purchased')}
    </div>
    ${wip&&wip.length?`<div class="card" style="margin-top:16px"><h3>Work in process &amp; finished goods — value by trailer</h3>
@@ -2585,7 +2585,7 @@ async function viewOrders(){
   $('pTitle').textContent='Production Flow';
   $('pSub').textContent=ordView==='queue'?('Production priority — '+(canReorder()?'use ↑ ↓ to resequence':'read-only')):('Production Flow pipeline — '+(canEdit()?'drag a card to change its stage':'read-only'));
   $('pActions').innerHTML=(canEdit()?`<button class="btn sm sec" onclick="wipLimitsModal()" title="Cap how many orders may sit in each production stage">🚧 WIP limits</button> `:'')+(canSell()?`<button class="btn" onclick="go('neworder')">➕ New Order</button>`:'');
-  const [{stages,orders,wipLimits={}},stockReqs]=await Promise.all([api('/api/orders'),api('/api/stock-requests').catch(()=>[])]);
+  const [{stages,orders,wipLimits={}},stockReqs,partsOrders]=await Promise.all([api('/api/orders'),api('/api/stock-requests').catch(()=>[]),canSell()?api('/api/parts-orders').catch(()=>[]):Promise.resolve([])]);
   window._wipLimits=wipLimits;
   const live=orders.filter(o=>!o.billed && o.stage!=='Cancelled'); // invoiced + rejected drop off the board
   const reqCard=stockReqs.length?`<div class="card" style="margin-bottom:14px;border-color:var(--accent)"><h3>🏷️ Dealer stock requests <span class="badge b-low">${stockReqs.length}</span></h3>
@@ -2596,9 +2596,21 @@ async function viewOrders(){
       ${canSell()?`<button class="btn sm" onclick="decideStockReq(${r.id},'approve','${esc(r.dealership)}','${esc(r.orderId)}')">✓ Sell to them</button>
       <button class="btn sm sec" onclick="decideStockReq(${r.id},'decline','${esc(r.dealership)}','${esc(r.orderId)}')">✕ Decline</button>`:''}
     </div>`).join('')}</div>`:'';
+  const openParts=(partsOrders||[]).filter(p=>p.status!=='completed'&&p.status!=='cancelled');
+  const partsCard=openParts.length?`<div class="card" style="margin-bottom:14px;border-color:var(--accent)"><h3>🔩 Dealer parts orders <span class="badge b-low">${openParts.length}</span></h3>
+    <p class="muted" style="font-size:12px;margin-bottom:8px">Fulfilling picks stock (value parks in the “Dealer fulfillment” inventory line); marking it picked up / shipped invoices automatically and clears the line.</p>
+    ${openParts.map(p=>{const short=p.lines.filter(l=>l.short);return `<div style="display:flex;gap:10px;align-items:center;padding:8px 0;border-bottom:1px solid var(--line);flex-wrap:wrap">
+      <div style="flex:1;min-width:220px"><b style="font-size:13.5px">${esc(p.ref)} — ${esc(p.dealership)}</b> <span class="badge b-buy">${esc(p.statusLabel)}</span> <span class="badge ${p.method==='ship'?'b-mfg':'b-ok'}">${p.method==='ship'?'🚚 ship':'🏬 pickup'}</span>
+        <div class="muted" style="font-size:11.5px">${p.lines.map(l=>l.qty+'× '+esc(l.partId)).join(', ')} · ${money2(p.total)}${p.vin?' · VIN '+esc(p.vin):''}${p.note?' — “'+esc(p.note)+'”':''}</div>
+        ${short.length?`<div style="font-size:11.5px;color:var(--red)">⚠ short stock: ${short.map(l=>esc(l.partId)).join(', ')}</div>`:''}</div>
+      ${p.status==='received'?`<button class="btn sm" onclick="advPartsOrder(${p.id},'fulfill',${short.length?'true':'false'})">📦 Fulfill</button>`:''}
+      ${p.status==='fulfilled'?`<button class="btn sm" onclick="advPartsOrder(${p.id},'ready')">✅ ${p.method==='ship'?'Ready to ship':'Ready for pickup'}</button>`:''}
+      ${p.status==='ready'?`<button class="btn sm" onclick="advPartsOrder(${p.id},'complete')">${p.method==='ship'?'🚚 Shipped — invoice':'🤝 Picked up — invoice'}</button>`:''}
+      <button class="btn sm sec" onclick="advPartsOrder(${p.id},'cancel')">✕ Cancel</button>
+    </div>`;}).join('')}</div>`:'';
   const rejected=orders.filter(o=>o.stage==='Cancelled');
   const viewToggle=`<div class="tabs" style="margin-bottom:12px"><button class="${ordView==='board'?'active':''}" onclick="ordView='board';viewOrders()">🗂️ Board</button><button class="${ordView==='queue'?'active':''}" onclick="ordView='queue';viewOrders()">🏭 Production Queue</button>${rejected.length?`<button class="${ordView==='rejected'?'active':''}" onclick="ordView='rejected';viewOrders()">🚫 Rejected <span style="opacity:.7">${rejected.length}</span></button>`:''}</div>`;
-  if(ordView==='queue'){ $('content').innerHTML=viewToggle+reqCard+renderQueue(orders); return; }
+  if(ordView==='queue'){ $('content').innerHTML=viewToggle+reqCard+partsCard+renderQueue(orders); return; }
   if(ordView==='rejected'){ $('content').innerHTML=viewToggle+renderRejected(rejected); return; }
   const types=['All',...Array.from(new Set(live.map(o=>o.type)))];
   const filtered=ordFilter==='All'?live:live.filter(o=>o.type===ordFilter);
@@ -2616,7 +2628,14 @@ async function viewOrders(){
    <table><thead><tr><th>Type</th><th class="right">Open orders</th><th class="right">Units</th><th class="right">Backlog value</th></tr></thead><tbody>
    ${Array.from(new Set(live.map(o=>o.type))).map(t=>{const os=live.filter(o=>o.type===t);return `<tr><td><b>${t}</b></td><td class="right">${os.length}</td><td class="right">${os.reduce((a,o)=>a+o.qty,0)}</td><td class="right">${money(os.reduce((a,o)=>a+o.revenue,0))}</td></tr>`;}).join('')}
    </tbody></table></div>`;
-  $('content').innerHTML=viewToggle+reqCard+tabs+board+summary;
+  $('content').innerHTML=viewToggle+reqCard+partsCard+tabs+board+summary;
+}
+async function advPartsOrder(id,action,short){
+  if(action==='cancel'&&!confirm('Cancel this dealer parts order? Fulfilled stock goes back on the shelf.'))return;
+  if(action==='fulfill'&&short&&!confirm('Some parts are short — fulfilling anyway sends counts negative until corrected. Continue?'))return;
+  try{ const r=await api('/api/parts-orders/'+id+'/advance',{method:'POST',body:JSON.stringify({action,force:action==='fulfill'&&!!short})});
+    toast('DP-'+id+' → '+(r.statusLabel||r.status)); viewOrders(); }
+  catch(e){ toast(e.message); }
 }
 async function decideStockReq(id,action,dealership,orderId){
   const msg=action==='approve'?('Sell '+orderId+' to '+dealership+'? This assigns the order (and its VINs/MSO) to them and declines any competing requests.')

@@ -294,6 +294,22 @@ const colMigrations = [
   `CREATE TABLE IF NOT EXISTS bom_revision (id SERIAL PRIMARY KEY, model_id TEXT NOT NULL, rev INT NOT NULL,
      change TEXT NOT NULL, changed_by TEXT, created_at TIMESTAMPTZ NOT NULL DEFAULT now())`,
   `CREATE INDEX IF NOT EXISTS idx_bomrev_model ON bom_revision(model_id)`,
+  // ── Dealer parts channel ────────────────────────────────────────────────────────────────
+  // Orders flow received → fulfilled (stock relieved; value parked in the "Dealer fulfillment"
+  // inventory bucket) → ready → completed (picked up / shipped; auto-invoice + COGS — the
+  // bucket empties). Dealer unit prices freeze at submission (effective dating); unit costs
+  // freeze at fulfillment (that's when inventory moves).
+  `CREATE TABLE IF NOT EXISTS dealer_parts_order (id SERIAL PRIMARY KEY, customer_id TEXT NOT NULL,
+     status TEXT NOT NULL DEFAULT 'received', method TEXT NOT NULL DEFAULT 'pickup',
+     vin TEXT, note TEXT, dealer_user_id TEXT,
+     total NUMERIC(12,2) NOT NULL DEFAULT 0, cost_total NUMERIC(12,2) NOT NULL DEFAULT 0,
+     invoice_ref TEXT, created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+     fulfilled_at TIMESTAMPTZ, ready_at TIMESTAMPTZ, completed_at TIMESTAMPTZ)`,
+  `CREATE TABLE IF NOT EXISTS dealer_parts_line (id SERIAL PRIMARY KEY, order_id INT NOT NULL,
+     part_id TEXT NOT NULL, qty NUMERIC(12,2) NOT NULL, unit_price NUMERIC(12,2) NOT NULL,
+     unit_cost NUMERIC(12,2))`,
+  `CREATE INDEX IF NOT EXISTS idx_dpl_order ON dealer_parts_line(order_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_dpo_status ON dealer_parts_order(status)`,
   // Bill-to vs ship-to per dealership: some dealers bill through a corporate/parent entity.
   // Blank bill_name = bill the dealership itself. The MSO's Sold-to and every invoice use the
   // bill-to; the Bill of Lading and deliveries use the dealership's own (ship-to) address.
