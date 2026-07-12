@@ -318,6 +318,9 @@ const colMigrations = [
   // "$0 must be a decision, not a default": a $0 option choice is only legitimate when it's
   // explicitly marked included-in-standard; everything else shows on the pricing-gaps sweep.
   `ALTER TABLE option_choice ADD COLUMN IF NOT EXISTS included BOOLEAN NOT NULL DEFAULT false`,
+  // Some parts aren't sold to dealers at all — they still show in a VIN's parts list, but the
+  // dealer portal labels them "Not for Resale" (no pricing, no ordering, no price requests).
+  `ALTER TABLE part ADD COLUMN IF NOT EXISTS not_for_resale BOOLEAN NOT NULL DEFAULT false`,
   `CREATE INDEX IF NOT EXISTS idx_dpl_order ON dealer_parts_line(order_id)`,
   `CREATE INDEX IF NOT EXISTS idx_dpo_status ON dealer_parts_order(status)`,
   // Bill-to vs ship-to per dealership: some dealers bill through a corporate/parent entity.

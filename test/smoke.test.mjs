@@ -2201,4 +2201,18 @@ test('🔩 dealer parts channel: tiered pricing, VIN lookup, lifecycle → invoi
   assert.ok(!gaps.parts.some(g => g.partId === 'MK-PROBE-ZERO'), 'priced part off the sweep');
   assert.ok(!gaps.options.some(o => o.choiceId === opt.choiceId), 'included-in-standard option off the sweep');
   await api('/api/boat-admin/choice-included', { method: 'POST', body: JSON.stringify({ choiceId: opt.choiceId, included: false }) }); // restore
+
+  // "Not for Resale": the checkbox on the Parts Master controls the dealer portal.
+  assert.equal((await api('/api/parts/MK-PROBE-HUB', { method: 'PATCH', body: JSON.stringify({ notForResale: true }) })).status, 200);
+  assert.equal((await json(await api('/api/parts'))).find(p => p.id === 'MK-PROBE-HUB').notForResale, true, 'flag rides the Parts Master');
+  const nfr = (await json(await fetch(BASE + '/api/dealer/parts-catalog?q=Probe%20Hub', { headers: d1.H }))).lines.find(l => l.partId === 'MK-PROBE-HUB');
+  assert.equal(nfr.notForResale, true, 'dealer catalog labels it Not for Resale');
+  assert.equal(nfr.dealerPrice, null, 'no pricing shown on NFR parts');
+  assert.equal((await fetch(BASE + '/api/dealer/parts-orders', { method: 'POST', headers: d1.H,
+    body: JSON.stringify({ method: 'pickup', lines: [{ partId: 'MK-PROBE-HUB', qty: 1 }] }) })).status, 400, 'NFR parts cannot be ordered');
+  assert.equal((await fetch(BASE + '/api/dealer/price-requests', { method: 'POST', headers: d1.H,
+    body: JSON.stringify({ partId: 'MK-PROBE-HUB' }) })).status, 400, 'no price requests on NFR parts');
+  await api('/api/parts/MK-PROBE-HUB', { method: 'PATCH', body: JSON.stringify({ notForResale: false }) });
+  const back = (await json(await fetch(BASE + '/api/dealer/parts-catalog?q=Probe%20Hub', { headers: d1.H }))).lines.find(l => l.partId === 'MK-PROBE-HUB');
+  assert.equal(back.dealerPrice, 240, 'unchecking restores live pricing (cost 90 → dealer 240)');
 });

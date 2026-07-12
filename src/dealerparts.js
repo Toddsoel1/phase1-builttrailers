@@ -27,11 +27,14 @@ export function partPricing(cost) {
   return { dealerPrice, msrp: r2(dealerPrice / (1 - MSRP_MARGIN)), map: r2(dealerPrice / (1 - MAP_MARGIN)) };
 }
 
-// Cost 0 = pricing not yet populated: the catalog says "Call for price" instead of quoting $0,
-// and the part can't be ordered until Built publishes a cost.
+// Not-for-resale parts stay visible (a dealer should see everything on their trailer) but show
+// the "Not for Resale" label — no pricing, no ordering, no price requests. Cost 0 = pricing not
+// yet populated: the catalog says "Call for price" instead of quoting $0, and the part can't be
+// ordered until Built publishes a cost.
 const priced = p => {
   const base = { partId: p.part_id || p.id, name: p.name, uom: p.uom || 'EA',
     stage: p.stage || null, qty: p.qty != null ? Number(p.qty) : null };
+  if (p.not_for_resale) return { ...base, notForResale: true, dealerPrice: null, msrp: null, map: null };
   if (!(Number(p.cost) > 0)) return { ...base, unpriced: true, dealerPrice: null, msrp: null, map: null };
   return { ...base, ...partPricing(p.cost) };
 };
@@ -46,8 +49,9 @@ export async function annotateRequested(lines, customerId) {
 
 export async function requestPrice(d, partId, note) {
   if (!d.customer_id) throw new Error('Your account is not linked to a dealer record yet — contact Built Trailers.');
-  const p = await one('SELECT id, cost, active FROM part WHERE id=$1', [String(partId || '').trim()]);
+  const p = await one('SELECT id, cost, active, not_for_resale FROM part WHERE id=$1', [String(partId || '').trim()]);
   if (!p || p.active === false) throw new Error('Part not found in the catalog.');
+  if (p.not_for_resale) throw new Error('This part is not available for resale.');
   if (Number(p.cost) > 0) throw new Error('This part is already priced — refresh the catalog.');
   if (await one(`SELECT id FROM price_request WHERE part_id=$1 AND customer_id=$2 AND status='open'`, [p.id, d.customer_id]))
     throw new Error('You already have a price request in for this part — Built Trailers is on it.');
@@ -107,7 +111,7 @@ export async function resolvePriceRequest(id, cost, user) {
 // exact build). Dealers get pricing tiers only; Built's cost never leaves this module.
 async function modelParts(modelId, orderId) {
   const lines = await all(
-    `SELECT b.part_id, b.qty, COALESCE(b.stage,'Build') AS stage, p.name, p.uom, p.cost
+    `SELECT b.part_id, b.qty, COALESCE(b.stage,'Build') AS stage, p.name, p.uom, p.cost, p.not_for_resale
        FROM bom_line b JOIN part p ON p.id=b.part_id
       WHERE b.model_id=$1 AND p.active <> false ORDER BY COALESCE(b.stage,'Build'), p.name`, [modelId]);
   const map = new Map(lines.map(l => [l.part_id, { ...l, qty: Number(l.qty) }]));
@@ -118,8 +122,8 @@ async function modelParts(modelId, orderId) {
         cur.qty += Number(d.qty);
         if (cur.qty <= 0) map.delete(d.part_id);
       } else if (Number(d.qty) > 0) {
-        const p = await one('SELECT id, name, uom, cost FROM part WHERE id=$1', [d.part_id]);
-        if (p) map.set(d.part_id, { part_id: p.id, name: p.name, uom: p.uom, cost: p.cost, stage: d.stage || 'Build', qty: Number(d.qty) });
+        const p = await one('SELECT id, name, uom, cost, not_for_resale FROM part WHERE id=$1', [d.part_id]);
+        if (p) map.set(d.part_id, { part_id: p.id, name: p.name, uom: p.uom, cost: p.cost, not_for_resale: p.not_for_resale, stage: d.stage || 'Build', qty: Number(d.qty) });
       }
     }
   }
@@ -172,7 +176,7 @@ export async function vinLookup(vinRaw, customerId) {
 export async function catalogSearch({ q: term, stage } = {}) {
   const like = '%' + String(term || '').trim() + '%';
   const args = [like];
-  let sql = `SELECT p.id, p.name, p.uom, p.cost FROM part p
+  let sql = `SELECT p.id, p.name, p.uom, p.cost, p.not_for_resale FROM part p
               WHERE p.active <> false AND (p.id ILIKE $1 OR p.name ILIKE $1 OR COALESCE(p.spec,'') ILIKE $1)`;
   if (stage) { args.push(stage); sql += ` AND EXISTS (SELECT 1 FROM bom_line b WHERE b.part_id=p.id AND COALESCE(b.stage,'Build')=$2)`; }
   sql += ' ORDER BY p.name LIMIT 60';
@@ -197,8 +201,9 @@ export async function submitPartsOrder(d, { vin, method, note, lines }) {
   const rows = [];
   for (const l of cleaned) {
     if (!Number.isFinite(l.qty) || l.qty <= 0) throw new Error(`Quantity for ${l.partId} must be greater than zero.`);
-    const p = await one('SELECT id, name, cost, active FROM part WHERE id=$1', [l.partId]);
+    const p = await one('SELECT id, name, cost, active, not_for_resale FROM part WHERE id=$1', [l.partId]);
     if (!p || p.active === false) throw new Error(`Part ${l.partId} isn't in the current catalog.`);
+    if (p.not_for_resale) throw new Error(`${l.partId} is not available for resale.`);
     if (!(Number(p.cost) > 0)) throw new Error(`${l.partId} is "Call for price" — submit a price request from the catalog and Built Trailers will publish it.`);
     rows.push({ ...l, unitPrice: partPricing(p.cost).dealerPrice }); // price frozen NOW
   }

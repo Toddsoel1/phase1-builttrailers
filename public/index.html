@@ -915,7 +915,7 @@ async function viewParts(){
    <table><thead><tr><th>Part</th><th>Type</th><th>Vendor</th><th class="right">On hand</th><th class="right">Reorder</th><th class="right">Unit cost</th><th class="right">Ext. value</th><th class="center">Status</th>${canAddParts()?'<th></th>':''}</tr></thead><tbody>
    ${parts.map(p=>`<tr>
      <td><b>${esc(p.id)}</b><br><span class="muted" style="font-size:11px">${esc(p.name)}</span></td>
-     <td>${p.type==='M'?'<span class="badge b-mfg">MAKE</span>':'<span class="badge b-buy">BUY</span>'}</td>
+     <td>${p.type==='M'?'<span class="badge b-mfg">MAKE</span>':'<span class="badge b-buy">BUY</span>'}${p.notForResale?' <span class="badge b-below" title="Dealers see this part labeled Not for Resale — no pricing, no ordering">NFR</span>':''}</td>
      <td style="font-size:12px">${canEditParts()?`<a class="lnk" onclick="editPartVendor('${p.id}','${p.vendorId||''}')">${esc(p.vendor||'— assign —')}</a>`:esc(p.vendor||'')}${p.vendorStatus==='pending'?' <span class="badge b-low" style="font-size:9px">pending</span>':''}${p.vendorPartNo?`<br><span class="muted" style="font-size:10.5px">V/PN ${esc(p.vendorPartNo)}</span>`:''}</td>
      <td class="right">${p.onHand}</td><td class="right">${p.reorder}</td>
      <td class="right">${canEditParts()?`<a class="lnk" onclick="editCost('${p.id}',${p.cost})">${money2(p.cost)}</a>`:money2(p.cost)}</td>
@@ -1036,6 +1036,7 @@ async function editPartModal(id){
       <div class="field"><label>Cushion</label><input id="epCushion" class="inp" type="number" min="0" value="${p.cushion}"></div>
       <div class="field"><label>Lot size</label><input id="epLot" class="inp" type="number" min="1" value="${p.lot}"></div>
     </div>
+    <div class="field" style="margin-top:4px"><label style="display:flex;align-items:center;gap:8px;font-weight:500;cursor:pointer"><input type="checkbox" id="epNfr" ${p.notForResale?'checked':''} style="width:auto"> 🚫 Not for resale — dealers see the part on their trailer's list, labeled “Not for Resale”, with no pricing and no ordering</label></div>
     <p class="muted" style="font-size:11px">On-hand isn't edited here — use Receive, 📥 Receive an invoice, or a 🧮 count so stock changes stay accounted for.</p>
     <div class="row" style="gap:8px;margin-top:8px">
       <button class="btn" onclick="saveEditPart('${esc(p.id)}')">Save</button>
@@ -1045,7 +1046,7 @@ async function editPartModal(id){
 async function saveEditPart(id){
   const newId=($('epId').value||'').trim();
   const body={name:($('epName').value||'').trim(),type:$('epType').value,vendorId:$('epVendor').value||null,
-    vendorPartNo:($('epVpn').value||'').trim(),mfrPartNo:($('epMpn').value||'').trim(),cost:Number($('epCost').value)||0,uom:($('epUom').value||'').trim(),
+    vendorPartNo:($('epVpn').value||'').trim(),mfrPartNo:($('epMpn').value||'').trim(),notForResale:!!($('epNfr')&&$('epNfr').checked),cost:Number($('epCost').value)||0,uom:($('epUom').value||'').trim(),
     spec:($('epSpec').value||'').trim(),reorder:Number($('epReorder').value)||0,cushion:Number($('epCushion').value)||0,
     lot:Math.max(1,Number($('epLot').value)||1)};
   if(newId&&newId!==id){
