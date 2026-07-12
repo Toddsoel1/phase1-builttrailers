@@ -72,6 +72,18 @@ export async function actionItemsFor(user) {
       label: `${plural(n, 'VIN')} failed the NHTSA check — fix before labels/MSOs print`, count: n, link: 'printcenter' });
   }
 
+  // 3d. Pricing gaps — nothing sits at $0: unpriced parts (dealers see "Call for price", BOM
+  //     cost and COGS run light) + $0 option choices not marked included-in-standard.
+  if (isAdmin || has('parts_edit')) {
+    const nParts = await count(`SELECT COUNT(*)::int AS n FROM part WHERE active <> false AND COALESCE(cost,0) <= 0`);
+    const nOpts = await count(`SELECT COUNT(*)::int AS n FROM option_choice c JOIN option_group g ON g.id=c.group_id
+                                WHERE c.active AND g.active AND COALESCE(c.dealer_price,0) <= 0 AND c.included = false`);
+    const nReq = await count(`SELECT COUNT(*)::int AS n FROM price_request WHERE status='open'`);
+    if (nParts + nOpts) items.push({ key: 'pricing_gaps', icon: '💲',
+      label: `${plural(nParts + nOpts, 'pricing gap')} — nothing should sit at $0${nReq ? ` (${plural(nReq, 'dealer request')} waiting)` : ''}`,
+      count: nParts + nOpts, link: 'parts' });
+  }
+
   // 4. Replenishment — never run out of what the scheduled orders need.
   //    Shop Specialist / Shop Manager (and admins) get the targeted MRP push with specifics:
   //    ORDER NOW / BUILD NOW when a part will run out before replenishment can land.

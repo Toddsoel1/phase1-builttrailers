@@ -66,6 +66,25 @@ export async function listPriceRequests() {
   }));
 }
 
+// The "$0 sweep": nothing sits at $0 unnoticed. Every active part without a cost (it poisons
+// BOM cost, COGS, and the dealer catalog) and every $0 option choice that isn't explicitly
+// marked included-in-standard shows here until someone prices it or owns the $0.
+export async function pricingGaps() {
+  const parts = (await all(
+    `SELECT p.id, p.name, p.type, p.on_hand,
+            (SELECT COUNT(*)::int FROM bom_line b WHERE b.part_id=p.id) AS bom_count,
+            (SELECT COUNT(*)::int FROM price_request r WHERE r.part_id=p.id AND r.status='open') AS open_requests
+       FROM part p WHERE p.active <> false AND COALESCE(p.cost,0) <= 0 ORDER BY open_requests DESC, bom_count DESC, p.id`, []))
+    .map(p => ({ partId: p.id, name: p.name, type: p.type, onHand: Number(p.on_hand),
+      bomCount: Number(p.bom_count), openRequests: Number(p.open_requests) }));
+  const options = (await all(
+    `SELECT c.id, c.name, g.name AS group_name FROM option_choice c JOIN option_group g ON g.id=c.group_id
+      WHERE c.active AND g.active AND COALESCE(c.dealer_price,0) <= 0 AND c.included = false
+      ORDER BY g.sort, c.sort`, []).catch(() => []))
+    .map(c => ({ choiceId: c.id, name: c.name, group: c.group_name }));
+  return { parts, options, total: parts.length + options.length };
+}
+
 // Resolving usually means publishing the cost right here — pricing goes live for every dealer
 // the moment it lands. Any open request for the same part resolves with it.
 export async function resolvePriceRequest(id, cost, user) {

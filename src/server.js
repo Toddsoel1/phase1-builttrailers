@@ -549,6 +549,11 @@ app.post('/api/dealer/price-requests', dealer.dealerAuth, async (req, res) => {
 app.get('/api/price-requests', authMiddleware, requireSales, async (_req, res) => {
   res.json(await dealerparts.listPriceRequests());
 });
+// The $0 sweep: unpriced parts + $0 options not marked included. Read-only for any staff;
+// fixing goes through the existing gated part/option routes.
+app.get('/api/pricing-gaps', authMiddleware, async (_req, res) => {
+  res.json(await dealerparts.pricingGaps());
+});
 app.post('/api/price-requests/:id/resolve', authMiddleware, requireSales, async (req, res) => {
   const settingCost = req.body?.cost != null && req.body.cost !== '';
   const mayEditCost = req.user.role === 'admin'
@@ -2706,6 +2711,13 @@ app.get('/api/boat-admin/catalog', authMiddleware, requireBoatAdmin, async (_req
 app.post('/api/boat-admin/price', authMiddleware, requireBoatAdmin, async (req, res) => {
   if (!req.body?.choiceId) return res.status(400).json({ error: 'choiceId required' });
   await q('UPDATE option_choice SET dealer_price=$1 WHERE id=$2', [Number(req.body.dealerPrice) || 0, req.body.choiceId]);
+  res.json({ ok: true });
+});
+// Mark a $0 option choice as included-in-standard — "$0 on purpose", off the pricing-gaps sweep.
+app.post('/api/boat-admin/choice-included', authMiddleware, requireBoatAdmin, async (req, res) => {
+  if (!req.body?.choiceId) return res.status(400).json({ error: 'choiceId required' });
+  await q('UPDATE option_choice SET included=$1 WHERE id=$2', [!!req.body.included, req.body.choiceId]);
+  await audit(req, 'boat.included', `${req.body.choiceId} → ${req.body.included ? 'included in standard' : 'needs a price'}`);
   res.json({ ok: true });
 });
 app.post('/api/boat-admin/cost', authMiddleware, requireBoatAdmin, async (req, res) => {

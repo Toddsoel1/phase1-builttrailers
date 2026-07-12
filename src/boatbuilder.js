@@ -98,7 +98,7 @@ const slug = s => s.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, 
 // upcharge (price set by the office). The fender list is the same colors at no charge.
 function colorChoices(fender) {
   const pre = fender ? 'fcolor_' : 'color_';
-  const std = STANDARD_COLORS.map((name, i) => ({ id: pre + slug(name), name, default: i === 0 }));
+  const std = STANDARD_COLORS.map((name, i) => ({ id: pre + slug(name), name, default: i === 0, included: true }));
   const flk = FLAKE_COLORS.map(name => ({
     id: pre + slug(name), name, note: 'Metal flake',
     parts: fender ? [] : [['BUY-FLK-001', 1]],
@@ -113,52 +113,52 @@ function colorChoices(fender) {
 const GROUPS = [
   { id: 'axle_count', name: 'Axle Count', step: 3, ui: 'single', required: true, help: 'Sized to your boat — single/tandem under 22 ft, tandem/triple at 22 ft and over.',
     choices: [
-      { id: 'ac_single', name: 'Single Axle' },
-      { id: 'ac_tandem', name: 'Tandem Axle', default: true },
-      { id: 'ac_triple', name: 'Triple Axle' },
+      { id: 'ac_single', name: 'Single Axle', included: true },
+      { id: 'ac_tandem', name: 'Tandem Axle', default: true, included: true },
+      { id: 'ac_triple', name: 'Triple Axle', included: true },
     ] },
   { id: 'axle_type', name: 'Axle Type', step: 3, ui: 'single', required: true, exclusive: true, help: 'Sprung is standard; torsion rides smoother and is sealed.',
     choices: [
-      { id: 'axle_sprung', name: 'Sprung (Leaf Spring)', default: true, parts: [['BUY-AXL-3500', 1], ['BUY-SPR-3500', 2]] },
+      { id: 'axle_sprung', name: 'Sprung (Leaf Spring)', default: true, included: true, parts: [['BUY-AXL-3500', 1], ['BUY-SPR-3500', 2]] },
       { id: 'axle_torsion', name: 'Torsion', parts: [['BUY-AXL-3500T', 1]] },
     ] },
   { id: 'brakes', name: 'Brakes', step: 3, ui: 'single', required: true, help: 'Electric-over-hydraulic is included in the standard price.',
     choices: [
-      { id: 'brk_eoh', name: 'Electric Over Hydraulic (Included)', default: true, parts: [['BUY-BRK-EOH', 1]] },
+      { id: 'brk_eoh', name: 'Electric Over Hydraulic (Included)', default: true, included: true, parts: [['BUY-BRK-EOH', 1]] },
       { id: 'brk_surge', name: 'Surge', parts: [['BUY-BRK-SURGE', 1]] },
       { id: 'brk_disc', name: 'Disc', parts: [['BUY-BRK-DISC', 1]] },
     ] },
   { id: 'front_ladder', name: 'Two-Rail Step Ladder', step: 4, ui: 'bool', required: false, help: 'Included in the standard price.',
-    choices: [{ id: 'ladder_yes', name: 'Two-Rail Bow Step Ladder (Included)', default: true, parts: [['BUY-LAD-001', 1]] }] },
+    choices: [{ id: 'ladder_yes', name: 'Two-Rail Bow Step Ladder (Included)', default: true, included: true, parts: [['BUY-LAD-001', 1]] }] },
   { id: 'spare_tire', name: 'Spare Tire', step: 4, ui: 'bool', required: false, help: 'Includes the spare tire mount.',
     choices: [{ id: 'spare_yes', name: 'Spare Tire + Mount', parts: [['BUY-SPM-001', 1], ['BUY-TIR-001', 1]] }] },
   { id: 'nonskid_mat', name: 'Non-Skid Mat', step: 4, ui: 'single', required: false, help: '3-layer bunk matting.',
     choices: [
-      { id: 'mat_none', name: 'None', default: true },
+      { id: 'mat_none', name: 'None', default: true, included: true },
       { id: 'mat_titanium', name: '3-Layer Titanium Grey (Black accent)', parts: [['BUY-MAT-TIGREY', 1]] },
       { id: 'mat_mocha', name: '3-Layer Mocha Brown (Black accent)', parts: [['BUY-MAT-MOCHA', 1]] },
       { id: 'mat_black', name: '3-Layer Black (White accent)', parts: [['BUY-MAT-BLACK', 1]] },
     ] },
   { id: 'paint_style', name: 'Paint Style', step: 5, ui: 'single', required: true,
-    choices: [{ id: 'paint_single', name: 'Single Color', default: true }, { id: 'paint_twotone', name: 'Two-Tone (frame + fender)' }] },
+    choices: [{ id: 'paint_single', name: 'Single Color', default: true, included: true }, { id: 'paint_twotone', name: 'Two-Tone (frame + fender)' }] },
   { id: 'paint_color', name: 'Color', step: 5, ui: 'single', required: true, help: 'Primary (frame) color.' },
   { id: 'paint_fender_color', name: 'Fender Color', step: 5, ui: 'single', required: false, help: 'Two-tone builds only.' },
   { id: 'wheels', name: 'Wheels', step: 6, ui: 'single', required: true, exclusive: true,
     choices: [
-      { id: 'wheel_std', name: 'Standard Aluminum', default: true, parts: [['BUY-WHL-001', 2]] },
+      { id: 'wheel_std', name: 'Standard Aluminum', default: true, included: true, parts: [['BUY-WHL-001', 2]] },
       { id: 'wheel_prem', name: 'Premium Aluminum', parts: [['BUY-WHL-PREM', 2]] },
       { id: 'wheel_blk', name: 'Blackout Package', parts: [['BUY-WHL-BLK', 2]] },
     ] },
   { id: 'fender_style', name: 'Fender Style', step: 7, ui: 'single', required: true,
-    choices: [{ id: 'fender_squared', name: 'Squared Style', default: true }] },
+    choices: [{ id: 'fender_squared', name: 'Squared Style', default: true, included: true }] },
   { id: 'winch', name: 'Winch', step: 8, ui: 'single', required: true, help: 'DL covered winch.',
     choices: [
-      { id: 'winch_dl_single', name: 'DL Covered Single Speed', default: true, parts: [['BUY-WNC-002', 1, 'remove'], ['BUY-WNC-DLS', 1]] },
+      { id: 'winch_dl_single', name: 'DL Covered Single Speed', default: true, included: true, parts: [['BUY-WNC-002', 1, 'remove'], ['BUY-WNC-DLS', 1]] },
       { id: 'winch_dl_dual', name: 'DL Covered Dual Speed', parts: [['BUY-WNC-002', 1, 'remove'], ['BUY-WNC-DLD', 1]] },
     ] },
   { id: 'winch_stand', name: 'Jack Stand', step: 8, ui: 'single', required: true, help: 'Fulton F2 is standard.',
     choices: [
-      { id: 'winch_f2', name: 'Fulton F2', default: true },
+      { id: 'winch_f2', name: 'Fulton F2', default: true, included: true },
       { id: 'winch_f2plate', name: 'Fulton F2 Plate', parts: [['BUY-JCK-PLATE', 1]] },
       { id: 'winch_elec', name: 'Electric', parts: [['BUY-JCK-001', 1, 'remove'], ['BUY-JCK-ELEC', 1]] },
     ] },
@@ -197,9 +197,12 @@ export async function ensureBoatCatalog() {
       [g.id, g.name, g.step, g.ui, !!g.required, !!g.exclusive, g.help || null, gs++]);
     let cs = 0;
     for (const c of choicesFor(g)) {
-      await q(`INSERT INTO option_choice(id,group_id,name,is_default,sort,note) VALUES($1,$2,$3,$4,$5,$6)
-               ON CONFLICT(id) DO UPDATE SET group_id=$2,name=$3,is_default=$4,sort=$5,note=$6,active=true`,
-        [c.id, g.id, c.name, !!c.default, cs++, c.note || null]);
+      // `included` = "$0 on purpose". Code can flip it ON (our standard inclusions) but never
+      // OFF — an office decision to mark a choice included survives every re-seed.
+      await q(`INSERT INTO option_choice(id,group_id,name,is_default,sort,note,included) VALUES($1,$2,$3,$4,$5,$6,$7)
+               ON CONFLICT(id) DO UPDATE SET group_id=$2,name=$3,is_default=$4,sort=$5,note=$6,active=true,
+                 included = option_choice.included OR EXCLUDED.included`,
+        [c.id, g.id, c.name, !!c.default, cs++, c.note || null, !!c.included]);
       for (const [partId, qty, op] of (c.parts || []))
         await q(`INSERT INTO option_choice_part(choice_id,part_id,qty,op) VALUES($1,$2,$3,$4) ON CONFLICT(choice_id,part_id,op) DO NOTHING`,
           [c.id, partId, qty, op || 'add']);
@@ -223,7 +226,7 @@ export async function getCatalog() {
     for (const r of priceRows.filter(p => p.boat_id === b.id)) b.prices[r.axle_count] = Number(r.price);
   }
   const groups = await all('SELECT id,name,step,ui,required,exclusive,help FROM option_group WHERE active ORDER BY step,sort', []);
-  const choices = await all('SELECT id, group_id, name, dealer_price, is_default, sort, note FROM option_choice WHERE active ORDER BY group_id, sort', []);
+  const choices = await all('SELECT id, group_id, name, dealer_price, is_default, sort, note, included FROM option_choice WHERE active ORDER BY group_id, sort', []);
   const parts = await all('SELECT choice_id, part_id, qty, op FROM option_choice_part', []);
   const byGroup = {};
   for (const c of choices) (byGroup[c.group_id] ||= []).push({ ...c, parts: parts.filter(p => p.choice_id === c.id) });

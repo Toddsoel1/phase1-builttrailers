@@ -2181,4 +2181,24 @@ test('🔩 dealer parts channel: tiered pricing, VIN lookup, lifecycle → invoi
   const nowPriced = cat4.lines.find(l => l.partId === 'MK-PROBE-NEW');
   assert.ok(!nowPriced.unpriced && nowPriced.dealerPrice === 160 && nowPriced.msrp === 320 && nowPriced.map === 266.67);
   assert.equal((await json(await api('/api/price-requests'))).filter(r => r.partId === 'MK-PROBE-NEW').length, 0, 'request leaves the queue');
+
+  // "Let's not leave anything $0": the sweep lists every unpriced part and every $0 option
+  // that isn't explicitly included-in-standard — and the inbox nags until it's clean.
+  await api('/api/parts', { method: 'POST', body: JSON.stringify({ id: 'MK-PROBE-ZERO', name: 'Probe Zero Bracket', cost: 0 }) });
+  let gaps = await json(await api('/api/pricing-gaps'));
+  assert.ok(gaps.parts.some(g => g.partId === 'MK-PROBE-ZERO'), 'unpriced part on the sweep');
+  assert.ok(gaps.options.length > 0, 'unflagged $0 options on the sweep');
+  assert.ok(!gaps.options.some(o => o.choiceId === 'brk_eoh' || o.choiceId === 'ladder_yes'),
+    'our standard inclusions (EOH brakes, two-rail ladder) are $0 on purpose — not gaps');
+  const inbox = await json(await api('/api/inbox'));
+  const nag = (inbox.items || []).find(i => i.key === 'pricing_gaps');
+  assert.ok(nag && nag.count >= gaps.total - 1, 'the Action Inbox pushes the $0 sweep');
+  // Publishing a cost clears the part; marking an option included clears it too.
+  await api('/api/parts/MK-PROBE-ZERO', { method: 'PATCH', body: JSON.stringify({ cost: 12 }) });
+  const opt = gaps.options[0];
+  assert.equal((await api('/api/boat-admin/choice-included', { method: 'POST', body: JSON.stringify({ choiceId: opt.choiceId, included: true }) })).status, 200);
+  gaps = await json(await api('/api/pricing-gaps'));
+  assert.ok(!gaps.parts.some(g => g.partId === 'MK-PROBE-ZERO'), 'priced part off the sweep');
+  assert.ok(!gaps.options.some(o => o.choiceId === opt.choiceId), 'included-in-standard option off the sweep');
+  await api('/api/boat-admin/choice-included', { method: 'POST', body: JSON.stringify({ choiceId: opt.choiceId, included: false }) }); // restore
 });
