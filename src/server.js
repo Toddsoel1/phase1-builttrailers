@@ -747,9 +747,30 @@ app.post('/api/auth/login', loginLimiter, async (req, res) => {
     await all(`SELECT DISTINCT rs.section FROM user_title ut JOIN role_section rs ON rs.role_name=ut.role_name WHERE ut.user_id=$1`, [u.id]);
   const sections = sectionRows ? sectionRows.map(r => r.section) : null;
   const safe = { id: u.id, name: u.name, username: u.username, title: u.title, titles, role: u.role, manager_id: u.manager_id, sections, email: u.email || null, workstation: u.workstation || null, schedule: standup.parseSchedule(u.schedule) };
-  res.json({ token: signToken(u), user: safe });
+  const peopleOn = (await one(`SELECT value FROM app_config WHERE key='phase_people'`, []).catch(() => null))?.value === 'on';
+  res.json({ token: signToken(u), user: safe, features: { people: peopleOn } });
 });
-app.get('/api/auth/me', authMiddleware, (req, res) => res.json({ user: req.user }));
+// ---- rollout phases: whole sections ship dark and unlock when the team is ready ----------
+// Adoption beats features: fewer pages during rollout = fewer touches to learn. The People
+// section (Team & Payroll, Schedule & Time Off, Goals & Outcomes, Wins) is phase-gated.
+async function phaseOn(name) {
+  return (await one('SELECT value FROM app_config WHERE key=$1', ['phase_' + name]).catch(() => null))?.value === 'on';
+}
+function requirePhase(name) {
+  return async (_req, res, next) => {
+    if (await phaseOn(name)) return next();
+    res.status(403).json({ error: 'This area unlocks in a later rollout phase.' });
+  };
+}
+const requirePeople = requirePhase('people');
+app.get('/api/auth/me', authMiddleware, async (req, res) => res.json({ user: req.user, features: { people: await phaseOn('people') } }));
+app.post('/api/features', authMiddleware, requireTier('admin'), async (req, res) => {
+  const { feature, on } = req.body || {};
+  if (feature !== 'people') return res.status(400).json({ error: 'unknown feature' });
+  await q(`INSERT INTO app_config(key,value) VALUES($1,$2) ON CONFLICT(key) DO UPDATE SET value=$2`, ['phase_' + feature, on ? 'on' : 'off']);
+  await audit(req, 'feature.phase', `${feature} ${on ? 'unlocked' : 'hidden'} — rollout phase toggled`);
+  res.json({ ok: true, [feature]: !!on });
+});
 
 // ---- QBO connection diagnostic ----
 app.get('/api/qbo/test', authMiddleware, requireTier('admin'), async (_req, res) => {
@@ -1013,7 +1034,7 @@ app.get('/api/parts', authMiddleware, async (_req, res) => {
   res.json(rows.map(p => ({
     id: p.id, name: p.name, type: p.type, vendor: p.vendor_name, vendorId: p.vendor_id, vendorStatus: p.vendor_status, leadDays: p.lead_days,
     uom: p.uom, spec: p.spec, cost: Number(p.cost), onHand: p.on_hand, reorder: p.reorder, vendorPartNo: p.vendor_part_no, mfrPartNo: p.mfr_part_no, notForResale: p.not_for_resale === true,
-    vendorDescription: p.vendor_description, description: p.description,
+    vendorDescription: p.vendor_description, description: p.description, expendable: p.expendable === true,
     cushion: p.cushion, lot: p.lot, active: p.active !== false, extValue: Number(p.cost) * p.on_hand,
     status: p.on_hand < p.reorder ? 'below' : (p.on_hand < p.reorder + p.cushion ? 'low' : 'ok')
   })));
@@ -1030,19 +1051,19 @@ function requirePartsAdd(req, res, next) {
   next();
 }
 app.post('/api/parts', authMiddleware, requirePartsAdd, async (req, res) => {
-  const { id, name, type, cost, uom, spec, reorder, cushion, lot, vendorId, vendorPartNo, vendorDescription, description } = req.body || {};
+  const { id, name, type, cost, uom, spec, reorder, cushion, lot, vendorId, vendorPartNo, vendorDescription, description, expendable } = req.body || {};
   if (!name || !String(name).trim()) return res.status(400).json({ error: 'Part name is required.' });
-  const partType = ['B', 'P'].includes(type) ? type : 'M';
+  const partType = ['B', 'P'].includes(type) ? 'P' : 'M'; // UI says Buy/Make; storage is P/M
   if (vendorId && !await one('SELECT id FROM vendor WHERE id=$1', [vendorId])) return res.status(400).json({ error: 'Vendor not found' });
   let pid = id && String(id).trim() ? String(id).trim().toUpperCase().replace(/\s+/g, '-') : null;
   if (!pid) { const n = (await all(`SELECT id FROM part WHERE id LIKE 'MK-%'`, [])).length; pid = 'MK-' + (1001 + n); }
   if (await one('SELECT id FROM part WHERE id=$1', [pid])) return res.status(400).json({ error: `Part ${pid} already exists.` });
-  await q(`INSERT INTO part(id,name,type,cost,uom,spec,on_hand,reorder,cushion,lot,active,vendor_id,vendor_part_no,vendor_description,description)
-           VALUES ($1,$2,$3,$4,$5,$6,0,$7,$8,$9,true,$10,$11,$12,$13)`,
+  await q(`INSERT INTO part(id,name,type,cost,uom,spec,on_hand,reorder,cushion,lot,active,vendor_id,vendor_part_no,vendor_description,description,expendable)
+           VALUES ($1,$2,$3,$4,$5,$6,0,$7,$8,$9,true,$10,$11,$12,$13,$14)`,
     [pid, String(name).trim(), partType, Number(cost) || 0, uom || null, spec || null,
      Number(reorder) || 0, Number(cushion) || 0, Math.max(1, Number(lot) || 1),
      vendorId || null, String(vendorPartNo || '').trim() || null,
-     String(vendorDescription || '').trim() || null, String(description || '').trim() || null]);
+     String(vendorDescription || '').trim() || null, String(description || '').trim() || null, !!expendable]);
   await audit(req, 'part.create', `${pid} ${name} (${partType === 'M' ? 'Make' : 'Buy'}, app-only)`);
   res.json({ id: pid });
 });
@@ -1058,25 +1079,29 @@ function requirePartsEdit(req, res, next) {
 app.patch('/api/parts/:id', authMiddleware, requirePartsEdit, async (req, res) => {
   const cur = await one('SELECT * FROM part WHERE id=$1', [req.params.id]);
   if (!cur) return res.status(404).json({ error: 'not found' });
-  const { name, cost, uom, spec, type, reorder, cushion, lot, active, vendorId, vendorPartNo, mfrPartNo, notForResale, vendorDescription, description, newId } = req.body || {};
+  const { name, cost, uom, spec, type, reorder, cushion, lot, active, vendorId, vendorPartNo, mfrPartNo, notForResale, vendorDescription, description, expendable, newId } = req.body || {};
   if (vendorId !== undefined && vendorId && !await one('SELECT id FROM vendor WHERE id=$1', [vendorId]))
     return res.status(400).json({ error: 'Vendor not found' });
-  if (type !== undefined && !['B', 'M'].includes(type)) return res.status(400).json({ error: "type must be 'B' (buy) or 'M' (make)" });
+  if (type !== undefined && !['B', 'M', 'P'].includes(type)) return res.status(400).json({ error: "type must be 'B' (buy) or 'M' (make)" });
+  const normType = type === 'B' ? 'P' : type; // UI says Buy/Make; the DB check allows P/M only
   const newVendorId = vendorId !== undefined ? (vendorId || null) : cur.vendor_id;
   await q(`UPDATE part SET name=$1, cost=$2, uom=$3, spec=$4, type=$5, reorder=$6, cushion=$7, lot=$8, active=$9,
                            vendor_id=$10, vendor_part_no=$11, mfr_part_no=$12, not_for_resale=$13,
-                           vendor_description=$14, description=$15 WHERE id=$16`,
+                           vendor_description=$14, description=$15, expendable=$16 WHERE id=$17`,
     [String(name ?? cur.name).trim() || cur.name, cost ?? cur.cost,
      uom !== undefined ? (String(uom).trim() || null) : cur.uom,
      spec !== undefined ? (String(spec).trim() || null) : cur.spec,
-     type ?? cur.type, reorder ?? cur.reorder, cushion ?? cur.cushion, lot ?? cur.lot,
+     normType ?? cur.type, reorder ?? cur.reorder, cushion ?? cur.cushion, lot ?? cur.lot,
      active !== undefined ? !!active : (cur.active !== false), newVendorId,
      vendorPartNo !== undefined ? (String(vendorPartNo).trim() || null) : cur.vendor_part_no,
      mfrPartNo !== undefined ? (String(mfrPartNo).trim() || null) : cur.mfr_part_no,
      notForResale !== undefined ? !!notForResale : (cur.not_for_resale === true),
      vendorDescription !== undefined ? (String(vendorDescription).trim() || null) : cur.vendor_description,
      description !== undefined ? (String(description).trim() || null) : cur.description,
+     expendable !== undefined ? !!expendable : (cur.expendable === true),
      req.params.id]);
+  if (expendable !== undefined && !!expendable !== (cur.expendable === true))
+    await audit(req, 'part.expendable', `${req.params.id} ${expendable ? 'marked expendable — billed, never stocked' : 'inventory-tracked again'}`);
   if (notForResale !== undefined && !!notForResale !== (cur.not_for_resale === true))
     await audit(req, 'part.resale', `${req.params.id} ${notForResale ? 'marked NOT for resale' : 'available for resale again'}`);
   if (cost != null && Number(cost) !== Number(cur.cost))
@@ -2353,32 +2378,32 @@ app.post('/api/invoices/scan', authMiddleware, requireTier('editor'), async (req
 });
 
 // ---- people: employees & payroll (Phase 5) ----
-app.get('/api/employees', authMiddleware, async (_req, res) => res.json(await people.employees()));
-app.get('/api/payroll/summary', authMiddleware, async (_req, res) => res.json(await people.payrollSummary()));
+app.get('/api/employees', authMiddleware, requirePeople, async (_req, res) => res.json(await people.employees()));
+app.get('/api/payroll/summary', authMiddleware, requirePeople, async (_req, res) => res.json(await people.payrollSummary()));
 app.patch('/api/employees/:id/schedule', authMiddleware, requireTier('editor'), async (req, res) => {
   await people.setSchedule(req.params.id, req.body?.schedule || {}, req.user); res.json({ ok: true });
 });
 
 // ---- time off ----
-app.get('/api/timeoff', authMiddleware, async (_req, res) => res.json(await people.timeOffList()));
-app.post('/api/timeoff', authMiddleware, requireTier('editor'), async (req, res) => {
+app.get('/api/timeoff', authMiddleware, requirePeople, async (_req, res) => res.json(await people.timeOffList()));
+app.post('/api/timeoff', authMiddleware, requirePeople, requireTier('editor'), async (req, res) => {
   const id = await people.submitTimeOff(req.body || {}, req.user); res.json({ id });
 });
-app.post('/api/timeoff/:id/approve', authMiddleware, async (req, res) => {
+app.post('/api/timeoff/:id/approve', authMiddleware, requirePeople, async (req, res) => {
   if (!await people.canApproveTO(req.user, req.params.id)) return res.status(403).json({ error: 'Only the direct manager (or admin) can approve' });
   await people.approveTimeOff(req.params.id, req.user); res.json({ ok: true });
 });
-app.post('/api/timeoff/:id/deny', authMiddleware, async (req, res) => {
+app.post('/api/timeoff/:id/deny', authMiddleware, requirePeople, async (req, res) => {
   if (!await people.canApproveTO(req.user, req.params.id)) return res.status(403).json({ error: 'Only the direct manager (or admin) can deny' });
   await people.denyTimeOff(req.params.id, req.user); res.json({ ok: true });
 });
-app.post('/api/timeoff/:id/process', authMiddleware, async (req, res) => {
+app.post('/api/timeoff/:id/process', authMiddleware, requirePeople, async (req, res) => {
   if (!people.canProcessTO(req.user)) return res.status(403).json({ error: 'Office Manager (or admin) processes payroll' });
   const ok = await people.processTimeOff(req.params.id, req.user); res.json({ ok });
 });
 
 // ---- outcomes & self-goals ----
-app.get('/api/outcomes/:uid', authMiddleware, async (req, res) => res.json(await people.outcomeFor(req.params.uid) || {}));
+app.get('/api/outcomes/:uid', authMiddleware, requirePeople, async (req, res) => res.json(await people.outcomeFor(req.params.uid) || {}));
 app.patch('/api/users/:id/outcomes', authMiddleware, async (req, res) => {
   const u = await one('SELECT manager_id FROM app_user WHERE id=$1', [req.params.id]);
   if (!(req.user.role === 'admin' || (u && u.manager_id === req.user.id)))
@@ -2394,13 +2419,13 @@ app.post('/api/selfgoals/:id/toggle', authMiddleware, async (req, res) => { awai
 app.delete('/api/selfgoals/:id', authMiddleware, async (req, res) => { await people.deleteSelfGoal(req.user.id, req.params.id); res.json({ ok: true }); });
 
 // ---- recognition / wins ----
-app.get('/api/wins', authMiddleware, async (_req, res) => res.json({ wins: await people.wins(), departments: await people.departments(), workstations: await people.workstationsList(), categories: people.WIN_CATEGORIES }));
-app.post('/api/wins', authMiddleware, async (req, res) => {
+app.get('/api/wins', authMiddleware, requirePeople, async (_req, res) => res.json({ wins: await people.wins(), departments: await people.departments(), workstations: await people.workstationsList(), categories: people.WIN_CATEGORIES }));
+app.post('/api/wins', authMiddleware, requirePeople, async (req, res) => {
   if (req.user.titles.length && req.user.titles.every(t => t === 'External Viewer')) return res.status(403).json({ error: 'External viewers cannot post' });
   try { res.json({ id: await people.postWin(req.body || {}, req.user) }); }
   catch (e) { res.status(400).json({ error: e.message }); }
 });
-app.post('/api/wins/:id/react', authMiddleware, async (req, res) => {
+app.post('/api/wins/:id/react', authMiddleware, requirePeople, async (req, res) => {
   if (req.user.titles.length && req.user.titles.every(t => t === 'External Viewer')) return res.status(403).json({ error: 'External viewers cannot react' });
   await people.reactWin(req.params.id, req.body?.emoji, req.user.id); res.json({ ok: true });
 });

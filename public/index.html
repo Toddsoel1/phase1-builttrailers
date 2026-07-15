@@ -148,7 +148,8 @@ body.tv .topbar h2{font-size:24px}
 
 <script>
 const API = window.location.origin;
-let TOKEN = null, ME = null, page = 'dashboard';
+let TOKEN = null, ME = null, FEATURES = { people: false }, page = 'dashboard';
+const PHASED_PAGES = { team: 'people', timeoff: 'people', outcomes: 'people', wins: 'people' };
 const $ = id => document.getElementById(id);
 // Report uncaught front-end errors to the server so a browser crash is visible in the logs too.
 (function(){ let n=0; const MAX=10;
@@ -229,7 +230,7 @@ const canAddParts = () => canEditParts() || sectionGrant('parts_add');
 async function login(){
   try{
     const d = await api('/api/auth/login',{method:'POST',body:JSON.stringify({username:$('liUser').value.trim(),password:$('liPass').value})});
-    TOKEN=d.token;ME=d.user;
+    TOKEN=d.token;ME=d.user;FEATURES=d.features||{people:false};
     localStorage.setItem('staffToken',TOKEN);localStorage.setItem('staffName',ME.name||''); // survive refreshes / phone relaunches
     $('login').classList.add('hidden');$('app').classList.remove('hidden');
     page=ME.workstation?'standup':'dashboard'; // floor workers land on their day, not a dashboard
@@ -243,7 +244,7 @@ $('liPass').addEventListener('keydown',e=>{if(e.key==='Enter')login();});
   const saved=localStorage.getItem('staffToken');
   if(!saved)return;
   TOKEN=saved;
-  try{ const d=await api('/api/auth/me'); ME=d.user;
+  try{ const d=await api('/api/auth/me'); ME=d.user;FEATURES=d.features||{people:false};
     page=ME.workstation?'standup':'dashboard'; // floor workers land on their day
     $('login').classList.add('hidden'); $('app').classList.remove('hidden'); render(); maybeTv(); }
   catch(e){ /* expired or revoked — api() already cleared the session */ }
@@ -286,7 +287,7 @@ function renderNav(){
   const collapsed=JSON.parse(localStorage.getItem('navCollapsed')||'{}');
   let html='';
   for(const [label,keys] of NAV_GROUPS){
-    const vis=keys.filter(k=>navVisible([k]));
+    const vis=keys.filter(k=>navVisible([k])&&(!PHASED_PAGES[k]||FEATURES[PHASED_PAGES[k]]));
     if(!vis.length) continue;
     const items=vis.map(k=>`<button class="${page===k?'active':''}" onclick="go('${k}')">${NAV_LABEL[k]}</button>`).join('');
     if(!label){ html+=items; continue; }
@@ -390,8 +391,18 @@ document.addEventListener('keydown',e=>{
   if((e.metaKey||e.ctrlKey)&&(e.key==='k'||e.key==='K')){if(ME){e.preventDefault();openSearch();}}
   else if(e.key==='Escape'&&$('gsBg'))closeSearch();
 });
+async function togglePhase(feature,on){
+  try{ await api('/api/features',{method:'POST',body:JSON.stringify({feature,on})}); FEATURES[feature]=!!on;
+    toast(on?'🚦 '+feature+' section unlocked for everyone':'🚦 '+feature+' section hidden — rolling out later'); render(); }
+  catch(e){ toast(e.message); render(); }
+}
 async function render(){
   renderNav();
+  if(PHASED_PAGES[page]&&!FEATURES[PHASED_PAGES[page]]){
+    $('pTitle').textContent='Coming soon';$('pSub').textContent='';$('pActions').innerHTML='';
+    $('content').innerHTML='<div class="card"><p class="lead">🚦 This area unlocks in a later rollout phase — one thing at a time while the team builds its habits.</p></div>';
+    return;
+  }
   const map={dashboard:viewDash,orders:viewOrders,standup:viewStandup,mywork:viewMyWork,daily:viewDaily,performance:viewPerformance,neworder:viewNewOrder,customers:viewCustomers,parts:viewParts,predict:viewPredict,pos:viewPOs,boms:viewBoms,inventory:viewInv,accounting:viewAccounting,ownerdash:viewOwnerDash,trailers:viewTrailers,printcenter:viewPrintCenter,boatadmin:viewBoatAdmin,testdata:viewTestData,team:viewTeam,timeoff:viewTimeoff,outcomes:viewOutcomes,wins:viewWins,forecast:viewForecast,notify:viewNotify,support:viewSupport,users:viewUsers};
   try{
     await (map[page]||viewDash)();
@@ -853,7 +864,7 @@ function renderInbox(items){
 
 async function viewDash(){
   $('pTitle').textContent='Dashboard';$('pSub').textContent='The single source of truth — live from the database';$('pActions').innerHTML='';
-  const [inv,models,inbox,winsD]=await Promise.all([api('/api/inventory/summary'),api('/api/models'),api('/api/inbox').catch(()=>({items:[]})),api('/api/wins').catch(()=>null)]);
+  const [inv,models,inbox,winsD]=await Promise.all([api('/api/inventory/summary'),api('/api/models'),api('/api/inbox').catch(()=>({items:[]})),FEATURES.people?api('/api/wins').catch(()=>null):Promise.resolve(null)]);
   const avgMargin=models.reduce((s,m)=>s+m.margin,0)/models.length*100;
   let winStrip='';
   if(winsD){
@@ -915,7 +926,7 @@ async function viewParts(){
    <table><thead><tr><th>Part</th><th>Type</th><th>Vendor</th><th class="right">On hand</th><th class="right">Reorder</th><th class="right">Unit cost</th><th class="right">Ext. value</th><th class="center">Status</th>${canAddParts()?'<th></th>':''}</tr></thead><tbody>
    ${parts.map(p=>`<tr>
      <td><b>${esc(p.id)}</b><br><span class="muted" style="font-size:11px">${esc(p.name)}</span>${p.description?`<br><span class="muted" style="font-size:10.5px;font-style:italic" title="${esc(p.description)}">${esc(p.description.length>60?p.description.slice(0,57)+'…':p.description)}</span>`:''}</td>
-     <td>${p.type==='M'?'<span class="badge b-mfg">MAKE</span>':'<span class="badge b-buy">BUY</span>'}${p.notForResale?' <span class="badge b-below" title="Dealers see this part labeled Not for Resale — no pricing, no ordering">NFR</span>':''}</td>
+     <td>${p.type==='M'?'<span class="badge b-mfg">MAKE</span>':'<span class="badge b-buy">BUY</span>'}${p.notForResale?' <span class="badge b-below" title="Dealers see this part labeled Not for Resale — no pricing, no ordering">NFR</span>':''}${p.expendable?' <span class="badge b-low" title="Consumable — billed on POs but never stocked or counted">EXP</span>':''}</td>
      <td style="font-size:12px">${canEditParts()?`<a class="lnk" onclick="editPartVendor('${p.id}','${p.vendorId||''}')">${esc(p.vendor||'— assign —')}</a>`:esc(p.vendor||'')}${p.vendorStatus==='pending'?' <span class="badge b-low" style="font-size:9px">pending</span>':''}${p.vendorPartNo?`<br><span class="muted" style="font-size:10.5px">V/PN ${esc(p.vendorPartNo)}</span>`:''}${p.vendorDescription?`<br><span class="muted" style="font-size:10.5px;font-style:italic" title="${esc(p.vendorDescription)}">${esc(p.vendorDescription.length>44?p.vendorDescription.slice(0,41)+'…':p.vendorDescription)}</span>`:''}</td>
      <td class="right">${p.onHand}</td><td class="right">${p.reorder}</td>
      <td class="right">${canEditParts()?`<a class="lnk" onclick="editCost('${p.id}',${p.cost})">${money2(p.cost)}</a>`:money2(p.cost)}</td>
@@ -1039,6 +1050,7 @@ async function editPartModal(id){
       <div class="field"><label>Lot size</label><input id="epLot" class="inp" type="number" min="1" value="${p.lot}"></div>
     </div>
     <div class="field" style="margin-top:4px"><label style="display:flex;align-items:center;gap:8px;font-weight:500;cursor:pointer"><input type="checkbox" id="epNfr" ${p.notForResale?'checked':''} style="width:auto"> 🚫 Not for resale — dealers see the part on their trailer's list, labeled “Not for Resale”, with no pricing and no ordering</label></div>
+    <div class="field"><label style="display:flex;align-items:center;gap:8px;font-weight:500;cursor:pointer"><input type="checkbox" id="epExp" ${p.expendable?'checked':''} style="width:auto"> 🧻 Expendable — consumable supply (tape, gloves, blades): goes on POs and the QuickBooks bill, but receiving never stocks it and it stays off inventory counts &amp; value</label></div>
     <p class="muted" style="font-size:11px">On-hand isn't edited here — use Receive, 📥 Receive an invoice, or a 🧮 count so stock changes stay accounted for.</p>
     <div class="row" style="gap:8px;margin-top:8px">
       <button class="btn" onclick="saveEditPart('${esc(p.id)}')">Save</button>
@@ -1048,7 +1060,7 @@ async function editPartModal(id){
 async function saveEditPart(id){
   const newId=($('epId').value||'').trim();
   const body={name:($('epName').value||'').trim(),type:$('epType').value,vendorId:$('epVendor').value||null,
-    vendorPartNo:($('epVpn').value||'').trim(),mfrPartNo:($('epMpn').value||'').trim(),vendorDescription:($('epVdesc').value||'').trim(),description:($('epDesc').value||'').trim(),notForResale:!!($('epNfr')&&$('epNfr').checked),cost:Number($('epCost').value)||0,uom:($('epUom').value||'').trim(),
+    vendorPartNo:($('epVpn').value||'').trim(),mfrPartNo:($('epMpn').value||'').trim(),vendorDescription:($('epVdesc').value||'').trim(),description:($('epDesc').value||'').trim(),notForResale:!!($('epNfr')&&$('epNfr').checked),expendable:!!($('epExp')&&$('epExp').checked),cost:Number($('epCost').value)||0,uom:($('epUom').value||'').trim(),
     spec:($('epSpec').value||'').trim(),reorder:Number($('epReorder').value)||0,cushion:Number($('epCushion').value)||0,
     lot:Math.max(1,Number($('epLot').value)||1)};
   if(newId&&newId!==id){
@@ -1698,7 +1710,7 @@ async function viewStandup(){
       api('/api/timesurvey/pending').catch(()=>null),
       isMgr?api('/api/shopdash').catch(()=>null):Promise.resolve(null),
       api('/api/ideas/board').catch(()=>null),
-      api('/api/wins').catch(()=>null)]);
+      FEATURES.people?api('/api/wins').catch(()=>null):Promise.resolve(null)]);
     if(isMgr) plan=await api('/api/standup?date='+date);
   }catch(e){ $('content').innerHTML=`<div class="card"><p class="msg err">${esc(e.message)}</p></div>`; return; }
   window._ideas=ideas;
@@ -1790,7 +1802,7 @@ async function viewStandup(){
       <div class="card" style="margin:0;${dash.bottlenecks.length?'border-color:var(--red)':''}"><div class="muted" style="font-size:11px;text-transform:uppercase;letter-spacing:.5px">🚧 Bottleneck station</div>
         ${dash.bottlenecks.length?dash.bottlenecks.map(b=>`<div style="font-size:13px;padding:2px 0"><b style="color:var(--red)">${esc(b.stage)}</b> — ${b.count}/${b.limit} in stage${b.overForHours!=null?', over for <b>'+b.overForHours+'h</b>':''}</div>`).join('')+`<a class="lnk" style="font-size:11.5px" onclick="go('orders')">unstick on the board →</a>`
           :'<div style="font-size:20px;font-weight:800;color:var(--ok,#1a7f4b)">Flow clear</div><div class="muted" style="font-size:11.5px">no stage over its WIP limit</div>'}</div>
-      ${dash.recognition?(()=>{const rec=dash.recognition;const recColor=rec.daysSinceLastWin==null?'var(--red)':rec.daysSinceLastWin<=1?'var(--ok,#1a7f4b)':rec.daysSinceLastWin<=3?'var(--yellow,#e0a800)':'var(--red)';return `
+      ${dash.recognition&&FEATURES.people?(()=>{const rec=dash.recognition;const recColor=rec.daysSinceLastWin==null?'var(--red)':rec.daysSinceLastWin<=1?'var(--ok,#1a7f4b)':rec.daysSinceLastWin<=3?'var(--yellow,#e0a800)':'var(--red)';return `
       <div class="card" style="margin:0"><div class="muted" style="font-size:11px;text-transform:uppercase;letter-spacing:.5px">🎉 Recognition — last win</div>
         <div style="font-size:24px;font-weight:800;color:${recColor}">${rec.daysSinceLastWin==null?'never':rec.daysSinceLastWin===0?'today':rec.daysSinceLastWin+'d ago'}</div>
         <div class="muted" style="font-size:11.5px">${rec.monthTotal||0} win(s) this month</div>
@@ -2233,7 +2245,13 @@ async function viewUsers(){
   // What THIS viewer may do to a given row: admins touch everyone; a section-granted user
   // manager touches non-admin accounts other than their own (the server enforces the same).
   const canTouch=u=>isAdmin()||(canManageUsers()&&u.role!=='admin'&&u.id!==ME.id);
+  const phaseCard=isAdmin()?`<div class="card" style="margin-bottom:14px"><h3>🚦 Rollout phases</h3>
+    <p class="muted" style="font-size:12px;margin-bottom:8px">Adoption beats features — sections ship dark and unlock when the team's core habits are in place. Hidden sections vanish from everyone's navigation and their APIs answer "later".</p>
+    <label style="display:flex;align-items:center;gap:8px;font-size:13.5px;cursor:pointer"><input type="checkbox" ${FEATURES.people?'checked':''} onchange="togglePhase('people',this.checked)" style="width:auto">
+      <b>People</b> — Team &amp; Payroll, Schedule &amp; Time Off, Goals &amp; Outcomes, 🎉 Wins (incl. the Dashboard/Stand-Up wins cards, recognition widget, and the digest's wins section)</label>
+  </div>`:'';
   $('content').innerHTML=`
+  ${phaseCard}
   <div class="card" style="margin-bottom:14px"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px"><h3 style="margin:0">Users (${users.filter(u=>u.active!==false).length} active)</h3></div>
    <table><thead><tr><th>Name</th><th>Username</th><th>Job Title</th><th class="center">Permission</th><th>Reports to</th><th>Phone / Email</th><th></th></tr></thead><tbody>
    ${users.map(u=>`<tr style="${u.active===false?'opacity:0.45':''}">
@@ -3181,6 +3199,10 @@ async function receiveInvoiceModal(){
       <div class="field"><label>Other</label><input id="riOther" class="inp" type="number" min="0" step="0.01" value="0" oninput="riPreview()"></div>
     </div>
     <div class="field"><label>Other charge label (optional)</label><input id="riOtherLbl" class="inp" placeholder="e.g. fuel surcharge"></div>
+    <div class="row">
+      <div class="field"><label>Expensed charges — NOT landed <span class="muted" style="font-weight:400">(period expense; item costs don't move)</span></label><input id="riExp" class="inp" type="number" min="0" step="0.01" value="0" oninput="riPreview()"></div>
+      <div class="field"><label>Expensed label</label><input id="riExpLbl" class="inp" placeholder="e.g. expedite fee"></div>
+    </div>
     <div id="riPrev" style="margin:8px 0"></div>
     <div class="row" style="gap:8px">
       <button class="btn" id="riGo" onclick="riSend()">📥 Receive — post the bill</button>
@@ -3204,11 +3226,14 @@ function riPreview(){
   if(!rows.length){ box.innerHTML=''; return; }
   const parts=rows.reduce((a,p)=>a+p.total,0);
   const extras=(Number($('riShip').value)||0)+(Number($('riTax').value)||0)+(Number($('riOther').value)||0);
+  const exp=Number(($('riExp')||{}).value)||0;
   box.innerHTML=`<table><thead><tr><th>PO</th><th class="right">Line</th><th class="right">+ Allocated</th><th class="right">Landed / unit</th></tr></thead><tbody>
     ${rows.map(p=>{const share=parts>0?extras*(p.total/parts):0;return `<tr><td>${esc(p.id)} <span class="muted" style="font-size:11px">${p.qty}× ${esc(p.part||'')}</span></td>
       <td class="right">${money(p.total)}</td><td class="right">${money(share)}</td><td class="right"><b>${money2((p.total+share)/p.qty)}</b></td></tr>`;}).join('')}
-    <tr><td><b>Invoice total</b></td><td class="right">${money(parts)}</td><td class="right">${money(extras)}</td><td class="right"><b>${money(parts+extras)}</b></td></tr>
-  </tbody></table>`;
+    ${exp>0?`<tr><td colspan="3" class="right">Expensed — not landed${($('riExpLbl')&&$('riExpLbl').value)?' ('+esc($('riExpLbl').value)+')':''}</td><td class="right">${money(exp)}</td></tr>`:''}
+    <tr><td><b>Invoice total</b></td><td class="right">${money(parts)}</td><td class="right">${money(extras)}</td><td class="right"><b>${money(parts+extras+exp)}</b></td></tr>
+  </tbody></table>
+  ${exp>0?`<p class="muted" style="font-size:11px;margin-top:4px">The bill still equals the paper invoice; the expensed amount hits this period's expenses and standard BOM costs stay put.</p>`:''}`;
 }
 async function riSend(){
   const st=window._ri, vid=$('riVendor').value;
@@ -3218,7 +3243,8 @@ async function riSend(){
   try{
     const r=await api('/api/vendor-invoices/receive',{method:'POST',body:JSON.stringify({
       vendorId:vid,invoiceNo:($('riNo').value||'').trim(),invoiceDate:$('riDate').value||undefined,poIds,
-      shipping:Number($('riShip').value)||0,tax:Number($('riTax').value)||0,other:Number($('riOther').value)||0,otherLabel:($('riOtherLbl').value||'').trim()})});
+      shipping:Number($('riShip').value)||0,tax:Number($('riTax').value)||0,other:Number($('riOther').value)||0,otherLabel:($('riOtherLbl').value||'').trim(),
+      expensed:Number($('riExp').value)||0,expensedLabel:($('riExpLbl').value||'').trim()})});
     closeModal(); toast('📥 '+r.id+' received — bill '+money(r.total)+' ('+r.lines.length+' PO'+(r.lines.length>1?'s':'')+', extras '+money(r.extras)+')'); viewPOs();
   }catch(e){ btn.disabled=false; toast(e.message); }
 }

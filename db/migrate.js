@@ -325,6 +325,15 @@ const colMigrations = [
   // (rides POs and receiving), and a free-form INTERNAL description for our own people.
   `ALTER TABLE part ADD COLUMN IF NOT EXISTS vendor_description TEXT`,
   `ALTER TABLE part ADD COLUMN IF NOT EXISTS description TEXT`,
+  // Expendables: consumable shop supplies (tape, gloves, blades) — ordered on POs and billed
+  // to QuickBooks like anything else, but never inventory-tracked: receiving doesn't touch
+  // on_hand, and they never absorb landed-cost allocation.
+  `ALTER TABLE part ADD COLUMN IF NOT EXISTS expendable BOOLEAN NOT NULL DEFAULT false`,
+  // Invoice charges that are a PERIOD EXPENSE, not landed cost (e.g. an expedite fee paid to
+  // get out of a pinch): the bill still matches the vendor's paper to the penny, but standard
+  // part costs in the BOMs never move because of it.
+  `ALTER TABLE vendor_invoice ADD COLUMN IF NOT EXISTS expensed NUMERIC(12,2) NOT NULL DEFAULT 0`,
+  `ALTER TABLE vendor_invoice ADD COLUMN IF NOT EXISTS expensed_label TEXT`,
   `CREATE INDEX IF NOT EXISTS idx_dpl_order ON dealer_parts_line(order_id)`,
   `CREATE INDEX IF NOT EXISTS idx_dpo_status ON dealer_parts_order(status)`,
   // Bill-to vs ship-to per dealership: some dealers bill through a corporate/parent entity.

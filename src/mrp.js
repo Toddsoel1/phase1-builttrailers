@@ -162,7 +162,7 @@ export async function createPO(partId, qty, userId, vendorId) {
 // (the last line absorbs rounding so the shares sum exactly). Each part's cost becomes a
 // weighted average of existing stock and the FULLY LANDED unit cost of this receipt, and ONE
 // bill posts for the invoice bottom line — so the books match the paper to the penny.
-export async function receiveInvoice({ vendorId, invoiceNo, invoiceDate, poIds, shipping, tax, other, otherLabel }, userId) {
+export async function receiveInvoice({ vendorId, invoiceNo, invoiceDate, poIds, shipping, tax, other, otherLabel, expensed, expensedLabel }, userId) {
   const cents = x => Math.round((Number(x) || 0) * 100) / 100;
   const ids = [...new Set((Array.isArray(poIds) ? poIds : []).filter(Boolean))];
   if (!ids.length) throw new Error('Pick at least one PO covered by this invoice.');
@@ -177,20 +177,37 @@ export async function receiveInvoice({ vendorId, invoiceNo, invoiceDate, poIds, 
     if (po.status !== 'Open') throw new Error(`${id} is ${po.status} — only Open POs can be received.`);
     pos.push(po);
   }
-  const ship = cents(shipping), taxAmt = cents(tax), oth = cents(other);
-  if (ship < 0 || taxAmt < 0 || oth < 0) throw new Error('Shipping, tax, and other charges cannot be negative.');
-  const partsTotal = cents(pos.reduce((a, po) => a + Number(po.qty) * Number(po.unit_cost), 0));
+  const ship = cents(shipping), taxAmt = cents(tax), oth = cents(other), exp = cents(expensed);
+  if (ship < 0 || taxAmt < 0 || oth < 0 || exp < 0) throw new Error('Shipping, tax, other, and expensed charges cannot be negative.');
+  // Expendable lines are billed but never stocked — and they don't absorb landed cost, so the
+  // allocation basis is the NON-expendable line value only.
+  const flags = {};
+  for (const po of pos) flags[po.part_id] = (await one('SELECT expendable FROM part WHERE id=$1', [po.part_id]))?.expendable === true;
+  const lineVal = po => Number(po.qty) * Number(po.unit_cost);
+  const partsTotal = cents(pos.reduce((a, po) => a + lineVal(po), 0));
+  const basis = cents(pos.reduce((a, po) => a + (flags[po.part_id] ? 0 : lineVal(po)), 0));
   const extras = cents(ship + taxAmt + oth);
-  if (extras > 0 && partsTotal <= 0) throw new Error('Cannot allocate charges across zero-value lines.');
-  const total = cents(partsTotal + extras);
+  if (extras > 0 && basis <= 0) throw new Error('Every line is expendable (nothing lands into item costs) — enter freight/tax under Expensed charges instead.');
+  // Expensed charges (e.g. an expedite fee) ride the bill so QuickBooks pays the exact invoice,
+  // but they are a period expense — standard part costs never move because of them.
+  const total = cents(partsTotal + extras + exp);
 
   const invId = 'VI-' + Date.now().toString(36).toUpperCase();
   let allocated = 0;
   const lines = [];
+  const lastAllocIdx = pos.reduce((last, po, i) => flags[po.part_id] ? last : i, -1);
   for (let i = 0; i < pos.length; i++) {
     const po = pos[i];
-    const lineValue = Number(po.qty) * Number(po.unit_cost);
-    const share = i === pos.length - 1 ? cents(extras - allocated) : cents(extras * (partsTotal > 0 ? lineValue / partsTotal : 0));
+    const lineValue = lineVal(po);
+    if (flags[po.part_id]) {
+      // Expendable: billed, marked received, never stocked, never landed.
+      await q(`UPDATE purchase_order SET status='Received', received_at=now(), invoice_id=$1, landed_extra=0 WHERE id=$2`, [invId, po.id]);
+      await q('INSERT INTO audit_log(user_id,action,detail) VALUES ($1,$2,$3)',
+        [userId || null, 'po.receive', `${po.id}: ${po.qty} ${po.part_id} expendable — billed $${cents(lineValue)}, not stocked`]);
+      lines.push({ poId: po.id, partId: po.part_id, qty: Number(po.qty), share: 0, landedUnit: cents(lineValue / Number(po.qty)), newCost: null, expendable: true });
+      continue;
+    }
+    const share = i === lastAllocIdx ? cents(extras - allocated) : cents(extras * (basis > 0 ? lineValue / basis : 0));
     allocated = cents(allocated + share);
     const landedUnit = (lineValue + share) / Number(po.qty);
     const part = await one('SELECT on_hand, cost FROM part WHERE id=$1', [po.part_id]);
@@ -204,16 +221,17 @@ export async function receiveInvoice({ vendorId, invoiceNo, invoiceDate, poIds, 
       [userId || null, 'po.receive', `${po.id}: +${po.qty} ${po.part_id} landed $${cents(landedUnit)}/ea (+$${share} allocated) — cost ${prevCost} -> ${newCost}`]);
     lines.push({ poId: po.id, partId: po.part_id, qty: Number(po.qty), share, landedUnit: cents(landedUnit), newCost });
   }
-  await q(`INSERT INTO vendor_invoice(id,vendor_id,number,invoice_date,total,lines,status,created_by,shipping,tax,other,other_label,parts_total)
-           VALUES ($1,$2,$3,$4,$5,$6,'Applied',$7,$8,$9,$10,$11,$12)`,
+  await q(`INSERT INTO vendor_invoice(id,vendor_id,number,invoice_date,total,lines,status,created_by,shipping,tax,other,other_label,parts_total,expensed,expensed_label)
+           VALUES ($1,$2,$3,$4,$5,$6,'Applied',$7,$8,$9,$10,$11,$12,$13,$14)`,
     [invId, vendorId, String(invoiceNo || '').trim() || invId, invoiceDate || new Date().toISOString().slice(0, 10),
-     total, pos.length, userId || null, ship, taxAmt, oth, String(otherLabel || '').trim() || null, partsTotal]);
+     total, pos.length, userId || null, ship, taxAmt, oth, String(otherLabel || '').trim() || null, partsTotal,
+     exp, String(expensedLabel || '').trim() || null]);
   // One bill for the whole invoice — DocNumber carries the vendor's real invoice number so
   // reconciling against QuickBooks is a straight match. (receivePO's per-PO bill is skipped.)
   await postBill(String(invoiceNo || '').trim() || invId, v.name, total, userId);
   await q('INSERT INTO audit_log(user_id,action,detail) VALUES ($1,$2,$3)',
-    [userId || null, 'invoice.receive', `${invId} ${v.name} #${invoiceNo || '—'}: parts $${partsTotal} + ship $${ship} + tax $${taxAmt} + other $${oth} = $${total} (${pos.length} PO(s))`]);
-  return { id: invId, total, partsTotal, extras, lines };
+    [userId || null, 'invoice.receive', `${invId} ${v.name} #${invoiceNo || '—'}: parts $${partsTotal} + ship $${ship} + tax $${taxAmt} + other $${oth}${exp ? ` + expensed $${exp} (${String(expensedLabel || '').trim() || 'period expense'})` : ''} = $${total} (${pos.length} PO(s))`]);
+  return { id: invId, total, partsTotal, extras, expensed: exp, lines };
 }
 
 export async function receivePO(poId, userId) {
@@ -221,9 +239,10 @@ export async function receivePO(poId, userId) {
   if (!po || po.status === 'Received') return false;
   if (po.status === 'Pending Approval') throw new Error('PO is pending approval — cannot receive until approved');
   if (po.status === 'Rejected') throw new Error('PO was rejected');
-  await q('UPDATE part SET on_hand = on_hand + $1 WHERE id=$2', [po.qty, po.part_id]);
+  const expFlag = (await one('SELECT expendable FROM part WHERE id=$1', [po.part_id]))?.expendable === true;
+  if (!expFlag) await q('UPDATE part SET on_hand = on_hand + $1 WHERE id=$2', [po.qty, po.part_id]);
   await q("UPDATE purchase_order SET status='Received', received_at=now() WHERE id=$1", [poId]);
-  await q('INSERT INTO audit_log(user_id,action,detail) VALUES ($1,$2,$3)', [userId || null, 'po.receive', `${poId}: +${po.qty} ${po.part_id}`]);
+  await q('INSERT INTO audit_log(user_id,action,detail) VALUES ($1,$2,$3)', [userId || null, 'po.receive', `${poId}: ${expFlag ? po.qty + ' ' + po.part_id + ' expendable — billed, not stocked' : '+' + po.qty + ' ' + po.part_id}`]);
   // Phase 4: post a vendor bill to accounting on receipt
   const v = await one('SELECT name FROM vendor WHERE id=$1', [po.vendor_id]);
   await postBill(poId, v ? v.name : 'Vendor', po.qty * Number(po.unit_cost), userId);

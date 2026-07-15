@@ -76,6 +76,20 @@ test('login succeeds and rejects a bad password', async () => {
   assert.equal(bad.status, 401, 'wrong password rejected');
 });
 
+test('🚦 rollout phases: the People section ships dark; an admin unlocks it (for the rest of the suite too)', async () => {
+  assert.equal((await api('/api/wins')).status, 403, 'Wins is dark by default');
+  assert.equal((await api('/api/timeoff')).status, 403, 'Time Off is dark');
+  assert.equal((await api('/api/employees')).status, 403, 'Team & Payroll is dark');
+  assert.equal((await json(await api('/api/auth/me'))).features.people, false, 'clients learn the phase from /auth/me');
+  const sr = await api('/api/auth/login', { method: 'POST', body: JSON.stringify({ username: 'aruiz', password: 'built2026' }) });
+  const sales = (await sr.json()).token;
+  assert.equal((await fetch(BASE + '/api/features', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + sales },
+    body: JSON.stringify({ feature: 'people', on: true }) })).status, 403, 'only an admin flips rollout phases');
+  assert.equal((await api('/api/features', { method: 'POST', body: JSON.stringify({ feature: 'people', on: true }) })).status, 200);
+  assert.equal((await api('/api/wins')).status, 200, 'unlocked — the rest of the suite exercises the People module normally');
+  assert.equal((await json(await api('/api/auth/me'))).features.people, true);
+});
+
 test('create a sales order against an authorized customer + model', async () => {
   const custs = (await json(await api('/api/customers'))).filter(c => c.active !== false && c.allowed?.length);
   const models = await json(await api('/api/models'));
@@ -2228,4 +2242,42 @@ test('🔩 dealer parts channel: tiered pricing, VIN lookup, lifecycle → invoi
   const made = (await json(await api('/api/parts'))).find(p => p.id === 'MK-PROBE-DESC');
   assert.equal(made.vendorDescription, 'VENDOR SAYS SO');
   assert.equal(made.description, 'internal note');
+});
+
+test('🧻 expendables + expensed charges: billed to the penny, never landed, never stocked', async () => {
+  const vendorId = (await json(await api('/api/vendors'))).find(v => v.status !== 'pending' && v.status !== 'rejected').id;
+  const mkTape = await api('/api/parts', { method: 'POST', body: JSON.stringify({ id: 'BUY-PROBE-TAPE', name: 'Probe Shop Tape', type: 'B', cost: 4, expendable: true }) });
+  assert.equal(mkTape.status, 200, 'tape create: ' + JSON.stringify(await mkTape.clone().json().catch(() => ({}))));
+  await api('/api/parts', { method: 'POST', body: JSON.stringify({ id: 'BUY-PROBE-STEEL', name: 'Probe Steel Widget', type: 'B', cost: 50 }) });
+  assert.equal((await json(await api('/api/parts'))).find(p => p.id === 'BUY-PROBE-TAPE').expendable, true, 'flag rides the Parts Master');
+
+  const po1 = await json(await api('/api/po', { method: 'POST', body: JSON.stringify({ partId: 'BUY-PROBE-TAPE', qty: 2, vendorId }) }));  // 2 × $4 = $8
+  const po2 = await json(await api('/api/po', { method: 'POST', body: JSON.stringify({ partId: 'BUY-PROBE-STEEL', qty: 1, vendorId }) })); // 1 × $50
+  // Freight allocates across INVENTORY lines only; the expedite fee is expensed — item costs never see it.
+  const r = await json(await api('/api/vendor-invoices/receive', { method: 'POST', body: JSON.stringify({
+    vendorId, invoiceNo: 'INV-EXP-1', poIds: [po1.id, po2.id], shipping: 10, expensed: 25, expensedLabel: 'Expedite fee' }) }));
+  assert.equal(r.total, 93, '$8 tape + $50 steel + $10 freight + $25 expedite = the paper invoice');
+  assert.equal(r.expensed, 25);
+  const steelLine = r.lines.find(l => l.partId === 'BUY-PROBE-STEEL');
+  assert.equal(steelLine.share, 10, 'the whole freight lands on the only inventory line');
+  assert.equal(steelLine.newCost, 60, 'steel lands at $60');
+  const tapeLine = r.lines.find(l => l.partId === 'BUY-PROBE-TAPE');
+  assert.equal(tapeLine.share, 0, 'expendables never absorb landed cost');
+
+  const parts = await json(await api('/api/parts'));
+  const tape = parts.find(p => p.id === 'BUY-PROBE-TAPE'), steel = parts.find(p => p.id === 'BUY-PROBE-STEEL');
+  assert.equal(tape.onHand, 0, 'expendable received but never stocked');
+  assert.equal(tape.cost, 4, 'expendable standard cost untouched');
+  assert.equal(steel.onHand, 1);
+  assert.equal(steel.cost, 60);
+  const bill = (await json(await api('/api/accounting'))).events.find(e => e.kind === 'bill' && e.ref === 'INV-EXP-1');
+  assert.ok(bill && Number(bill.amount) === 93, 'QuickBooks pays the exact invoice — expensed charges included');
+
+  // Freight with ONLY expendable lines has nowhere to land — the app says use Expensed instead.
+  const po3 = await json(await api('/api/po', { method: 'POST', body: JSON.stringify({ partId: 'BUY-PROBE-TAPE', qty: 1, vendorId }) }));
+  assert.equal((await api('/api/vendor-invoices/receive', { method: 'POST', body: JSON.stringify({
+    vendorId, invoiceNo: 'INV-EXP-2', poIds: [po3.id], shipping: 5 }) })).status, 400);
+  // The plain receive path also skips stocking expendables (but still bills).
+  assert.equal((await api('/api/po/' + po3.id + '/receive', { method: 'POST' })).status, 200);
+  assert.equal((await json(await api('/api/parts'))).find(p => p.id === 'BUY-PROBE-TAPE').onHand, 0, 'still zero on hand');
 });

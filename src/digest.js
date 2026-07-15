@@ -2,7 +2,7 @@
 // how the shop actually ran: KPIs vs expectations, the generated recommendations, open floor
 // problems, and last week's throughput. Built from the same scorecard() the Performance screen
 // renders, so the email and the app can never disagree.
-import { all } from './db.js';
+import { all, one } from './db.js';
 import { scorecard } from './analytics.js';
 import { sendEmail, emailConfigured } from './email.js';
 import { winsSince } from './people.js';
@@ -47,12 +47,13 @@ export async function buildDigest() {
     ? `<p style="margin:14px 0 4px"><b>Top blockers (30 days)</b></p><ul style="margin:0;padding-left:18px">${sc.andon.pareto.slice(0, 3).map(p => `<li>${esc(p.reason)} — ${p.count}× (${p.hoursLost}h lost)</li>`).join('')}</ul>`
     : '';
 
-  // Recognition travels with the Monday email: the week's wins by Constitution behavior —
-  // or a nudge when the wall went quiet, because recognition should be frequent.
-  const wins = await winsSince(7);
+  // Recognition travels with the Monday email — but only once the People rollout phase is on;
+  // while it's dark the digest stays lean (fewer things to learn during adoption).
+  const peopleOn = (await one(`SELECT value FROM app_config WHERE key='phase_people'`, []).catch(() => null))?.value === 'on';
+  const wins = peopleOn ? await winsSince(7) : [];
   const catCounts = {};
   wins.forEach(w => { if (w.category) catCounts[w.category] = (catCounts[w.category] || 0) + 1; });
-  const winsBlock = wins.length
+  const winsBlock = !peopleOn ? '' : wins.length
     ? `<p style="margin:14px 0 4px"><b>🎉 Wins of the week (${wins.length})</b>${Object.keys(catCounts).length ? ` <span style="color:#6b7785;font-size:12px">— ${Object.entries(catCounts).map(([c, n]) => `${esc(c)} ×${n}`).join(' · ')}</span>` : ''}</p>
        <ul style="margin:0;padding-left:18px;font-size:13.5px;line-height:1.55">${wins.slice(0, 8).map(w => `<li>${w.category ? `<b>${esc(w.category)}</b>: ` : ''}${esc(w.targetLabel)} — ${esc(w.title)}</li>`).join('')}</ul>`
     : `<p style="margin:14px 0 4px"><b>🎉 No wins posted this week.</b> <span style="color:#6b7785;font-size:12px">Recognition should be frequent — post one for a behavior you saw: a quality catch, a safety intervention, someone helping a teammate.</span></p>`;
@@ -70,7 +71,7 @@ export async function buildDigest() {
   const text = `Built Trailers weekly digest (${week})\n`
     + sc.kpis.map(k => `${(STATUS_DOT[k.status] || '')} ${k.label}: ${fmtKpi(k)}${fmtTarget(k)}`).join('\n')
     + `\n\nWhere to focus:\n` + sc.recommendations.slice(0, 6).map(r => `- ${r.text} (${r.owner})`).join('\n')
-    + `\n\nWins of the week:\n` + (wins.length ? wins.slice(0, 8).map(w => `- ${w.category ? w.category + ': ' : ''}${w.targetLabel} — ${w.title}`).join('\n') : '- none posted — recognition should be frequent; post one for a behavior you saw')
+    + (peopleOn ? `\n\nWins of the week:\n` + (wins.length ? wins.slice(0, 8).map(w => `- ${w.category ? w.category + ': ' : ''}${w.targetLabel} — ${w.title}`).join('\n') : '- none posted — recognition should be frequent; post one for a behavior you saw') : '')
     + `\n\n${APP()}`;
 
   return { subject, html, text, misses, recCount: sc.recommendations.length };
