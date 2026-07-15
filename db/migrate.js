@@ -351,6 +351,9 @@ const colMigrations = [
   `CREATE INDEX IF NOT EXISTS idx_poack_po ON po_ack(po_id)`,
   `ALTER TABLE purchase_order ADD COLUMN IF NOT EXISTS unfulfilled_qty NUMERIC(12,2) NOT NULL DEFAULT 0`,
   `ALTER TABLE purchase_order ADD COLUMN IF NOT EXISTS cancel_reason TEXT`,
+  // The carrier saying "Delivered" is a claim; a staff member confirming receipt is the fact.
+  // received_at/received_by record the fact — inventory only ever moves on that confirmation.
+  `ALTER TABLE purchase_order ADD COLUMN IF NOT EXISTS received_by TEXT`,
   `CREATE INDEX IF NOT EXISTS idx_dpl_order ON dealer_parts_line(order_id)`,
   `CREATE INDEX IF NOT EXISTS idx_dpo_status ON dealer_parts_order(status)`,
   // Bill-to vs ship-to per dealership: some dealers bill through a corporate/parent entity.

@@ -2365,6 +2365,22 @@ test('📜 MSO certs, 🔎 last-4 search, 📋 PO acks + cancel, 🚚 tracking u
   assert.equal(t1.changed, true);
   assert.equal((await json(await api('/api/acks/' + k1.id + '/tracking-status', { method: 'POST', body: JSON.stringify({ status: 'In Transit' }) }))).changed, false, 'same status = no re-notify');
   assert.equal((await json(await api('/api/po'))).find(x => x.id === po.id).acks.find(a => a.id === k1.id).trackingStatus, 'In Transit');
+
+  // ---- the carrier's word is a claim; a staff confirmation is the fact that moves inventory ----
+  await api('/api/acks/' + k1.id + '/tracking-status', { method: 'POST', body: JSON.stringify({ status: 'Delivered' }) });
+  let poRow = (await json(await api('/api/po'))).find(x => x.id === po.id);
+  assert.equal(poRow.arrivedPerCarrier, true, 'carrier-delivered flags the Open PO for confirmation');
+  const onHandBefore = (await json(await api('/api/parts'))).find(pp => pp.id === 'BUY-PROBE-ACK').onHand;
+  assert.equal(onHandBefore, 0, 'carrier status alone never touches inventory');
+  const inboxNow = await json(await api('/api/inbox'));
+  assert.ok((inboxNow.items || []).some(i => i.key === 'po_arrived'), 'the inbox says: confirm receipt to update inventory');
+  assert.equal((await api('/api/po/' + po.id + '/receive', { method: 'POST' })).status, 200, 'a staff member confirms receipt');
+  poRow = (await json(await api('/api/po'))).find(x => x.id === po.id);
+  assert.equal(poRow.status, 'Received');
+  assert.ok(poRow.receivedAt, 'the moment of actual receipt is recorded');
+  assert.equal(poRow.receivedBy, 'Todd Soelberg', 'and WHO confirmed it');
+  assert.equal(poRow.arrivedPerCarrier, false, 'the claim flag clears once the fact is recorded');
+  assert.equal((await json(await api('/api/parts'))).find(pp => pp.id === 'BUY-PROBE-ACK').onHand, 7, 'inventory moved only on the staff confirmation (7 on the trimmed PO)');
   assert.match(JSON.stringify(await json(await api('/api/tracking/poll', { method: 'POST' }))), /no provider configured/, 'poller idles gracefully without a provider');
 
   // ---- full cancel: PO closes as unfulfilled and can never be received ----

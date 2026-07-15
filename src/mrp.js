@@ -119,9 +119,10 @@ export async function vendorScorecard() {
 }
 
 export async function poList() {
-  const rows = await all(`SELECT po.*, v.name AS vendor_name, p.name AS part_name, p.vendor_part_no
+  const rows = await all(`SELECT po.*, v.name AS vendor_name, p.name AS part_name, p.vendor_part_no, u.name AS received_by_name
                             FROM purchase_order po LEFT JOIN vendor v ON v.id=po.vendor_id
-                            LEFT JOIN part p ON p.id=po.part_id ORDER BY po.id DESC`, []);
+                            LEFT JOIN part p ON p.id=po.part_id LEFT JOIN app_user u ON u.id=po.received_by
+                            ORDER BY po.id DESC`, []);
   const ackRows = await all('SELECT * FROM po_ack ORDER BY id', []).catch(() => []);
   const acksBy = {};
   for (const a of ackRows) (acksBy[a.po_id] ||= []).push({
@@ -135,6 +136,10 @@ export async function poList() {
     placed: r.placed, eta: r.eta, status: r.status,
     acks: acksBy[r.id] || [], ackQty: (acksBy[r.id] || []).reduce((s, a) => s + a.qty, 0),
     unfulfilledQty: Number(r.unfulfilled_qty) || 0,
+    receivedAt: r.received_at || null, receivedBy: r.received_by_name || null,
+    // The carrier's claim, not the fact: true when any ack's tracking says delivered while
+    // the PO is still Open — i.e. "it should be on the dock, go confirm and receive it."
+    arrivedPerCarrier: r.status === 'Open' && (acksBy[r.id] || []).some(a => /deliver/i.test(a.trackingStatus || '')),
   }));
 }
 
@@ -267,7 +272,7 @@ export async function receiveInvoice({ vendorId, invoiceNo, invoiceDate, poIds, 
     const lineValue = lineVal(po);
     if (flags[po.part_id]) {
       // Expendable: billed, marked received, never stocked, never landed.
-      await q(`UPDATE purchase_order SET status='Received', received_at=now(), invoice_id=$1, landed_extra=0 WHERE id=$2`, [invId, po.id]);
+      await q(`UPDATE purchase_order SET status='Received', received_at=now(), received_by=$3, invoice_id=$1, landed_extra=0 WHERE id=$2`, [invId, po.id, userId || null]);
       await q('INSERT INTO audit_log(user_id,action,detail) VALUES ($1,$2,$3)',
         [userId || null, 'po.receive', `${po.id}: ${po.qty} ${po.part_id} expendable — billed $${cents(lineValue)}, not stocked`]);
       lines.push({ poId: po.id, partId: po.part_id, qty: Number(po.qty), share: 0, landedUnit: cents(lineValue / Number(po.qty)), newCost: null, expendable: true });
@@ -281,8 +286,8 @@ export async function receiveInvoice({ vendorId, invoiceNo, invoiceDate, poIds, 
     const prevCost = Number(part?.cost) || 0;
     const newCost = cents((prevQty * prevCost + Number(po.qty) * landedUnit) / (prevQty + Number(po.qty)));
     await q('UPDATE part SET on_hand = on_hand + $1, cost = $2 WHERE id=$3', [po.qty, newCost, po.part_id]);
-    await q(`UPDATE purchase_order SET status='Received', received_at=now(), invoice_id=$1, landed_extra=$2 WHERE id=$3`,
-      [invId, share, po.id]);
+    await q(`UPDATE purchase_order SET status='Received', received_at=now(), received_by=$4, invoice_id=$1, landed_extra=$2 WHERE id=$3`,
+      [invId, share, po.id, userId || null]);
     await q('INSERT INTO audit_log(user_id,action,detail) VALUES ($1,$2,$3)',
       [userId || null, 'po.receive', `${po.id}: +${po.qty} ${po.part_id} landed $${cents(landedUnit)}/ea (+$${share} allocated) — cost ${prevCost} -> ${newCost}`]);
     lines.push({ poId: po.id, partId: po.part_id, qty: Number(po.qty), share, landedUnit: cents(landedUnit), newCost });
@@ -308,7 +313,7 @@ export async function receivePO(poId, userId) {
   if (po.status === 'Cancelled') throw new Error('PO was cancelled as unfulfilled — nothing to receive.');
   const expFlag = (await one('SELECT expendable FROM part WHERE id=$1', [po.part_id]))?.expendable === true;
   if (!expFlag) await q('UPDATE part SET on_hand = on_hand + $1 WHERE id=$2', [po.qty, po.part_id]);
-  await q("UPDATE purchase_order SET status='Received', received_at=now() WHERE id=$1", [poId]);
+  await q("UPDATE purchase_order SET status='Received', received_at=now(), received_by=$2 WHERE id=$1", [poId, userId || null]);
   await q('INSERT INTO audit_log(user_id,action,detail) VALUES ($1,$2,$3)', [userId || null, 'po.receive', `${poId}: ${expFlag ? po.qty + ' ' + po.part_id + ' expendable — billed, not stocked' : '+' + po.qty + ' ' + po.part_id}`]);
   // Phase 4: post a vendor bill to accounting on receipt
   const v = await one('SELECT name FROM vendor WHERE id=$1', [po.vendor_id]);

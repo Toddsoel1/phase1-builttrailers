@@ -51,8 +51,16 @@ export async function actionItemsFor(user) {
       label: `${plural(n, 'BOM change')} to review`, count: n, link: 'accounting' });
   }
 
-  // 3. POs that have arrived and are ready to receive
+  // 3. POs that have arrived and are ready to receive. The carrier saying "Delivered" is a
+  //    claim — a staff member confirming receipt is what actually updates inventory, so
+  //    carrier-delivered-but-unconfirmed POs get their own louder line.
   if (has('pos')) {
+    const arrived = await count(
+      `SELECT COUNT(DISTINCT po.id)::int AS n FROM purchase_order po
+        JOIN po_ack a ON a.po_id = po.id
+       WHERE po.status='Open' AND a.tracking_status ILIKE '%deliver%'`);
+    if (arrived) items.push({ key: 'po_arrived', icon: '🚚',
+      label: `${plural(arrived, 'PO')} delivered per the carrier — confirm receipt to update inventory`, count: arrived, link: 'pos' });
     const n = await count(`SELECT COUNT(*)::int AS n FROM purchase_order WHERE status='Open'`);
     if (n) items.push({ key: 'po_receive', icon: '📦',
       label: `${plural(n, 'PO')} ready to receive`, count: n, link: 'pos' });
