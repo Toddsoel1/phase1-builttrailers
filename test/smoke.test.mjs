@@ -2318,6 +2318,19 @@ test('📜 MSO certs, 🔎 last-4 search, 📋 PO acks + cancel, 🚚 tracking u
   assert.equal(batch.assignments[0].superseded, 'A-0099-B', 'the superseded certificate is recorded');
   assert.equal((await json(await api('/api/mso-certs'))).next, '70008', 'counter lands after the batch');
 
+  // Model print specs auto-populate: the Nautique sheet's GVWR + standard tire backfill the
+  // boat base models at boot, and the coupler ball follows the sheet's actuator rule.
+  const specs = await json(await api('/api/print-specs'));
+  const gs24 = specs.find(m => m.id === 'GS24TR');
+  assert.equal(gs24.gvwrLbs, 10000, 'GVWR pulled from the 2027 Nautique sheet');
+  assert.equal(gs24.tire, '205/75R15 D', 'standard tire pulled from the sheet');
+  assert.equal(gs24.coupler, '2-5/16"', 'coupler ball derived: 2-5/16" above 6,000 lbs GVWR');
+  assert.ok(gs24.hitchCode === 'B' && gs24.bodyCode === 'B' && gs24.axles >= 1 && gs24.lengthFt > 0, 'hitch/body/axles/length all self-derived — nothing entered per trailer');
+  // ...and everything stays changeable on the screen (coupler included).
+  await api('/api/models/GS24TR/specs', { method: 'PATCH', body: JSON.stringify({ gvwrLbs: 10000, tire: '205/75R15 D', hitchCode: 'B', coupler: '2"', bodyCode: 'B', lengthFt: gs24.lengthFt, axles: 3 }) });
+  assert.equal((await json(await api('/api/print-specs'))).find(m => m.id === 'GS24TR').coupler, '2"', 'office override sticks');
+  await api('/api/models/GS24TR/specs', { method: 'PATCH', body: JSON.stringify({ gvwrLbs: 10000, tire: '205/75R15 D', hitchCode: 'B', coupler: '2-5/16"', bodyCode: 'B', lengthFt: gs24.lengthFt, axles: 3 }) });
+
   // ---- search by whole VIN or last 4 ----
   const curVin = (await json(await api('/api/trailers'))).registry.find(t => t.id === vinUnitId).vin;
   const byLast4 = await json(await api('/api/search?q=' + curVin.slice(-4)));

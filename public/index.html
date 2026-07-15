@@ -3910,7 +3910,7 @@ async function viewPrintCenter(){
       <div id="nhtsaBody"><p class="muted">Loading…</p></div>
     </div>`+
     `<div class="card" style="margin-bottom:16px"><h3>📐 Model print specs — what the VIN label &amp; MSO say</h3>
-      <p class="muted" style="font-size:12px;margin-bottom:10px">GVWR, empty (shipping) weight, tire, rim, cold PSI, and overall length print on the federal VIN label and the MSO. Cargo max on the label = GVWR − empty weight. Fill these once per model.</p>
+      <p class="muted" style="font-size:12px;margin-bottom:10px">Specs are per <b>model</b>, never per trailer — and most fill themselves: hitch/body/length/axles derive from the model, and the boat models carry the Nautique sheet's GVWR + standard tire. Everything stays changeable here; what still needs you is empty (shipping) weight, rim, and PSI. Cargo max on the label = GVWR − empty weight.</p>
       <div id="specsBody"><p class="muted">Loading…</p></div>
     </div>`+
     (isAdmin()?`<div class="card" style="margin-bottom:16px"><h3>📟 Shop-floor stage updates</h3>
@@ -4046,10 +4046,19 @@ async function loadSpecs(){
   b.innerHTML=`<p class="muted" style="font-size:11.5px;margin-bottom:8px">Hitch, Body, <b>Length</b>, and <b>Axles</b> become VIN positions 4–8 per the filed Part 565 scheme — a VIN can't be issued until they're set. GVWR/empty/tire/rim/PSI print on the label and MSO.</p>
   <table><thead><tr><th>Model</th><th>Hitch</th><th>Body</th><th>Length ft</th><th>Axles</th><th>GVWR lbs</th><th>Empty lbs</th><th>Tire</th><th>Rim</th><th>PSI</th><th></th></tr></thead><tbody>
     ${rows.map(m=>`<tr><td><b>${esc(m.id)}</b><br><span class="muted" style="font-size:11px">${esc(m.name)}</span></td>
-      <td>${sel(m.id,'hitch',m.hitchCode||'B',VIN_HITCH)}</td>
-      <td>${sel(m.id,'body',m.bodyCode||'',{'':'— pick —',...VIN_BODY})}</td>
+      <td>${(()=>{const cur=(m.hitchCode||'B')+'|'+(m.coupler||'2-5/16"');
+        const opts=[['B|2"','Bumper pull — 2" ball'],['B|2-5/16"','Bumper pull — 2 5/16" ball']];
+        if(!opts.some(o=>o[0]===cur))opts.push([cur,(VIN_HITCH[m.hitchCode]||m.hitchCode||'?')+(m.coupler?' — '+m.coupler:'')+' (current)']);
+        return `<select id="sp_hitch_${m.id}" style="padding:5px;border-radius:6px;border:1px solid var(--line);background:var(--panel2);color:var(--txt);font-size:12px">${opts.map(o=>`<option value='${o[0]}' ${o[0]===cur?'selected':''}>${o[1]}</option>`).join('')}</select>`;})()}</td>
+      <td>${(()=>{const isWc=String(m.category||'').toLowerCase()==='watercraft';
+        const cur=m.bodyCode==='B'?(isWc?'B_wc':'B_boat'):(m.bodyCode||'');
+        const opts=[['B_boat','Boat (B)'],['B_wc','Watercraft (B)'],['U','Utility (U)'],['G','BBQ (G)']];
+        if(cur&&!opts.some(o=>o[0]===cur))opts.push([cur,(VIN_BODY[m.bodyCode]||m.bodyCode)+' ('+m.bodyCode+') — current']);
+        if(!cur)opts.unshift(['','— pick —']);
+        return `<select id="sp_body_${m.id}" style="padding:5px;border-radius:6px;border:1px solid var(--line);background:var(--panel2);color:var(--txt);font-size:12px">${opts.map(o=>`<option value='${o[0]}' ${o[0]===cur?'selected':''}>${o[1]}</option>`).join('')}</select>`;})()}</td>
       <td>${inp(m.id,'len',m.lengthFt,52,'19')}</td>
-      <td>${inp(m.id,'axles',m.axles,42,'2')}</td>
+      <td>${(()=>{const cur=m.axles!=null?String(m.axles):'';
+        return `<select id="sp_axles_${m.id}" style="padding:5px;border-radius:6px;border:1px solid var(--line);background:var(--panel2);color:var(--txt);font-size:12px">${['','1','2','3','4'].map(v=>`<option value='${v}' ${v===cur?'selected':''}>${v||'—'}</option>`).join('')}</select>`;})()}</td>
       <td>${inp(m.id,'gvwr',m.gvwrLbs,66,'10500')}</td>
       <td>${inp(m.id,'empty',m.emptyWeightLbs,62,'2000')}</td>
       <td>${inp(m.id,'tire',m.tire,54,'255')}</td>
@@ -4060,9 +4069,12 @@ async function loadSpecs(){
 }
 async function saveSpecs(id){
   const g=f=>($('sp_'+f+'_'+id).value||'').trim();
+  const [hitchCode,coupler]=(g('hitch')||'B|2-5/16"').split('|');
+  const bodySel=g('body');
+  const bodyCode=bodySel==='B_boat'||bodySel==='B_wc'?'B':bodySel;
   try{ await api('/api/models/'+encodeURIComponent(id)+'/specs',{method:'PATCH',body:JSON.stringify({
       gvwrLbs:g('gvwr'),emptyWeightLbs:g('empty'),tire:g('tire'),rim:g('rim'),tirePsi:g('psi'),lengthFt:g('len'),
-      hitchCode:g('hitch'),bodyCode:g('body'),axles:g('axles')})});
+      hitchCode,coupler,bodyCode,axles:g('axles')})});
     toast('✓ '+id+' specs saved'); }
   catch(e){ toast(e.message); }
 }

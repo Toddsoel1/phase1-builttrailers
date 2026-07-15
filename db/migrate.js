@@ -337,6 +337,9 @@ const colMigrations = [
   // MSO certificate paper is pre-numbered; the app tracks which certificate each MSO printed
   // on. The counter lives in app_config ('mso_next_cert'); edits are limited-access and a
   // confirmed certificate locks against further edits.
+  // Coupler ball size — every Built trailer is bumper pull; the variation is the ball.
+  // (The filed VIN hitch code stays 'B' for both; the ball size is label/spec data.)
+  `ALTER TABLE model ADD COLUMN IF NOT EXISTS coupler TEXT`,
   `ALTER TABLE trailer ADD COLUMN IF NOT EXISTS mso_cert_no TEXT`,
   `ALTER TABLE trailer ADD COLUMN IF NOT EXISTS mso_cert_locked BOOLEAN NOT NULL DEFAULT false`,
   `ALTER TABLE trailer ADD COLUMN IF NOT EXISTS mso_cert_at TIMESTAMPTZ`,

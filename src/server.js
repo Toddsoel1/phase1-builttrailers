@@ -2662,10 +2662,10 @@ app.patch('/api/models/:id/price', authMiddleware, requireSales, async (req, res
 // Per-model print specs — the numbers the federal VIN label and MSO carry.
 // (Own path, not /api/models/:id/..., so it can't collide with the models routes above.)
 app.get('/api/print-specs', authMiddleware, requireVinAuthority, async (_req, res) => {
-  res.json((await all(`SELECT id, name, category, axle, gvwr_lbs, empty_weight_lbs, tire, rim, tire_psi, length_ft, hitch_code, body_code, axles FROM model ORDER BY category, id`, []))
+  res.json((await all(`SELECT id, name, category, axle, gvwr_lbs, empty_weight_lbs, tire, rim, tire_psi, length_ft, hitch_code, body_code, coupler, axles FROM model ORDER BY category, id`, []))
     .map(m => ({ id: m.id, name: m.name, category: m.category, gvwrLbs: m.gvwr_lbs, emptyWeightLbs: m.empty_weight_lbs,
       tire: m.tire, rim: m.rim, tirePsi: m.tire_psi, lengthFt: m.length_ft != null ? Number(m.length_ft) : null,
-      hitchCode: m.hitch_code, bodyCode: m.body_code,
+      hitchCode: m.hitch_code, bodyCode: m.body_code, coupler: m.coupler,
       axles: m.axles != null ? Number(m.axles) : (/tri/i.test(m.axle || '') ? 3 : /tand/i.test(m.axle || '') ? 2 : /sing/i.test(m.axle || '') ? 1 : null) })));
 });
 app.patch('/api/models/:id/specs', authMiddleware, requireVinAuthority, async (req, res) => {
@@ -2675,9 +2675,10 @@ app.patch('/api/models/:id/specs', authMiddleware, requireVinAuthority, async (r
   const num = v => (v === '' || v == null) ? null : Number(v);
   const code = v => String(v || '').trim().toUpperCase() || null;
   await q(`UPDATE model SET gvwr_lbs=$1, empty_weight_lbs=$2, tire=$3, rim=$4, tire_psi=$5, length_ft=$6,
-                            hitch_code=$7, body_code=$8, axles=$9 WHERE id=$10`,
+                            hitch_code=$7, body_code=$8, axles=$9, coupler=COALESCE($10, coupler) WHERE id=$11`,
     [num(b.gvwrLbs), num(b.emptyWeightLbs), String(b.tire || '').trim() || null, String(b.rim || '').trim() || null,
-     num(b.tirePsi), num(b.lengthFt), code(b.hitchCode), code(b.bodyCode), num(b.axles), req.params.id]);
+     num(b.tirePsi), num(b.lengthFt), code(b.hitchCode), code(b.bodyCode), num(b.axles),
+     b.coupler !== undefined ? (String(b.coupler).trim() || null) : null, req.params.id]);
   await audit(req, 'model.specs', `${req.params.id}: GVWR ${b.gvwrLbs || '—'}, ${b.lengthFt || '—'}ft, VDS ${code(b.hitchCode) || 'B'}${code(b.bodyCode) || '?'}/${b.axles || '?'}ax`);
   res.json({ ok: true });
 });
@@ -3074,6 +3075,17 @@ await ensureSchema();
   await boatbuilder.ensureBoatCatalog().catch(e => log('warn', 'boatCatalog', { error: e.message }));
   await engineering.ensureEngineering().catch(e => log('warn', 'engineering', { error: e.message }));
   tracking.startTrackingPoller();
+  // Model spec auto-population — specs are PER MODEL (never per trailer) and fill themselves
+  // where the source data is known: the 2027 Nautique sheet's GVWR + standard tire for the
+  // boat base models, and the coupler ball by the sheet's actuator rule (2" at 6,000 lbs GVWR
+  // and under, 2-5/16" above). Only NULLs are filled — office edits always win.
+  const NQ_SPECS = { GS20TAN: [7500, '205/75R14 D'], GS24TR: [10000, '205/75R15 D'], G23TR: [10000, '205/75R15 D'],
+    G25TR: [11595, '205/75R15 D'], P23TR: [11595, '205/75R15 D'], P25TR: [11595, '205/75R15 D'] };
+  for (const [mid, [gvwr, tire]] of Object.entries(NQ_SPECS)) {
+    await q('UPDATE model SET gvwr_lbs=COALESCE(gvwr_lbs,$1), tire=COALESCE(tire,$2) WHERE id=$3', [gvwr, tire, mid]).catch(() => {});
+  }
+  await q(`UPDATE model SET coupler = CASE WHEN gvwr_lbs <= 6000 THEN '2"' ELSE '2-5/16"' END
+            WHERE coupler IS NULL AND gvwr_lbs IS NOT NULL`).catch(() => {});
   // Built Trailers' real dealer network -> customer table for the public locator. One-time
   // (app_config flag) so later office edits to a dealer aren't overwritten on the next reboot.
   await ensureDealers().catch(e => log('warn', 'dealerSeed', { error: e.message }));
