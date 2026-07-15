@@ -1,0 +1,193 @@
+<title>Shop Manager — A Day in the App · Built Trailers</title>
+<style>
+  :root{
+    --paper:#fafaf7; --ink:#1c2129; --mut:#5b6472; --line:#dcdad2;
+    --panel:#f0efe9; --accent:#d96a10; --accent-ink:#b35408; --ok:#1a7f4b; --warn:#a05a00;
+    --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  }
+  @media (prefers-color-scheme: dark){
+    :root{ --paper:#14171c; --ink:#e8eaee; --mut:#98a1ad; --line:#2b313a;
+      --panel:#1d2129; --accent:#f08a33; --accent-ink:#f39a52; --ok:#4cc98a; --warn:#e0a34e; }
+  }
+  :root[data-theme="dark"]{ --paper:#14171c; --ink:#e8eaee; --mut:#98a1ad; --line:#2b313a;
+    --panel:#1d2129; --accent:#f08a33; --accent-ink:#f39a52; --ok:#4cc98a; --warn:#e0a34e; }
+  :root[data-theme="light"]{ --paper:#fafaf7; --ink:#1c2129; --mut:#5b6472; --line:#dcdad2;
+    --panel:#f0efe9; --accent:#d96a10; --accent-ink:#b35408; --ok:#1a7f4b; --warn:#a05a00; }
+
+  html{background:var(--paper)}
+  body{font-family:system-ui,-apple-system,"Segoe UI",sans-serif;color:var(--ink);line-height:1.62;
+    max-width:46.5rem;margin:0 auto;padding:3rem 1.4rem 6rem;font-size:16px}
+  h1{font-size:2rem;font-weight:800;letter-spacing:-.02em;line-height:1.15;margin:0 0 .4rem;text-wrap:balance}
+  h2{font-size:1.32rem;font-weight:800;letter-spacing:-.01em;margin:0 0 .9rem;text-wrap:balance;
+    padding-top:2.6rem;border-top:1px solid var(--line)}
+  h3{font-size:1.02rem;font-weight:700;margin:1.6rem 0 .5rem}
+  p{margin:.65rem 0}
+  a{color:var(--accent-ink);text-decoration:none}
+  a:hover,a:focus-visible{text-decoration:underline}
+  a:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:2px}
+  .kick{font-family:var(--mono);font-size:.72rem;letter-spacing:.14em;text-transform:uppercase;color:var(--accent-ink);margin-bottom:.7rem}
+  .lede{color:var(--mut);font-size:1.05rem;max-width:60ch}
+  .eyebrow{font-family:var(--mono);font-size:.7rem;letter-spacing:.12em;text-transform:uppercase;color:var(--mut);display:flex;gap:1.2rem;flex-wrap:wrap;margin:-.4rem 0 .8rem}
+  .eyebrow b{color:var(--accent-ink);font-weight:600}
+  .clock{border:1px solid var(--line);border-radius:6px;overflow:hidden;margin:1.6rem 0 0}
+  .clock a,.clock .brk{display:grid;grid-template-columns:5.4rem 1fr;gap:1rem;padding:.5rem .9rem;color:var(--ink);
+    border-top:1px solid var(--line);font-size:.94rem;align-items:baseline}
+  .clock a:first-child{border-top:0}
+  .clock a:hover{background:var(--panel);text-decoration:none}
+  .clock .t{font-family:var(--mono);font-size:.8rem;color:var(--accent-ink);white-space:nowrap}
+  .clock .what b{font-weight:650}
+  .clock .what span{color:var(--mut)}
+  .clock .brk{background:var(--panel);color:var(--mut);font-size:.86rem}
+  .clock .brk .t{color:var(--mut)}
+  .why{margin:1.1rem 0;padding:0 0 0 1rem;border-left:3px solid var(--accent)}
+  .why h3{margin:.9rem 0 .15rem;font-size:.98rem}
+  .why p{margin:.15rem 0 .9rem;color:var(--mut)}
+  ol.steps{margin:.8rem 0;padding:0;counter-reset:st;list-style:none}
+  ol.steps>li{counter-increment:st;position:relative;padding:0 0 .55rem 2.5rem;margin:0}
+  ol.steps>li::before{content:counter(st);position:absolute;left:0;top:.12em;width:1.6rem;height:1.6rem;
+    border:1px solid var(--line);border-radius:4px;display:flex;align-items:center;justify-content:center;
+    font-family:var(--mono);font-size:.78rem;color:var(--accent-ink);background:var(--panel)}
+  ol.steps b{font-weight:650}
+  ul.tick{margin:.6rem 0;padding-left:1.25rem}
+  ul.tick li{margin:.3rem 0}
+  .note{background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:.75rem 1rem;margin:1rem 0;font-size:.93rem}
+  .note .tag{font-family:var(--mono);font-size:.68rem;letter-spacing:.12em;text-transform:uppercase;color:var(--accent-ink);display:block;margin-bottom:.25rem}
+  .note p{margin:.3rem 0}
+  code,.ui{font-family:var(--mono);font-size:.86em;background:var(--panel);border:1px solid var(--line);
+    border-radius:4px;padding:.06em .4em;white-space:nowrap}
+  .ui{font-weight:600}
+  table{border-collapse:collapse;width:100%;font-size:.9rem;margin:.8rem 0}
+  th{font-family:var(--mono);font-size:.68rem;letter-spacing:.1em;text-transform:uppercase;color:var(--mut);
+    text-align:left;padding:.4rem .6rem;border-bottom:2px solid var(--line)}
+  td{padding:.45rem .6rem;border-bottom:1px solid var(--line);vertical-align:top}
+  .tw{overflow-x:auto}
+  .foot{margin-top:3.4rem;padding-top:1.2rem;border-top:1px solid var(--line);color:var(--mut);font-size:.85rem}
+  @media print{ body{max-width:none;padding:0} .clock a{break-inside:avoid} h2{break-after:avoid} }
+</style>
+
+<p class="kick">Built Trailers · app.builttrailers.app · shop manager runbook</p>
+<h1>A day in the app: the Shop Manager</h1>
+<p class="lede">The Shop Manager (Production Manager) owns flow: the right trailers moving through the right stations with the right people, problems surfaced in minutes instead of days, and the numbers honest enough to coach from. On site <b>Monday–Thursday, 6:00–4:30</b> — breaks at <b>9:00</b> and <b>2:00</b> (15 min), unpaid lunch at <b>11:00</b> (30 min). The app's job is to make the floor visible; your job is to act on what it shows.</p>
+
+<div class="clock">
+  <a href="#standup"><span class="t">6:00</span><span class="what"><b>Stand-Up &amp; the morning huddle</b> <span>— read the band, approve the plan, recognize yesterday's idea</span></span></a>
+  <a href="#board"><span class="t">6:20</span><span class="what"><b>Run the board</b> <span>— bottleneck first, then the queue, then the floor</span></span></a>
+  <span class="brk"><span class="t">9:00</span><span>☕ Break (15 min) — glance the inbox on your phone</span></span>
+  <a href="#andon"><span class="t">9:15</span><span class="what"><b>Andon &amp; problems</b> <span>— the floor never waits silently</span></span></a>
+  <span class="brk"><span class="t">11:00</span><span>🥪 Lunch (30 min, unpaid)</span></span>
+  <a href="#qc"><span class="t">11:30</span><span class="what"><b>QC gates &amp; made parts</b> <span>— Ready is earned, BUILD-NOW parts get scheduled</span></span></a>
+  <span class="brk"><span class="t">2:00</span><span>☕ Break (15 min)</span></span>
+  <a href="#coach"><span class="t">2:15</span><span class="what"><b>Scorecards, SOPs &amp; safety</b> <span>— coach from the drill-down, never the color</span></span></a>
+  <a href="#checkout"><span class="t">3:30</span><span class="what"><b>Checkout window</b> <span>— day verification, rank today's ideas, tomorrow's plan</span></span></a>
+  <a href="#week"><span class="t">weekly</span><span class="what"><b>The idea loop &amp; the Monday numbers</b> <span>— vote Monday, reveal Tuesday, implement always</span></span></a>
+</div>
+
+<h2 id="thinks">First: how the app thinks about the floor</h2>
+<div class="why">
+  <h3>Stages drive everything.</h3>
+  <p>When a stage is marked complete — from the board, My Station, or a traveler QR — the machine turns: entering Build assigns VINs, entering Paint queues the federal labels, completing Paint queues the MSO, and each completed stage consumes that stage's materials into WIP value. If stages lag reality, every downstream number lies. Your single most important habit: <em>the board matches the floor before you go home.</em></p>
+  <h3>Standard hours are the yardstick.</h3>
+  <p>Every model carries a labor routing. Completing a stage earns its standard hours; efficiency = standard earned ÷ actual logged. That's what the ⚡ card, the 🚩 red flags, and every scorecard measure. The yardstick self-corrects: ⏲ time surveys after checkout feed real actuals back into the routings.</p>
+  <h3>WIP limits protect flow (finish before you start).</h3>
+  <p>Each stage has a cap. When a station is over its limit the 🚧 card names it and how long it's been stuck — the answer is to finish and unstick, not to start something new. One moving trailer beats three stalled ones.</p>
+  <h3>Problems are andons, not hallway comments.</h3>
+  <p>Any worker can raise a problem from the traveler QR in ten seconds. It lands in your inbox as "the floor is waiting" — because they are. Resolve it in the app so the blocker Pareto learns what actually stops this shop.</p>
+  <h3>The plan is drafted for you, approved by you.</h3>
+  <p>⚙ Generate proposes each person's day from what's scheduled and their demonstrated pace — then it's a proposal until you press ✓ Approve. The app does the arithmetic; you do the judgment.</p>
+  <h3>Ideas are anonymous until they win.</h3>
+  <p>Everyone submits one improvement idea at checkout, daily. You rank them <em>without names</em> so merit is the only currency; the author is revealed only when the crew's Monday vote crowns the week's winner. Your end of the deal: implement winners and report back at stand-up.</p>
+</div>
+
+<h2 id="standup">6:00 — Stand-Up &amp; the morning huddle</h2>
+<p class="eyebrow"><span>Where: <b>📣 Stand-Up</b></span><span>Time: <b>20 minutes</b></span></p>
+<ol class="steps">
+  <li>Open <span class="ui">📣 Stand-Up</span>. Read your four-card band before anyone talks: <b>⚡ Labor efficiency</b> (yesterday's % shop-wide and by station), <b>✅ SOP compliance</b>, <b>🚩 Red flags</b> (anyone under threshold with real hours), <b>🚧 Bottleneck</b> (any stage over its WIP limit, and for how long).</li>
+  <li>Click <span class="ui">⚙ Generate plan</span> for today. The app proposes tasks per person — calibrated to each worker's demonstrated pace, not wishful standards. Adjust anything that doesn't survive contact with reality, then <span class="ui">✓ Approve the day</span> — the crew sees their goals the moment you do.</li>
+  <li>Run the huddle at the board (or the 📺 TV): today's goal per station, the bottleneck if there is one, and <b>yesterday's winning idea</b> — read it out loud, still anonymous. <b>Tuesday:</b> announce the weekly champion <em>by name</em> — that's the reveal the crew votes for.</li>
+  <li>Anything you promised to implement from a past winner? Give the ten-second status. The loop only stays credible if the report-back happens.</li>
+</ol>
+
+<h2 id="board">6:20 — Run the board</h2>
+<p class="eyebrow"><span>Where: <b>🔨 Production Flow</b></span></p>
+<ol class="steps">
+  <li><b>Bottleneck first.</b> If the 🚧 card named a stage, go there physically. The card's "over for N hours" is your urgency meter. Finish work out of that stage before anything new enters it.</li>
+  <li><b>Then the queue.</b> The 🏭 Production Queue tab is the build order — resequence with ↑ ↓ when priorities change (a hot dealer order, a missing part). The floor builds top-down from this list; changing it here is how you re-aim the shop.</li>
+  <li><b>Then the board.</b> Drag orders between stages as reality moves — or better, let the floor stamp stages themselves from <span class="ui">My Station</span> or the traveler QR. Every stamp records who and when, feeding scorecards and WIP value.</li>
+  <li><b>WIP limits</b> are yours to tune: <span class="ui">🚧 WIP limits</span> on the board. Set them to what each station can genuinely hold — a limit that's never hit isn't a limit.</li>
+</ol>
+<div class="note"><span class="tag">What a stage stamp triggers</span>
+<p><b>→ Build:</b> VINs auto-assign (federal scheme, NHTSA-checked). <b>→ Paint:</b> VIN stickers queue for the office. <b>Paint complete:</b> MSO queues (stock units hold until sold). <b>Each stage done:</b> that stage's parts consume out of inventory into WIP at actual cost. <b>→ Ready:</b> blocked until QC passes — see below.</p></div>
+
+<h2 id="andon">9:15 — Andon &amp; problems</h2>
+<p class="eyebrow"><span>Where: <b>your inbox · the traveler QR · 📈 Performance (Pareto)</b></span></p>
+<ol class="steps">
+  <li>A worker hits a wall — missing part, bad fit, broken tool — and reports it from the <b>traveler QR</b> on their phone. It lands in your Action Inbox as <b>🚨 shop-floor problem open — the floor is waiting</b>.</li>
+  <li>Go to the trailer, fix or reroute, then resolve the andon in the app with what it was. Minutes matter: the report exists because someone is stalled right now.</li>
+  <li>Weekly, look at the <b>blocker Pareto</b> on 📈 Performance: the top three reasons, their counts, and hours lost. That list — not memory — is what you fix at the root. Bring the worst one to the ideas loop if the fix needs the crew.</li>
+</ol>
+
+<h2 id="qc">11:30 — QC gates &amp; made parts</h2>
+<p class="eyebrow"><span>Where: <b>Stand-Up → My Station (Finish) · 🤖 Predictive Ordering</b></span></p>
+<h3>QC at the Ready gate</h3>
+<ol class="steps">
+  <li>Nothing reaches <b>Ready</b> until every VIN on the order passes the QC checklist — <span class="ui">✅ QC</span> per unit at the Finish station, with photos. The checklist itself is maintained in Print Center (admin) — it's the same list for every trailer, on purpose.</li>
+  <li>A failed item auto-raises an <b>andon</b> on the order: fix, re-check, then the gate opens. If the board refuses to move an order to Ready, that's the gate doing its job — check which VIN hasn't passed.</li>
+</ol>
+<h3>Made parts &amp; BUILD NOW</h3>
+<ol class="steps">
+  <li>Your inbox's <b>🔨 BUILD NOW</b> line means a made part (weldment, bent metal) will run short before scheduled builds need it. Schedule someone onto it today.</li>
+  <li>Made parts get logged as they're produced — <span class="ui">🔩 Log made parts</span> on Stand-Up → My Station — which is what keeps made-part stock and the BUILD-NOW math honest.</li>
+  <li>Fabricators pull drawings-of-record from the traveler QR → <b>BOM worksheet &amp; cut list</b> (auto-numbered cuts, no dollars). If a cut is wrong, the fix goes in the engineering package (BOMs &amp; Cost → 📐), not on a sticky note.</li>
+</ol>
+
+<h2 id="coach">2:15 — Scorecards, SOPs &amp; safety</h2>
+<p class="eyebrow"><span>Where: <b>Stand-Up (band + scorecards) · 📋 Daily Update · Owner Dashboard band</b></span></p>
+<ol class="steps">
+  <li><b>🚩 Red flags</b> lists anyone under the efficiency threshold today with real hours logged. Open their <b>Daily Scorecard</b> (you can open anyone's) — trailers touched, parts built, tasks, hours vs standard earned, the 7-day trend, and the drill-down of exactly which tasks drove the gap.</li>
+  <li>Coach from the drill-down, never the color. A red day with a reason (waited on parts — see the andon log) is a flow problem, yours to fix. A red week without one is a conversation.</li>
+  <li><b>SOP checkpoints</b>: the ✅ card tracks today's confirmations (done by the floor at 📋 Daily Update). You own the list — add/retire checkpoints as the process changes; a checklist nobody fails has stopped teaching.</li>
+  <li><b>Safety</b>: log findings and incidents the moment you see them — they feed the safety card and "days since incident." Resolve findings when corrected. An unlogged near-miss teaches no one.</li>
+</ol>
+
+<h2 id="checkout">3:30 — The checkout window</h2>
+<p class="eyebrow"><span>Where: <b>📣 Stand-Up</b></span><span>Crew checkout: <b>~4:00–4:30</b></span></p>
+<ol class="steps">
+  <li>Workers finish their day with the <b>60-second day verification</b>: confirm hours, reconcile the plan, and submit <b>one improvement idea</b> (required — anything: quality, trailers, process, shop life). Some will also get a ⏲ time-check on recent work; encourage honest numbers — they tune the standards everyone is measured against.</li>
+  <li>Watch compliance on Stand-Up: who hasn't verified by 4:15 gets a nudge in person. Unverified days poison tomorrow's plan math.</li>
+  <li>Open the ideas card and <b>rank today's ideas — they're anonymous</b>. Pick 🏆 today's daily winner before you leave; it's announced at tomorrow's huddle. Resist guessing authors; the anonymity is what makes the ranking honest.</li>
+  <li>Glance the board one last time: does it match the floor? Stamp anything the crew missed. Then generate tomorrow's plan now or at 6:00 — either works; approving it is a morning job.</li>
+</ol>
+
+<h2 id="week">The weekly rhythm</h2>
+<div class="tw"><table>
+  <tr><th>When</th><th>What happens</th><th>Your part</th></tr>
+  <tr><td><b>Every day</b></td><td>Everyone submits an idea at checkout; you pick the daily winner</td><td>Rank anonymously, announce at the next huddle</td></tr>
+  <tr><td><b>Monday</b></td><td>The crew votes on last week's daily winners (one vote each, no self-votes)</td><td>Remind them at the huddle; close voting end of day</td></tr>
+  <tr><td><b>Tuesday</b></td><td>The weekly champion is announced <b>by name</b></td><td>Celebrate them at the huddle; commit to an implementation path</td></tr>
+  <tr><td><b>Ongoing</b></td><td>Winners move 🔧 in progress → ✅ implemented with a report-back note</td><td>Drive it, and say so at stand-up — the loop lives on follow-through</td></tr>
+  <tr><td><b>Month-end</b></td><td>Weekly winners meet on the monthly ballot; most votes is crowned 🥇 Idea of the Month by name</td><td>Open the vote at the first-Monday huddle, crown the champion</td></tr>
+  <tr><td><b>Monday a.m.</b></td><td>The weekly digest email: KPIs vs expectations, recommendations, open problems, throughput</td><td>Read it before the huddle — it's the same math as 📈 Performance</td></tr>
+</table></div>
+<div class="note"><span class="tag">The 📺 TV and what the crew sees</span>
+<p>Put a wall display in 📺 TV mode (button on Performance): it rotates Production Flow → Stand-Up → Performance with live data. The floor should never need to ask "what's the goal today" — it's on the wall, and their phones (traveler QR / My Station) answer "what's next for me."</p></div>
+<div class="note"><span class="tag">What's deliberately NOT yours</span>
+<p>Receiving, invoicing, printing, and QuickBooks live with the office — your stage stamps are what trigger their queues. Team &amp; Payroll, Time Off, Goals, and the Wins wall are staged for a later rollout phase; the ideas loop and scorecards are the recognition system for now. Thursday you're the senior app user on site: keep stages honest and stage arriving freight for Monday's receiving — the carrier saying "delivered" never moves inventory; a staff confirmation does.</p></div>
+
+<h2 id="reference">Pocket reference</h2>
+<div class="tw"><table>
+  <tr><th>I need to…</th><th>Go to</th></tr>
+  <tr><td>Read the floor at a glance</td><td>📣 Stand-Up → the four-card band</td></tr>
+  <tr><td>Propose / approve today's plan</td><td>📣 Stand-Up → ⚙ Generate plan → ✓ Approve the day</td></tr>
+  <tr><td>Change the build order</td><td>🔨 Production Flow → 🏭 Production Queue → ↑ ↓</td></tr>
+  <tr><td>Set station WIP caps</td><td>🔨 Production Flow → 🚧 WIP limits</td></tr>
+  <tr><td>See / resolve floor problems</td><td>Inbox 🚨 → the order · Pareto on 📈 Performance</td></tr>
+  <tr><td>Pass a trailer to Ready</td><td>My Station (Finish) → ✅ QC per VIN</td></tr>
+  <tr><td>Open someone's scorecard</td><td>📣 Stand-Up → scorecards (SM can open anyone's)</td></tr>
+  <tr><td>Rank ideas / announce winners</td><td>📣 Stand-Up → 💡 ideas card</td></tr>
+  <tr><td>Log made parts</td><td>Stand-Up → My Station → 🔩 Log made parts</td></tr>
+  <tr><td>Log a safety finding / incident</td><td>Safety log (also feeds "days since incident")</td></tr>
+  <tr><td>Give a fabricator the cut list</td><td>Traveler QR → BOM worksheet, or BOMs &amp; Cost → 📐 Engineering</td></tr>
+  <tr><td>Put the shop on the wall</td><td>📈 Performance → 📺 TV mode</td></tr>
+</table></div>
+
+<p class="foot">Built Trailers · Shop Manager runbook · reflects the app as deployed. When a screen and this page disagree, trust the screen and tell whoever maintains this doc.</p>

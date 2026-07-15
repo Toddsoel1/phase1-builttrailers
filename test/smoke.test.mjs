@@ -69,6 +69,12 @@ test('📚 learning documents are served: runbook page + PDF download', async ()
   assert.equal(pdf.status, 200);
   assert.match(pdf.headers.get('content-type') || '', /pdf/);
   assert.equal(new Uint8Array(await pdf.arrayBuffer()).slice(0, 4).join(','), '37,80,68,70', 'starts with %PDF');
+  const sm = await fetch(BASE + '/docs/shop-manager-runbook.html');
+  assert.equal(sm.status, 200);
+  assert.match(await sm.text(), /A day in the app: the Shop Manager/);
+  const smPdf = await fetch(BASE + '/docs/Shop-Manager-Runbook.pdf');
+  assert.equal(smPdf.status, 200);
+  assert.equal(new Uint8Array(await smPdf.arrayBuffer()).slice(0, 4).join(','), '37,80,68,70', 'SM runbook PDF is real');
 });
 
 test('client-error endpoint accepts a front-end crash report', async () => {
