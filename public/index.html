@@ -3859,7 +3859,7 @@ async function viewPrintCenter(){
     :' <span class="badge b-buy" title="Not yet verified — run the NHTSA check below">unchecked</span>';
   const queueCard=(title,jobs,kind,empty)=>`<div class="card" style="margin-bottom:16px">
     <h3>${title} <span class="badge ${jobs.length?'b-low':'b-ok'}">${jobs.length}</span>
-      ${kind==='vin'&&jobs.length?`<button class="btn sm sec" style="margin-left:10px" onclick='printVinLabelSheet(${ja(jobs.map(j=>j.unitId))})'>🖨️ Print all — one 15513 sheet</button>`:''}
+      ${kind==='vin'&&jobs.length?`<button class="btn sm sec" style="margin-left:10px" onclick='printVinLabelSheet(${ja(jobs.map(j=>j.unitId))})'>🖨️ Print all — 15513 sheet(s)</button>`:''}
       ${kind==='mso'&&jobs.length?`<button class="btn sm sec" style="margin-left:10px" onclick='printMsoBatch(${ja(jobs.map(j=>j.unitId))})' title="Verify the starting certificate once — the batch numbers sequentially with no per-MSO prompts">🖨️ Print all — sequential certificates</button>`:''}</h3>
     ${jobs.length?`<table><thead><tr><th>VIN</th><th>Model</th><th>Order</th><th>Customer</th><th>Queued</th><th></th></tr></thead><tbody>
       ${jobs.map(j=>`<tr>
@@ -4089,19 +4089,76 @@ async function printVinLabelSheet(unitIds){
     .s{font-size:8pt;font-weight:bold;line-height:1.3}
     .conform{font-size:6.8pt;font-weight:bold;line-height:1.25;margin-top:2px}
     .vinrow{font-size:10pt;font-weight:bold;margin-top:3px}
-    .bar{position:sticky;top:0;background:#1a2230;color:#fff;padding:10px 14px;font-size:13px;display:flex;gap:12px;align-items:center;flex-wrap:wrap}
-    .bar select,.bar button{padding:5px 10px;font-weight:bold;cursor:pointer}
+    .bar{position:sticky;top:0;background:#1a2230;color:#fff;padding:10px 14px;font-size:13px;display:flex;gap:14px;align-items:center;flex-wrap:wrap}
+    .bar button{padding:5px 10px;font-weight:bold;cursor:pointer}
+    .map{display:grid;grid-template-columns:repeat(2,34px);grid-template-rows:repeat(5,17px);gap:2px}
+    .map .cell{border:1px solid #6b7785;border-radius:3px;font-size:9px;display:flex;align-items:center;justify-content:center;cursor:pointer;user-select:none;background:#243044;color:#cfd8e3}
+    .map .cell.used{background:#4a2430;color:#e39;text-decoration:line-through}
+    .map .cell.fill{background:#1d4030;color:#8fe3b0}
+    .map .cell.start{outline:2px solid #35d07f;font-weight:bold}
     @media print{.bar{display:none}.lb{outline:none}}
   </style></head><body>
-    <div class="bar">🏷️ ${labels.length} label(s) — Avery 15513 (2×4in, 10-up). Load the label sheet, then Print.
-      Start at label # <select id="slot" onchange="render()">${Array.from({length:10},(_,i)=>`<option value="${i+1}">${i+1}</option>`).join('')}</select>
-      <button onclick="window.print()">🖨️ Print</button>
-      <span style="opacity:.7;font-size:11.5px">Slots count left→right, top→bottom. Dashed outlines are screen-only.</span>
+    <div class="bar">🏷️ ${labels.length} label(s) — Avery 15513 (2×4in, 10-up).
+      <span style="display:flex;gap:10px;align-items:center">
+        <span style="font-size:11.5px;line-height:1.3;max-width:210px">The sheet in your tray → click any labels ALREADY USED (✕). Printing fills the open slots — <b style="color:#35d07f">▶ marks where it begins</b>.</span>
+        <span class="map" id="map"></span>
+      </span>
+      <span id="plan" style="font-size:12px"></span>
+      <button onclick="doPrint()">🖨️ Print</button>
+      <span style="opacity:.7;font-size:11.5px">Slots count left→right, top→bottom. Dashed outlines &amp; the map are screen-only. The map remembers this tray sheet for the next print.</span>
     </div>
     <div id="sheets"></div>
     <script>
       const LABELS=${JSON.stringify(labels)};
       const E=s=>String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+      const LS='vin15513Used';
+      let USED=new Set(); try{ USED=new Set((JSON.parse(localStorage.getItem(LS)||'[]')).filter(n=>n>=0&&n<10)); }catch(e){}
+      function freeSlots(){ return Array.from({length:10},(_,i)=>i).filter(i=>!USED.has(i)); }
+      function toggle(i){ if(USED.has(i))USED.delete(i); else USED.add(i); if(USED.size===10)USED.clear(); draw(); }
+      function draw(){
+        const free=freeSlots();
+        const map=document.getElementById('map');
+        map.innerHTML=Array.from({length:10},(_,i)=>{
+          const used=USED.has(i), fillIdx=free.indexOf(i);
+          const fills=!used&&fillIdx>-1&&fillIdx<LABELS.length;
+          const start=fills&&fillIdx===0;
+          return '<span class="cell'+(used?' used':fills?' fill':'')+(start?' start':'')+'" onclick="toggle('+i+')" title="Slot '+(i+1)+(used?' — already used':fills?' — will print':' — stays empty')+'">'+(start?'▶':used?'✕':fills?(fillIdx+1):(i+1))+'</span>';
+        }).join('');
+        const sheets=Math.max(1,Math.ceil(Math.max(0,LABELS.length-free.length)/10)+1);
+        const startSlot=free.length&&LABELS.length?free[0]+1:null;
+        document.getElementById('plan').innerHTML=startSlot
+          ?('▶ starts at slot '+startSlot+(LABELS.length>free.length?' · '+(LABELS.length-free.length)+' overflow to '+(sheets-1)+' fresh sheet(s)':''))
+          :'No open slots on this sheet — load a fresh one (click ✕ cells to clear).';
+        render();
+      }
+      function render(){
+        const free=freeSlots();
+        let html='';
+        const overflow=Math.max(0,LABELS.length-free.length);
+        const pages=1+Math.ceil(overflow/10);
+        for(let p=0;p<pages;p++){
+          let cells='';
+          for(let k=0;k<LABELS.length;k++){
+            let page,slot;
+            if(k<free.length){ page=0; slot=free[k]; }
+            else { const ov=k-free.length; page=1+Math.floor(ov/10); slot=ov%10; }
+            if(page===p)cells+=labelHtml(LABELS[k],slot);
+          }
+          if(cells)html+='<div class="sheet">'+cells+'</div>';
+        }
+        document.getElementById('sheets').innerHTML=html;
+      }
+      function doPrint(){
+        const free=freeSlots();
+        if(!free.length&&LABELS.length)return alert('No open slots on this sheet — clear some ✕ cells or load a fresh sheet.');
+        window.print();
+        // Remember what this print consumed so the NEXT print pre-loads the tray state.
+        let next;
+        if(LABELS.length<=free.length){ next=new Set(USED); free.slice(0,LABELS.length).forEach(i=>next.add(i)); if(next.size===10)next=new Set(); }
+        else { const rem=(LABELS.length-free.length)%10; next=new Set(Array.from({length:rem},(_,i)=>i)); }
+        USED=next; try{ localStorage.setItem(LS,JSON.stringify([...USED])); }catch(e){}
+        draw();
+      }
       function labelHtml(d,pos){
         const col=pos%2,row=Math.floor(pos/2);
         const left=(0.15625+col*4.1875).toFixed(4),top=(0.5+row*2).toFixed(2);
@@ -4114,18 +4171,7 @@ async function printVinLabelSheet(unitIds){
           +'<div class="conform">THIS VEHICLE CONFORMS TO ALL APPLICABLE US FEDERAL VEHICLE SAFETY STANDARDS IN EFFECT ON THE DATE OF MANUFACTURE SHOWN ABOVE.</div>'
           +'<div class="row vinrow"><span>VIN: '+E(d.vin)+'</span><span>TYPE: TRAILER</span></div></div>';
       }
-      function render(){
-        const start=(Number(document.getElementById('slot').value)||1)-1;
-        const pages=Math.ceil((start+LABELS.length)/10);
-        let html='';
-        for(let p=0;p<pages;p++){
-          html+='<div class="sheet">';
-          for(let k=0;k<LABELS.length;k++){const s=start+k; if(Math.floor(s/10)===p)html+=labelHtml(LABELS[k],s%10);}
-          html+='</div>';
-        }
-        document.getElementById('sheets').innerHTML=html;
-      }
-      render();
+      draw();
     <\/script></body></html>`;
   const w=window.open('','_blank','width=900,height=1000'); if(!w)return toast('Pop-up blocked — allow pop-ups to print.');
   w.document.write(html); w.document.close();
