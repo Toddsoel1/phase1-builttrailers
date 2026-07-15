@@ -926,7 +926,7 @@ async function viewParts(){
    <table><thead><tr><th>Part</th><th>Type</th><th>Vendor</th><th class="right">On hand</th><th class="right">Reorder</th><th class="right">Unit cost</th><th class="right">Ext. value</th><th class="center">Status</th>${canAddParts()?'<th></th>':''}</tr></thead><tbody>
    ${parts.map(p=>`<tr>
      <td><b>${esc(p.id)}</b><br><span class="muted" style="font-size:11px">${esc(p.name)}</span>${p.description?`<br><span class="muted" style="font-size:10.5px;font-style:italic" title="${esc(p.description)}">${esc(p.description.length>60?p.description.slice(0,57)+'…':p.description)}</span>`:''}</td>
-     <td>${p.type==='M'?'<span class="badge b-mfg">MAKE</span>':'<span class="badge b-buy">BUY</span>'}${p.notForResale?' <span class="badge b-below" title="Dealers see this part labeled Not for Resale — no pricing, no ordering">NFR</span>':''}${p.expendable?' <span class="badge b-low" title="Consumable — billed on POs but never stocked or counted">EXP</span>':''}</td>
+     <td>${p.type==='M'?'<span class="badge b-mfg">MAKE</span>':'<span class="badge b-buy">BUY</span>'}${p.notForResale?' <span class="badge b-below" title="Dealers see this part labeled Not for Resale — no pricing, no ordering">NFR</span>':''}${p.expendable?' <span class="badge b-low" title="Consumable — billed on POs but never stocked or counted">EXP</span>':''}${p.fits?` <span class="badge b-ok" style="font-size:9px" title="Fits: ${esc([...(p.fits.categories||[]),...(p.fits.models||[])].join(', '))} — BOM edits enforce this">🧩 ${esc((p.fits.categories[0]||p.fits.models[0]||'')+(((p.fits.categories.length+p.fits.models.length)>1)?' +'+(p.fits.categories.length+p.fits.models.length-1):''))}</span>`:''}</td>
      <td style="font-size:12px">${canEditParts()?`<a class="lnk" onclick="editPartVendor('${p.id}','${p.vendorId||''}')">${esc(p.vendor||'— assign —')}</a>`:esc(p.vendor||'')}${p.vendorStatus==='pending'?' <span class="badge b-low" style="font-size:9px">pending</span>':''}${p.vendorPartNo?`<br><span class="muted" style="font-size:10.5px">V/PN ${esc(p.vendorPartNo)}</span>`:''}${p.vendorDescription?`<br><span class="muted" style="font-size:10.5px;font-style:italic" title="${esc(p.vendorDescription)}">${esc(p.vendorDescription.length>44?p.vendorDescription.slice(0,41)+'…':p.vendorDescription)}</span>`:''}</td>
      <td class="right">${p.onHand}</td><td class="right">${p.reorder}</td>
      <td class="right">${canEditParts()?`<a class="lnk" onclick="editCost('${p.id}',${p.cost})">${money2(p.cost)}</a>`:money2(p.cost)}</td>
@@ -1020,9 +1020,26 @@ async function spSend(allowNegative){
 }
 // ── ✏️ Edit everything about a part — including its part number (history follows the rename) ──
 async function editPartModal(id){
-  let parts,vendors;
-  try{ [parts,vendors]=await Promise.all([api('/api/parts'),api('/api/vendors')]); }catch(e){ return toast(e.message); }
+  let parts,vendors,models,usage;
+  try{ [parts,vendors,models,usage]=await Promise.all([api('/api/parts'),api('/api/vendors'),api('/api/models'),api('/api/parts/'+encodeURIComponent(id)+'/usage').catch(()=>({usage:[]}))]); }catch(e){ return toast(e.message); }
   const p=parts.find(x=>x.id===id); if(!p)return toast('Part not found');
+  const cats=[...new Set(models.map(m=>m.category))];
+  const fCats=(p.fits&&p.fits.categories)||[], fMods=(p.fits&&p.fits.models)||[];
+  const hasFits=fCats.length||fMods.length;
+  const usedLine=(usage.usage||[]).length?('Currently on BOMs: '+usage.usage.map(u=>u.category+' ('+u.models.length+')').join(', ')):'Not on any BOM yet.';
+  const fitsSection=`
+    <div class="field" style="border:1px solid var(--line);border-radius:8px;padding:8px 10px;margin-top:4px">
+      <label style="margin:0 0 2px">🧩 Fits — which trailers can use this part <span class="muted" style="font-weight:400">(BOM edits enforce it; the Boat Builder relies on it)</span></label>
+      <div class="muted" style="font-size:11px;margin-bottom:6px">${esc(usedLine)}</div>
+      <label style="display:flex;gap:8px;align-items:center;font-weight:500;cursor:pointer"><input type="radio" name="epFitMode" value="all" ${hasFits?'':'checked'} onchange="$('epFitBox').style.display='none'" style="width:auto"> All trailers</label>
+      <label style="display:flex;gap:8px;align-items:center;font-weight:500;cursor:pointer"><input type="radio" name="epFitMode" value="some" ${hasFits?'checked':''} onchange="$('epFitBox').style.display=''" style="width:auto"> Only these:</label>
+      <div id="epFitBox" style="display:${hasFits?'':'none'};padding:6px 0 0 24px">
+        <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:6px">${cats.map(c=>`<label style="display:flex;gap:5px;align-items:center;font-size:12.5px;cursor:pointer;margin:0"><input type="checkbox" class="epFitCat" value="${esc(c)}" ${fCats.includes(c)?'checked':''} style="width:auto"> ${esc(c)} — whole category</label>`).join('')}</div>
+        <label style="font-size:11.5px">…and/or pin specific models (e.g. only the 1-place watercraft trailers)</label>
+        <select id="epFitModels" multiple size="5" style="width:100%;font-size:12px">${models.map(m=>`<option value="${esc(m.id)}" ${fMods.includes(m.id)?'selected':''}>${esc(m.category)} · ${esc(m.id)} — ${esc(m.name)}</option>`).join('')}</select>
+        <div class="muted" style="font-size:10.5px;margin-top:3px">A part fits a model if its category is checked OR the model is pinned. Cmd/Ctrl-click to multi-select.</div>
+      </div>
+    </div>`;
   const vOpts=vendors.filter(v=>v.status!=='rejected').map(v=>`<option value="${esc(v.id)}" ${v.id===p.vendorId?'selected':''}>${esc(v.name)}${v.status==='pending'?' (pending)':''}</option>`).join('');
   modal('✏️ Edit part — '+esc(p.id),`
     <div class="row">
@@ -1051,6 +1068,7 @@ async function editPartModal(id){
     </div>
     <div class="field" style="margin-top:4px"><label style="display:flex;align-items:center;gap:8px;font-weight:500;cursor:pointer"><input type="checkbox" id="epNfr" ${p.notForResale?'checked':''} style="width:auto"> 🚫 Not for resale — dealers see the part on their trailer's list, labeled “Not for Resale”, with no pricing and no ordering</label></div>
     <div class="field"><label style="display:flex;align-items:center;gap:8px;font-weight:500;cursor:pointer"><input type="checkbox" id="epExp" ${p.expendable?'checked':''} style="width:auto"> 🧻 Expendable — consumable supply (tape, gloves, blades): goes on POs and the QuickBooks bill, but receiving never stocks it and it stays off inventory counts &amp; value</label></div>
+    ${fitsSection}
     <p class="muted" style="font-size:11px">On-hand isn't edited here — use Receive, 📥 Receive an invoice, or a 🧮 count so stock changes stay accounted for.</p>
     <div class="row" style="gap:8px;margin-top:8px">
       <button class="btn" onclick="saveEditPart('${esc(p.id)}')">Save</button>
@@ -1059,10 +1077,14 @@ async function editPartModal(id){
 }
 async function saveEditPart(id){
   const newId=($('epId').value||'').trim();
+  const fitAll=(document.querySelector('input[name=epFitMode]:checked')||{}).value!=='some';
+  const fits=fitAll?{}:{
+    categories:[...document.querySelectorAll('.epFitCat')].filter(c=>c.checked).map(c=>c.value),
+    models:[...($('epFitModels')?.selectedOptions||[])].map(o=>o.value)};
   const body={name:($('epName').value||'').trim(),type:$('epType').value,vendorId:$('epVendor').value||null,
     vendorPartNo:($('epVpn').value||'').trim(),mfrPartNo:($('epMpn').value||'').trim(),vendorDescription:($('epVdesc').value||'').trim(),description:($('epDesc').value||'').trim(),notForResale:!!($('epNfr')&&$('epNfr').checked),expendable:!!($('epExp')&&$('epExp').checked),cost:Number($('epCost').value)||0,uom:($('epUom').value||'').trim(),
     spec:($('epSpec').value||'').trim(),reorder:Number($('epReorder').value)||0,cushion:Number($('epCushion').value)||0,
-    lot:Math.max(1,Number($('epLot').value)||1)};
+    lot:Math.max(1,Number($('epLot').value)||1),fits};
   if(newId&&newId!==id){
     if(!confirm('Rename '+id+' to '+newId+'? Every BOM line, PO, count, sale, and build log follows the new number.'))return;
     body.newId=newId;

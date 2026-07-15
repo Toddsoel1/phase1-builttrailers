@@ -2407,3 +2407,47 @@ test('📜 MSO certs, 🔎 last-4 search, 📋 PO acks + cancel, 🚚 tracking u
   assert.equal(dead.unfulfilledQty, 2);
   assert.equal((await api('/api/po/' + po2.id + '/receive', { method: 'POST' })).status, 400, 'cancelled POs cannot be received');
 });
+
+test('🧩 part fitment: designate what a part goes on; BOM edits enforce it', async () => {
+  // A boat-only part (whole category), and a 1-place-watercraft-only part (pinned models).
+  await api('/api/parts', { method: 'POST', body: JSON.stringify({ id: 'BUY-PROBE-BOWROLLER', name: 'Probe Bow Roller', type: 'B', cost: 20 }) });
+  await api('/api/parts', { method: 'POST', body: JSON.stringify({ id: 'BUY-PROBE-1PBUNK', name: 'Probe 1-Place Bunk Pad', type: 'B', cost: 8 }) });
+  assert.equal((await api('/api/parts/BUY-PROBE-BOWROLLER', { method: 'PATCH', body: JSON.stringify({ fits: { categories: ['Boat'] } }) })).status, 200);
+  assert.equal((await api('/api/parts/BUY-PROBE-1PBUNK', { method: 'PATCH', body: JSON.stringify({ fits: { models: ['WC1PSU', 'WC1P15'] } }) })).status, 200);
+
+  const parts = await json(await api('/api/parts'));
+  assert.deepEqual(parts.find(p => p.id === 'BUY-PROBE-BOWROLLER').fits, { categories: ['Boat'], models: [] }, 'designation rides the Parts Master');
+  assert.equal(parts.find(p => p.id === 'BUY-PROBE-1PBUNK').fits.models.length, 2);
+  assert.equal(parts.find(p => p.id === 'BUY-PROBE-ACK').fits, null, 'undesignated parts fit ALL trailers');
+
+  // Category fit: boat BOMs yes, utility BOMs no — with an actionable message.
+  assert.equal((await api('/api/models/G23TR/bom', { method: 'POST', body: JSON.stringify({ partId: 'BUY-PROBE-BOWROLLER', qty: 1 }) })).status, 200, 'fits its category');
+  const wrong = await api('/api/models/UT7X14T/bom', { method: 'POST', body: JSON.stringify({ partId: 'BUY-PROBE-BOWROLLER', qty: 1 }) });
+  assert.equal(wrong.status, 400);
+  assert.match((await wrong.json()).error, /designated for Boat trailers/, 'the refusal explains the designation');
+  // The change-request path is guarded at BOTH creation and approval.
+  assert.equal((await api('/api/bom-change-requests', { method: 'POST', body: JSON.stringify({ modelId: 'UT7X14T', op: 'add_part', payload: { partId: 'BUY-PROBE-BOWROLLER', qty: 1 } }) })).status, 400, 'a change request cannot even be filed');
+
+  // Model-pinned fit: the 1-place pad goes on WC1P15 but not the 2-place trailer.
+  assert.equal((await api('/api/models/WC1P15/bom', { method: 'POST', body: JSON.stringify({ partId: 'BUY-PROBE-1PBUNK', qty: 2 }) })).status, 200);
+  assert.equal((await api('/api/models/WC2PT/bom', { method: 'POST', body: JSON.stringify({ partId: 'BUY-PROBE-1PBUNK', qty: 2 }) })).status, 400, 'pinned models exclude the rest of the category');
+
+  // Dealers shopping the parts catalog see the designation next to the part.
+  const cust = await json(await api('/api/customers', { method: 'POST', body: JSON.stringify({ name: 'Fit Probe Marine', kind: 'Dealership', allowed: ['Boat'] }) }));
+  await fetch(BASE + '/api/dealer/signup', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email: 'fitprobe@x.test', password: 'fitPw123', name: 'Fit Probe', dealershipName: 'Fit Probe Marine', address: '1 Main St', city: 'Provo', state: 'UT', zip: '84601' }) });
+  const signup = (await json(await api('/api/dealers/pending'))).find(d => d.email === 'fitprobe@x.test');
+  await api('/api/dealers/' + signup.id + '/approve', { method: 'POST', body: JSON.stringify({ customerId: cust.id }) });
+  const dlrLogin = await json(await fetch(BASE + '/api/dealer/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: 'fitprobe@x.test', password: 'fitPw123' }) }));
+  const found = await json(await fetch(BASE + '/api/dealer/parts-catalog?q=' + encodeURIComponent('Probe Bow Roller'), { headers: { Authorization: 'Bearer ' + dlrLogin.token } }));
+  const roller = found.lines.find(r => r.partId === 'BUY-PROBE-BOWROLLER');
+  assert.equal(roller.fits, 'Boat trailers', 'the portal labels what the part fits');
+  assert.equal(roller.cost, undefined, 'dealers never see Built cost');
+
+  // Widening back to ALL lifts the guard.
+  await api('/api/parts/BUY-PROBE-1PBUNK', { method: 'PATCH', body: JSON.stringify({ fits: {} }) });
+  assert.equal((await api('/api/models/WC2PT/bom', { method: 'POST', body: JSON.stringify({ partId: 'BUY-PROBE-1PBUNK', qty: 2 }) })).status, 200, 'cleared designation fits everything again');
+  // Tidy the probe BOM lines so cost rollups elsewhere stay untouched.
+  for (const [m, pt] of [['G23TR', 'BUY-PROBE-BOWROLLER'], ['WC1P15', 'BUY-PROBE-1PBUNK'], ['WC2PT', 'BUY-PROBE-1PBUNK']])
+    await api('/api/models/' + m + '/bom/' + pt, { method: 'DELETE' });
+});

@@ -180,7 +180,15 @@ export async function catalogSearch({ q: term, stage } = {}) {
               WHERE p.active <> false AND (p.id ILIKE $1 OR p.name ILIKE $1 OR COALESCE(p.spec,'') ILIKE $1)`;
   if (stage) { args.push(stage); sql += ` AND EXISTS (SELECT 1 FROM bom_line b WHERE b.part_id=p.id AND COALESCE(b.stage,'Build')=$2)`; }
   sql += ' ORDER BY p.name LIMIT 60';
-  return (await all(sql, args)).map(priced);
+  const rows = (await all(sql, args)).map(priced);
+  if (rows.length) {
+    const fitRows = await all(
+      `SELECT part_id, kind, value FROM part_fit WHERE part_id = ANY($1)`, [rows.map(r => r.partId)]).catch(() => []);
+    const label = {};
+    for (const f of fitRows) (label[f.part_id] ||= []).push(f.kind === 'model' ? f.value : f.value + ' trailers');
+    for (const r of rows) if (label[r.partId]) r.fits = label[r.partId].join(', ');
+  }
+  return rows;
 }
 
 // ---- ordering ------------------------------------------------------------------------------

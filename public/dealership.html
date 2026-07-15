@@ -511,7 +511,7 @@ function renderPartsTable(lines){
     <thead><tr>${['Part #','Description',lines.some(l=>l.qty!=null)?'Qty on trailer':'','Stage','Dealer','MSRP','MAP','',''].filter(h=>h!=='').map(h=>`<th style="text-align:left;padding:6px 8px;border-bottom:2px solid #e2e7ec;font-size:11px;text-transform:uppercase;color:#6b7785">${h}</th>`).join('')}</tr></thead>
     <tbody>${lines.map(l=>`<tr>
       <td style="padding:6px 8px;border-bottom:1px solid #eef1f4"><b>${l.partId}</b></td>
-      <td style="padding:6px 8px;border-bottom:1px solid #eef1f4">${l.name}</td>
+      <td style="padding:6px 8px;border-bottom:1px solid #eef1f4">${l.name}${l.fits?`<br><span style="font-size:10.5px;color:#6b7785">fits: ${l.fits}</span>`:''}</td>
       ${lines.some(x=>x.qty!=null)?`<td style="padding:6px 8px;border-bottom:1px solid #eef1f4">${l.qty!=null?l.qty+' '+(l.uom||''):''}</td>`:''}
       <td style="padding:6px 8px;border-bottom:1px solid #eef1f4;font-size:12px;color:#6b7785">${l.stage||'—'}</td>
       ${l.notForResale?`<td colspan="3" style="padding:6px 8px;border-bottom:1px solid #eef1f4;color:#6b7785"><b>🚫 Not for Resale</b></td>`

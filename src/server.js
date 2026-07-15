@@ -1033,7 +1033,14 @@ app.patch('/api/users/:id/reactivate', authMiddleware, requireUserManager, async
 app.get('/api/parts', authMiddleware, async (_req, res) => {
   const rows = await all(`SELECT p.*, v.name AS vendor_name, v.status AS vendor_status, v.lead_days
                             FROM part p LEFT JOIN vendor v ON v.id=p.vendor_id ORDER BY p.type DESC, p.id`, []);
+  const fitRows = await all('SELECT part_id, kind, value FROM part_fit', []).catch(() => []);
+  const fitsBy = {};
+  for (const f of fitRows) {
+    const e = (fitsBy[f.part_id] ||= { categories: [], models: [] });
+    (f.kind === 'model' ? e.models : e.categories).push(f.value);
+  }
   res.json(rows.map(p => ({
+    fits: fitsBy[p.id] || null, // null = fits ALL trailers
     id: p.id, name: p.name, type: p.type, vendor: p.vendor_name, vendorId: p.vendor_id, vendorStatus: p.vendor_status, leadDays: p.lead_days,
     uom: p.uom, spec: p.spec, cost: Number(p.cost), onHand: p.on_hand, reorder: p.reorder, vendorPartNo: p.vendor_part_no, mfrPartNo: p.mfr_part_no, notForResale: p.not_for_resale === true,
     vendorDescription: p.vendor_description, description: p.description, expendable: p.expendable === true,
@@ -1078,6 +1085,14 @@ function requirePartsEdit(req, res, next) {
   if (!ok) return res.status(403).json({ error: "Editing parts requires the 'Parts — edit' grant (Users & Roles → Edit access) or an admin." });
   next();
 }
+app.get('/api/parts/:id/usage', authMiddleware, async (req, res) => {
+  const rows = await all(
+    `SELECT m.category, m.id FROM bom_line b JOIN model m ON m.id=b.model_id WHERE b.part_id=$1 ORDER BY m.category, m.id`,
+    [req.params.id]);
+  const by = {};
+  for (const r of rows) (by[r.category] ||= []).push(r.id);
+  res.json({ usage: Object.entries(by).map(([category, models]) => ({ category, models })) });
+});
 app.patch('/api/parts/:id', authMiddleware, requirePartsEdit, async (req, res) => {
   const cur = await one('SELECT * FROM part WHERE id=$1', [req.params.id]);
   if (!cur) return res.status(404).json({ error: 'not found' });
@@ -1106,6 +1121,15 @@ app.patch('/api/parts/:id', authMiddleware, requirePartsEdit, async (req, res) =
     await audit(req, 'part.expendable', `${req.params.id} ${expendable ? 'marked expendable — billed, never stocked' : 'inventory-tracked again'}`);
   if (notForResale !== undefined && !!notForResale !== (cur.not_for_resale === true))
     await audit(req, 'part.resale', `${req.params.id} ${notForResale ? 'marked NOT for resale' : 'available for resale again'}`);
+  if (req.body?.fits !== undefined) {
+    const f = req.body.fits || {};
+    const cats = [...new Set((Array.isArray(f.categories) ? f.categories : []).map(x => String(x).trim()).filter(Boolean))];
+    const mods = [...new Set((Array.isArray(f.models) ? f.models : []).map(x => String(x).trim()).filter(Boolean))];
+    await q('DELETE FROM part_fit WHERE part_id=$1', [req.params.id]);
+    for (const c of cats) await q(`INSERT INTO part_fit(part_id,kind,value) VALUES($1,'category',$2)`, [req.params.id, c]);
+    for (const mId of mods) await q(`INSERT INTO part_fit(part_id,kind,value) VALUES($1,'model',$2)`, [req.params.id, mId]);
+    await audit(req, 'part.fits', `${req.params.id} fits ${cats.length + mods.length ? [...cats, ...mods].join(', ') : 'ALL trailers'}`);
+  }
   if (cost != null && Number(cost) !== Number(cur.cost))
     await audit(req, 'part.cost', `${req.params.id}: ${cur.cost} -> ${cost}`);
   if (active !== undefined) await audit(req, 'part.active', `${req.params.id} ${active ? 'active' : 'inactive'}`);
@@ -1171,9 +1195,21 @@ app.get('/api/models/:id', authMiddleware, async (req, res) => {
   if (!r) return res.status(404).json({ error: 'not found' });
   res.json(r);
 });
+// A part with fitment rows may only ride BOMs it's designated for; no rows = fits all.
+async function partFitError(partId, modelId) {
+  const fits = await all('SELECT kind, value FROM part_fit WHERE part_id=$1', [partId]).catch(() => []);
+  if (!fits.length) return null;
+  const m = await one('SELECT id, category FROM model WHERE id=$1', [modelId]);
+  if (!m) return 'Model not found.';
+  if (fits.some(f => (f.kind === 'model' && f.value === m.id) || (f.kind === 'category' && f.value === m.category))) return null;
+  const label = fits.map(f => f.kind === 'model' ? f.value : f.value + ' trailers').join(', ');
+  return `${partId} is designated for ${label} — it doesn't fit ${m.id} (${m.category}). Widen its Fits on the Parts Master if that's wrong.`;
+}
 app.post('/api/models/:id/bom', authMiddleware, requireTier('admin'), async (req, res) => {
   const { partId, qty } = req.body || {};
   if (!partId || !qty) return res.status(400).json({ error: 'partId and qty required' });
+  const fitErr = await partFitError(partId, req.params.id);
+  if (fitErr) return res.status(400).json({ error: fitErr });
   await q('INSERT INTO bom_line(model_id,part_id,qty) VALUES ($1,$2,$3) ON CONFLICT(model_id,part_id) DO UPDATE SET qty=$3',
     [req.params.id, partId, Number(qty)]);
   await audit(req, 'bom.update', `${req.params.id}+${partId} qty=${qty}`);
@@ -1248,6 +1284,10 @@ app.patch('/api/models/:id/labor/:ws/stage', authMiddleware, requireTier('admin'
 });
 // ---- BOM change requests (accounting approval workflow) ----
 app.post('/api/bom-change-requests', authMiddleware, requireTier('editor'), async (req, res) => {
+  if (req.body?.op === 'add_part' && req.body?.payload?.partId) {
+    const fitErr = await partFitError(req.body.payload.partId, req.body.modelId);
+    if (fitErr) return res.status(400).json({ error: fitErr });
+  }
   const { modelId, modelName, op, payload } = req.body || {};
   if (!modelId || !op || !payload) return res.status(400).json({ error: 'modelId, op, and payload required' });
   const u = req.user;
@@ -1276,8 +1316,11 @@ app.post('/api/bom-change-requests/:id/approve', authMiddleware, requireSection(
   switch (cr.op) {
     case 'update_qty':
       await q('UPDATE bom_line SET qty=$1 WHERE model_id=$2 AND part_id=$3', [p.newQty, cr.model_id, p.partId]); break;
-    case 'add_part':
+    case 'add_part': {
+      const fitErr = await partFitError(p.partId, cr.model_id);
+      if (fitErr) return res.status(400).json({ error: fitErr });
       await q('INSERT INTO bom_line(model_id,part_id,qty) VALUES($1,$2,$3) ON CONFLICT(model_id,part_id) DO UPDATE SET qty=$3', [cr.model_id, p.partId, p.qty]); break;
+    }
     case 'remove_part':
       await q('DELETE FROM bom_line WHERE model_id=$1 AND part_id=$2', [cr.model_id, p.partId]); break;
     case 'update_labor':

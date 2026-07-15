@@ -354,6 +354,12 @@ const colMigrations = [
   // The carrier saying "Delivered" is a claim; a staff member confirming receipt is the fact.
   // received_at/received_by record the fact — inventory only ever moves on that confirmation.
   `ALTER TABLE purchase_order ADD COLUMN IF NOT EXISTS received_by TEXT`,
+  // Part fitment: which trailers a part is designated for. No rows = fits ALL trailers.
+  // kind 'category' covers a whole trailer type (Boat, Watercraft, …); kind 'model' pins
+  // specific models (e.g. the 1-place watercraft trailers only). BOM edits enforce this.
+  `CREATE TABLE IF NOT EXISTS part_fit (part_id TEXT NOT NULL, kind TEXT NOT NULL, value TEXT NOT NULL,
+     PRIMARY KEY (part_id, kind, value))`,
+  `CREATE INDEX IF NOT EXISTS idx_partfit_part ON part_fit(part_id)`,
   `CREATE INDEX IF NOT EXISTS idx_dpl_order ON dealer_parts_line(order_id)`,
   `CREATE INDEX IF NOT EXISTS idx_dpo_status ON dealer_parts_order(status)`,
   // Bill-to vs ship-to per dealership: some dealers bill through a corporate/parent entity.
