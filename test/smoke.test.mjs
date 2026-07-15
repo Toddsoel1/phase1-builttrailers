@@ -2305,6 +2305,18 @@ test('📜 MSO certs, 🔎 last-4 search, 📋 PO acks + cancel, 🚚 tracking u
   assert.equal((await json(await api('/api/mso-certs/assign', { method: 'POST', body: JSON.stringify({ unitId: unit2.id }) }))).certNo, 'A-0099-B');
   assert.equal((await json(await api('/api/mso-certs'))).next, 'A-0100-B', 'alphanumeric formats advance on the last digit run');
   await api('/api/mso-certs/next', { method: 'POST', body: JSON.stringify({ next: '70006' }) }); // back to plain numbers
+  // Batch printing: verify the start ONCE, then the whole batch numbers sequentially —
+  // and a locked certificate anywhere stops the run before a single number is consumed.
+  const unit3 = (await json(await api('/api/trailers'))).registry.find(t => t.id !== vinUnitId && t.id !== unit2.id && t.vin);
+  assert.ok(unit3, 'suite has a third VIN-bearing unit');
+  const badBatch = await api('/api/mso-certs/assign-batch', { method: 'POST', body: JSON.stringify({ unitIds: [unit2.id, vinUnitId] }) });
+  assert.equal(badBatch.status, 400);
+  assert.match((await badBatch.json()).error, /[Ll]ocked/, 'a locked certificate stops the batch');
+  assert.equal((await json(await api('/api/mso-certs'))).next, '70006', 'the refused batch consumed nothing');
+  const batch = await json(await api('/api/mso-certs/assign-batch', { method: 'POST', body: JSON.stringify({ unitIds: [unit2.id, unit3.id] }) }));
+  assert.deepEqual(batch.assignments.map(a => a.certNo), ['70006', '70007'], 'sequential through the batch, no per-MSO prompts');
+  assert.equal(batch.assignments[0].superseded, 'A-0099-B', 'the superseded certificate is recorded');
+  assert.equal((await json(await api('/api/mso-certs'))).next, '70008', 'counter lands after the batch');
 
   // ---- search by whole VIN or last 4 ----
   const curVin = (await json(await api('/api/trailers'))).registry.find(t => t.id === vinUnitId).vin;

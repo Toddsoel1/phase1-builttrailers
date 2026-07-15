@@ -2122,6 +2122,12 @@ app.post('/api/mso-certs/assign', authMiddleware, requireVinAuthority, async (re
   try { res.json(await msocerts.assignCert(req.body?.unitId, { supersede: !!req.body?.supersede }, req.user.id)); }
   catch (e) { res.status(400).json({ error: e.message }); }
 });
+// Batch print: the starting certificate is verified once, then the whole batch numbers
+// sequentially — all-or-nothing, so the paper stack and the register can't drift mid-run.
+app.post('/api/mso-certs/assign-batch', authMiddleware, requireVinAuthority, async (req, res) => {
+  try { res.json(await msocerts.assignCertBatch(req.body?.unitIds, req.user.id)); }
+  catch (e) { res.status(400).json({ error: e.message }); }
+});
 app.patch('/api/mso-certs/:unitId', authMiddleware, requireCertAuthority, async (req, res) => {
   try { res.json(await msocerts.editCert(req.params.unitId, req.body?.certNo, req.user.id)); }
   catch (e) { res.status(400).json({ error: e.message }); }

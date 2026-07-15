@@ -3859,7 +3859,8 @@ async function viewPrintCenter(){
     :' <span class="badge b-buy" title="Not yet verified — run the NHTSA check below">unchecked</span>';
   const queueCard=(title,jobs,kind,empty)=>`<div class="card" style="margin-bottom:16px">
     <h3>${title} <span class="badge ${jobs.length?'b-low':'b-ok'}">${jobs.length}</span>
-      ${kind==='vin'&&jobs.length?`<button class="btn sm sec" style="margin-left:10px" onclick='printVinLabelSheet(${ja(jobs.map(j=>j.unitId))})'>🖨️ Print all — one 15513 sheet</button>`:''}</h3>
+      ${kind==='vin'&&jobs.length?`<button class="btn sm sec" style="margin-left:10px" onclick='printVinLabelSheet(${ja(jobs.map(j=>j.unitId))})'>🖨️ Print all — one 15513 sheet</button>`:''}
+      ${kind==='mso'&&jobs.length?`<button class="btn sm sec" style="margin-left:10px" onclick='printMsoBatch(${ja(jobs.map(j=>j.unitId))})' title="Verify the starting certificate once — the batch numbers sequentially with no per-MSO prompts">🖨️ Print all — sequential certificates</button>`:''}</h3>
     ${jobs.length?`<table><thead><tr><th>VIN</th><th>Model</th><th>Order</th><th>Customer</th><th>Queued</th><th></th></tr></thead><tbody>
       ${jobs.map(j=>`<tr>
         <td><b style="font-family:ui-monospace,Menlo,monospace;letter-spacing:.5px">${esc(j.vin||'')}</b>${nhtsaBadge(j)}${j.reprintCount?` <span class="badge b-below" title="${esc(j.reprintReason||'')}">♻️ REPRINT ×${j.reprintCount}</span>`:''}</td>
@@ -4133,17 +4134,7 @@ async function printVinLabelSheet(unitIds){
 // ── 📄 The MSO — types the data onto the pre-printed security form ──
 // Field positions are inches from the page's top-left, estimated from the office sample;
 // the on-screen guides + X/Y sliders let the office dial it in against the real stock.
-async function printMso(unitId){
-  let d; try{ d=await api('/api/trailers/'+encodeURIComponent(unitId)+'/print-data'); }catch(e){ return toast(e.message); }
-  if(!d.vin)return toast('No VIN on this unit yet.');
-  if(!d.dealer)return toast('This unit has no buyer yet — the MSO names the buyer, so it prints once the trailer is sold.');
-  // Consume the next pre-numbered certificate so the app's sequence tracks the paper stack.
-  try{
-    let a=await api('/api/mso-certs/assign',{method:'POST',body:JSON.stringify({unitId})});
-    if(a.existing&&confirm('This unit is already on certificate #'+a.certNo+'.\nReprinting on NEW paper? OK assigns the next certificate number (the old sheet must be voided); Cancel keeps #'+a.certNo+'.'))
-      a=await api('/api/mso-certs/assign',{method:'POST',body:JSON.stringify({unitId,supersede:true})});
-    toast('📜 Certificate #'+a.certNo+' — check the sheet in the tray matches'+(a.superseded?' (voided '+a.superseded+')':''));
-  }catch(e){ return toast(e.message); }
+function msoFields(d){
   const now=new Date(), MONTHS=['JANUARY','FEBRUARY','MARCH','APRIL','MAY','JUNE','JULY','AUGUST','SEPTEMBER','OCTOBER','NOVEMBER','DECEMBER'];
   const n=v=>v==null?'':Number(v).toLocaleString('en-US');
   const F=[ // [x-in, y-in, text, guide label, sizept?, bold?]
@@ -4164,7 +4155,64 @@ async function printMso(unitId){
     [5.15,7.58,'BUILT TRAILERS','(company name over signature block)'],
     [5.15,8.32,'ST GEORGE, UT','CITY-STATE'],
   ];
-  const fields=F.map(f=>`<div class="fld${f[6]==='center'?' ctr':''}" style="left:${f[0]}in;top:${f[1]}in;font-size:${f[4]||11}pt;${f[5]?'font-weight:bold;':''}">${esc(f[2])}${f[3]?`<span class="guide">${esc(f[3])}</span>`:''}</div>`).join('');
+  return F.map(f=>`<div class="fld${f[6]==='center'?' ctr':''}" style="left:${f[0]}in;top:${f[1]}in;font-size:${f[4]||11}pt;${f[5]?'font-weight:bold;':''}">${esc(f[2])}${f[3]?`<span class="guide">${esc(f[3])}</span>`:''}</div>`).join('');
+}
+// Batch MSO printing: verify the STARTING certificate once, then numbers run sequentially
+// through the whole batch — no per-MSO confirmations. One window, one page per MSO.
+async function printMsoBatch(unitIds){
+  let next; try{ next=(await api('/api/mso-certs')).next; }catch(e){ return toast(e.message); }
+  if(!next)return toast('Set the current starting certificate number first (📜 MSO certificates card).');
+  if(!confirm('Batch print '+unitIds.length+' MSO'+(unitIds.length>1?'s':'')+'.\n\nStarting certificate: #'+next+'\nNumbers assign SEQUENTIALLY through the entire batch — verify sheet #'+next+' is on top of the tray.\n\nContinue?'))return;
+  let batch; try{ batch=await api('/api/mso-certs/assign-batch',{method:'POST',body:JSON.stringify({unitIds})}); }catch(e){ return toast(e.message); }
+  const pages=[];
+  for(const a of batch.assignments){
+    let d; try{ d=await api('/api/trailers/'+encodeURIComponent(a.unitId)+'/print-data'); }catch(e){ toast(a.unitId+': '+e.message); continue; }
+    if(!d.vin||!d.dealer){ toast((d.vin||a.unitId)+' skipped — '+(!d.vin?'no VIN':'no buyer yet')+' (certificate '+a.certNo+' assigned; correct it in the register if the sheet was not used)'); continue; }
+    pages.push(`<div class="page"><div class="shift">${msoFields(d)}</div><div class="fld guide" style="left:0;top:.25in;width:8.5in;text-align:center">📜 certificate #${esc(a.certNo)} — ${esc(d.vin)}</div></div>`);
+  }
+  if(!pages.length)return toast('Nothing printable in the batch.');
+  const last=batch.assignments[batch.assignments.length-1].certNo;
+  const html=`<!doctype html><html><head><meta charset="utf-8"><title>MSO batch ${esc(next)}–${esc(last)}</title><style>
+    @page{size:letter;margin:0} body{font-family:Arial,Helvetica,sans-serif;color:#000;margin:0}
+    .page{position:relative;width:8.5in;height:11in;margin:0 auto;background:#fbfbf8;outline:1px dashed #ccc;page-break-after:always}
+    .page:last-of-type{page-break-after:auto}
+    .shift{position:absolute;inset:0}
+    .fld{position:absolute;white-space:nowrap;letter-spacing:.3px}
+    .fld.ctr{left:0!important;width:8.5in;text-align:center}
+    .guide{display:block;font-size:7.5pt;color:#b06;font-weight:normal;letter-spacing:0}
+    .bar{position:sticky;top:0;background:#1a2230;color:#fff;padding:10px 14px;font-size:13px;display:flex;gap:14px;align-items:center;flex-wrap:wrap;z-index:5}
+    .bar input{width:64px;padding:4px} .bar button{padding:6px 14px;font-weight:bold;cursor:pointer}
+    @media print{.bar,.guide{display:none}.page{outline:none;background:none}}
+  </style></head><body>
+    <div class="bar">📄 ${pages.length} MSOs — certificates #${esc(batch.assignments[0].certNo)} → #${esc(last)}, sequential. Load the stack with #${esc(batch.assignments[0].certNo)} on top, then Print.
+      X <input id="ox" type="number" step="0.5" value="0"> mm&nbsp; Y <input id="oy" type="number" step="0.5" value="0"> mm
+      <button onclick="apply()">Apply</button><button onclick="window.print()">🖨️ Print all</button>
+      <span style="opacity:.7;font-size:11.5px">Pink guides never print. The nudge applies to every page.</span>
+    </div>
+    ${pages.join('')}
+    <script>
+      const LS='msoOffset';
+      function apply(){const x=Number(document.getElementById('ox').value)||0,y=Number(document.getElementById('oy').value)||0;
+        document.querySelectorAll('.shift').forEach(el=>{el.style.transform='translate('+x+'mm,'+y+'mm)';});
+        try{localStorage.setItem(LS,JSON.stringify({x,y}));}catch(e){}}
+      try{const s=JSON.parse(localStorage.getItem(LS)||'{}');if(s.x||s.y){document.getElementById('ox').value=s.x||0;document.getElementById('oy').value=s.y||0;apply();}}catch(e){}
+    <\/script></body></html>`;
+  const w=window.open('','_blank','width=900,height=1000'); if(!w)return toast('Pop-up blocked — allow pop-ups to print.');
+  w.document.write(html); w.document.close();
+  toast('📜 '+pages.length+' MSOs on certificates #'+batch.assignments[0].certNo+' → #'+last);
+}
+async function printMso(unitId){
+  let d; try{ d=await api('/api/trailers/'+encodeURIComponent(unitId)+'/print-data'); }catch(e){ return toast(e.message); }
+  if(!d.vin)return toast('No VIN on this unit yet.');
+  if(!d.dealer)return toast('This unit has no buyer yet — the MSO names the buyer, so it prints once the trailer is sold.');
+  // Consume the next pre-numbered certificate so the app's sequence tracks the paper stack.
+  try{
+    let a=await api('/api/mso-certs/assign',{method:'POST',body:JSON.stringify({unitId})});
+    if(a.existing&&confirm('This unit is already on certificate #'+a.certNo+'.\nReprinting on NEW paper? OK assigns the next certificate number (the old sheet must be voided); Cancel keeps #'+a.certNo+'.'))
+      a=await api('/api/mso-certs/assign',{method:'POST',body:JSON.stringify({unitId,supersede:true})});
+    toast('📜 Certificate #'+a.certNo+' — check the sheet in the tray matches'+(a.superseded?' (voided '+a.superseded+')':''));
+  }catch(e){ return toast(e.message); }
+  const fields=msoFields(d);
   const html=`<!doctype html><html><head><meta charset="utf-8"><title>MSO ${esc(d.vin)}</title><style>
     @page{size:letter;margin:0} body{font-family:Arial,Helvetica,sans-serif;color:#000;margin:0}
     .page{position:relative;width:8.5in;height:11in;margin:0 auto;background:#fbfbf8;outline:1px dashed #ccc}

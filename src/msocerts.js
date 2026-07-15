@@ -47,6 +47,39 @@ export async function assignCert(unitId, { supersede } = {}, userId) {
   return { certNo: cur, existing: false, superseded: t.mso_cert_no || null };
 }
 
+// Batch printing: the starting certificate is verified ONCE, then numbers assign sequentially
+// through the whole batch — no per-MSO confirmations. All-or-nothing: a locked certificate or
+// a VIN-less unit anywhere in the batch stops the run BEFORE any number is consumed, so the
+// physical stack and the register can never drift apart mid-batch.
+export async function assignCertBatch(unitIds, userId) {
+  const ids = [...new Set((Array.isArray(unitIds) ? unitIds : []).filter(Boolean))];
+  if (!ids.length) throw new Error('Nothing to print.');
+  const units = [];
+  const locked = [];
+  for (const id of ids) {
+    const t = await one('SELECT id, vin, mso_cert_no, mso_cert_locked FROM trailer WHERE id=$1', [id]);
+    if (!t) throw new Error(`Trailer unit ${id} not found.`);
+    if (!t.vin) throw new Error(`Unit ${id} has no VIN yet — remove it from the batch.`);
+    if (t.mso_cert_no && t.mso_cert_locked) locked.push(`${id} (${t.mso_cert_no})`);
+    units.push(t);
+  }
+  if (locked.length) throw new Error(`Locked certificates in the batch: ${locked.join(', ')} — locked MSOs can't be reassigned; print them individually or remove them.`);
+  let cur = await nextCert();
+  if (!cur) throw new Error('Set the current starting certificate number first (Print Center → MSO certificates).');
+  const assignments = [];
+  for (const t of units) {
+    await q('UPDATE trailer SET mso_cert_no=$1, mso_cert_locked=false, mso_cert_at=now() WHERE id=$2', [cur, t.id]);
+    await q('INSERT INTO audit_log(user_id,action,detail) VALUES ($1,$2,$3)',
+      [userId || null, 'mso.cert.assign', `${t.id} (${t.vin}) → certificate ${cur} [batch]${t.mso_cert_no ? ` (supersedes ${t.mso_cert_no})` : ''}`]).catch(() => {});
+    assignments.push({ unitId: t.id, vin: t.vin, certNo: cur, superseded: t.mso_cert_no || null });
+    cur = bump(cur);
+  }
+  await q(`INSERT INTO app_config(key,value) VALUES($1,$2) ON CONFLICT(key) DO UPDATE SET value=$2`, [KEY, cur]);
+  await q('INSERT INTO audit_log(user_id,action,detail) VALUES ($1,$2,$3)',
+    [userId || null, 'mso.cert.batch', `batch of ${assignments.length}: ${assignments[0].certNo} → ${assignments[assignments.length - 1].certNo}`]).catch(() => {});
+  return { assignments, next: cur };
+}
+
 // Post-print correction (the printer mangled the stack) — limited access, refused once locked.
 export async function editCert(unitId, certNo, userId) {
   const t = await one('SELECT id, vin, mso_cert_no, mso_cert_locked FROM trailer WHERE id=$1', [unitId]);
