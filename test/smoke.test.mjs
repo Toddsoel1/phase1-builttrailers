@@ -2281,3 +2281,65 @@ test('🧻 expendables + expensed charges: billed to the penny, never landed, ne
   assert.equal((await api('/api/po/' + po3.id + '/receive', { method: 'POST' })).status, 200);
   assert.equal((await json(await api('/api/parts'))).find(p => p.id === 'BUY-PROBE-TAPE').onHand, 0, 'still zero on hand');
 });
+
+test('📜 MSO certs, 🔎 last-4 search, 📋 PO acks + cancel, 🚚 tracking updates', async () => {
+  // ---- MSO certificate sequencing ----
+  assert.equal((await api('/api/mso-certs/assign', { method: 'POST', body: JSON.stringify({ unitId: vinUnitId }) })).status, 400, 'no counter set → the app prompts for the starting number');
+  assert.equal((await api('/api/mso-certs/next', { method: 'POST', body: JSON.stringify({ next: '70001' }) })).status, 200);
+  const a1 = await json(await api('/api/mso-certs/assign', { method: 'POST', body: JSON.stringify({ unitId: vinUnitId }) }));
+  assert.equal(a1.certNo, '70001');
+  assert.equal((await json(await api('/api/mso-certs'))).next, '70002', 'counter advances with each print');
+  const a2 = await json(await api('/api/mso-certs/assign', { method: 'POST', body: JSON.stringify({ unitId: vinUnitId }) }));
+  assert.ok(a2.existing && a2.certNo === '70001', 'accidental double print never burns a number');
+  // post-print correction (limited access), then confirm & lock — locked never moves again
+  assert.equal((await api('/api/mso-certs/' + vinUnitId, { method: 'PATCH', body: JSON.stringify({ certNo: '70005' }) })).status, 200);
+  assert.equal((await api('/api/mso-certs/' + vinUnitId + '/lock', { method: 'POST' })).status, 200);
+  assert.equal((await api('/api/mso-certs/' + vinUnitId, { method: 'PATCH', body: JSON.stringify({ certNo: '70009' }) })).status, 400, 'locked certificates cannot be edited');
+  assert.equal((await api('/api/mso-certs/assign', { method: 'POST', body: JSON.stringify({ unitId: vinUnitId, supersede: true }) })).status, 400, 'locked certificates cannot be superseded');
+  const reg = (await json(await api('/api/mso-certs'))).recent.find(r => r.unitId === vinUnitId);
+  assert.ok(reg && reg.certNo === '70005' && reg.locked === true);
+
+  // ---- search by whole VIN or last 4 ----
+  const curVin = (await json(await api('/api/trailers'))).registry.find(t => t.id === vinUnitId).vin;
+  const byLast4 = await json(await api('/api/search?q=' + curVin.slice(-4)));
+  const hit = byLast4.units.find(u => u.id === vinUnitId);
+  assert.ok(hit, 'dealers quote the last 4 — that alone finds the unit');
+  assert.equal(hit.last4, curVin.slice(-4), 'each unit carries its last-4 tag');
+  assert.ok('invoiceRef' in hit, 'the invoice link rides the search result');
+  assert.ok((await json(await api('/api/search?q=' + curVin))).units.some(u => u.id === vinUnitId), 'the whole VIN works too');
+
+  // ---- PO acknowledgements: multiple per PO, trim, partial + full cancel ----
+  const vendorId = (await json(await api('/api/vendors'))).find(v => v.status !== 'pending' && v.status !== 'rejected').id;
+  await api('/api/parts', { method: 'POST', body: JSON.stringify({ id: 'BUY-PROBE-ACK', name: 'Probe Ack Part', type: 'B', cost: 10 }) });
+  const po = await json(await api('/api/po', { method: 'POST', body: JSON.stringify({ partId: 'BUY-PROBE-ACK', qty: 10, vendorId }) }));
+  const k1 = await json(await api('/api/po/' + po.id + '/ack', { method: 'POST', body: JSON.stringify({ ackNo: 'OA-1001', qty: 4, trackingNo: '1Z999AA10123456784' }) }));
+  assert.equal(k1.acked, 4);
+  assert.equal((await api('/api/po/' + po.id + '/ack', { method: 'POST', body: JSON.stringify({ ackNo: 'OA-1002', qty: 3 }) })).status, 200, 'a vendor can acknowledge a PO in pieces');
+  assert.equal((await api('/api/po/' + po.id + '/ack', { method: 'POST', body: JSON.stringify({ ackNo: 'OA-1003', qty: 4 }) })).status, 400, 'acks cannot exceed the PO');
+  const row = (await json(await api('/api/po'))).find(x => x.id === po.id);
+  assert.equal(row.acks.length, 2);
+  assert.equal(row.ackQty, 7);
+  assert.equal(row.acks[0].carrier, 'UPS', '1Z… auto-detects as UPS');
+  assert.equal((await api('/api/po/' + po.id, { method: 'PATCH', body: JSON.stringify({ qty: 6 }) })).status, 400, 'cannot trim below what the vendor acknowledged');
+  assert.equal((await api('/api/po/' + po.id, { method: 'PATCH', body: JSON.stringify({ qty: 8 }) })).status, 200, 'trimming off what the vendor cannot fulfill');
+  assert.equal((await api('/api/po/' + po.id + '/cancel', { method: 'POST', body: JSON.stringify({ qty: 1, reason: 'out of stock' }) })).status, 200, 'partial cancel as unfulfilled');
+  assert.equal((await api('/api/po/' + po.id + '/cancel', { method: 'POST', body: JSON.stringify({ qty: 1 }) })).status, 400, 'cannot cancel below the acknowledged quantity');
+  const trimmed = (await json(await api('/api/po'))).find(x => x.id === po.id);
+  assert.equal(trimmed.qty, 7);
+  assert.equal(trimmed.unfulfilledQty, 1);
+
+  // ---- tracking: a status change notifies (push fans out; no-op without VAPID) ----
+  const t1 = await json(await api('/api/acks/' + k1.id + '/tracking-status', { method: 'POST', body: JSON.stringify({ status: 'In Transit' }) }));
+  assert.equal(t1.changed, true);
+  assert.equal((await json(await api('/api/acks/' + k1.id + '/tracking-status', { method: 'POST', body: JSON.stringify({ status: 'In Transit' }) }))).changed, false, 'same status = no re-notify');
+  assert.equal((await json(await api('/api/po'))).find(x => x.id === po.id).acks.find(a => a.id === k1.id).trackingStatus, 'In Transit');
+  assert.match(JSON.stringify(await json(await api('/api/tracking/poll', { method: 'POST' }))), /no provider configured/, 'poller idles gracefully without a provider');
+
+  // ---- full cancel: PO closes as unfulfilled and can never be received ----
+  const po2 = await json(await api('/api/po', { method: 'POST', body: JSON.stringify({ partId: 'BUY-PROBE-ACK', qty: 2, vendorId }) }));
+  assert.equal((await api('/api/po/' + po2.id + '/cancel', { method: 'POST', body: '{}' })).status, 200);
+  const dead = (await json(await api('/api/po'))).find(x => x.id === po2.id);
+  assert.equal(dead.status, 'Cancelled');
+  assert.equal(dead.unfulfilledQty, 2);
+  assert.equal((await api('/api/po/' + po2.id + '/receive', { method: 'POST' })).status, 400, 'cancelled POs cannot be received');
+});

@@ -21,7 +21,7 @@ import jwt from 'jsonwebtoken';
 import { modelRollup, modelsSummary, inventoryValuation } from './cost.js';
 import { STAGES, canSell, canReorderProduction, trailerTypes, customersWithTypes, allowedTypesFor, ordersFull, consumeInventory, setProductionOrder } from './orders.js';
 import { logWork, dailyReport, wipReport, consumptionByWorkstation, workstations, stageForWorkstation, qcMissing } from './wip.js';
-import { mrp, poList, createPO, receivePO, receiveInvoice, vendorScorecard, vendorActualLeads } from './mrp.js';
+import { mrp, poList, createPO, receivePO, receiveInvoice, vendorScorecard, vendorActualLeads, addAck, editPOQty, cancelPO } from './mrp.js';
 import { accountingMode, qboConfigured, ledger, totals, sync, scanInvoice, invoiceList } from './accounting.js';
 import { getAuthUrl, exchangeCode, syncCustomersFromQBO, syncItemsFromQBO, syncInvoicesFromQBO, syncVendorsFromQBO, previewItemsFromQBO, QBOAuthError, QBOFeatureError, qboErrorLog, getRefreshTokenInfo, disconnectQBO, getRealmInfo, getQBItems, updateItemCost } from './qbo.js';
 import * as people from './people.js';
@@ -41,6 +41,8 @@ import * as inventory from './inventory.js';
 import * as boatbuilder from './boatbuilder.js';
 import * as engineering from './engineering.js';
 import * as dealerparts from './dealerparts.js';
+import * as msocerts from './msocerts.js';
+import * as tracking from './tracking.js';
 import QRCode from 'qrcode';
 import * as dealernotify from './dealernotify.js';
 import * as storage from './storage.js';
@@ -1661,7 +1663,10 @@ app.get('/api/search', authMiddleware, async (req, res) => {
     all(`SELECT o.id, o.stage, c.name AS customer, m.name AS model FROM sales_order o
            LEFT JOIN customer c ON c.id=o.customer_id LEFT JOIN model m ON m.id=o.model_id
           WHERE o.id ILIKE $1 OR c.name ILIKE $1 ORDER BY o.created_at DESC NULLS LAST, o.id DESC LIMIT 5`, [like]),
-    all(`SELECT t.id, t.vin, t.order_id, m.name AS model FROM trailer t LEFT JOIN model m ON m.id=t.model_id
+    all(`SELECT t.id, t.vin, t.order_id, m.name AS model,
+                COALESCE((SELECT ref FROM accounting_event WHERE kind='invoice' AND ref=t.order_id LIMIT 1),
+                         (SELECT o.invoice_batch_id FROM sales_order o WHERE o.id=t.order_id)) AS invoice_ref
+           FROM trailer t LEFT JOIN model m ON m.id=t.model_id
           WHERE t.vin ILIKE $1 ORDER BY t.vin LIMIT 5`, [like]),
     all(`SELECT id, name, kind FROM customer WHERE name ILIKE $1 OR contact ILIKE $1 ORDER BY name LIMIT 5`, [like]),
     all(`SELECT id, name FROM part WHERE id ILIKE $1 OR name ILIKE $1 ORDER BY id LIMIT 5`, [like]),
@@ -1669,7 +1674,7 @@ app.get('/api/search', authMiddleware, async (req, res) => {
   ]);
   res.json({
     orders: orders.map(o => ({ id: o.id, stage: o.stage, customer: o.customer, model: o.model })),
-    units: units.map(u => ({ id: u.id, vin: u.vin, orderId: u.order_id, model: u.model })),
+    units: units.map(u => ({ id: u.id, vin: u.vin, last4: u.vin ? String(u.vin).slice(-4) : null, orderId: u.order_id, model: u.model, invoiceRef: u.invoice_ref || null })),
     customers: customers.map(c => ({ id: c.id, name: c.name, kind: c.kind })),
     parts: parts.map(p => ({ id: p.id, name: p.name })),
     models: models.map(m => ({ id: m.id, name: m.name })),
@@ -2099,6 +2104,57 @@ app.post('/api/vendor-invoices/receive', authMiddleware, requireTier('editor'), 
     res.json(r);
   } catch (e) { res.status(400).json({ error: e.message }); }
 });
+// ---- 📜 MSO certificate numbers (pre-numbered paper) ----
+// Viewing/assigning follows print authority; SETTING the counter, editing, and locking are
+// limited to Office Manager / General Manager / admin.
+function requireCertAuthority(req, res, next) {
+  if (req.user.role === 'admin' || hasTitle(req, ['Office Manager', 'General Manager'])) return next();
+  return res.status(403).json({ error: 'Certificate numbers are managed by the Office Manager, General Manager, or an admin.' });
+}
+app.get('/api/mso-certs', authMiddleware, requireVinAuthority, async (_req, res) => {
+  res.json({ next: await msocerts.nextCert(), recent: await msocerts.certRegister() });
+});
+app.post('/api/mso-certs/next', authMiddleware, requireCertAuthority, async (req, res) => {
+  try { res.json(await msocerts.setNextCert(req.body?.next, req.user.id)); }
+  catch (e) { res.status(400).json({ error: e.message }); }
+});
+app.post('/api/mso-certs/assign', authMiddleware, requireVinAuthority, async (req, res) => {
+  try { res.json(await msocerts.assignCert(req.body?.unitId, { supersede: !!req.body?.supersede }, req.user.id)); }
+  catch (e) { res.status(400).json({ error: e.message }); }
+});
+app.patch('/api/mso-certs/:unitId', authMiddleware, requireCertAuthority, async (req, res) => {
+  try { res.json(await msocerts.editCert(req.params.unitId, req.body?.certNo, req.user.id)); }
+  catch (e) { res.status(400).json({ error: e.message }); }
+});
+app.post('/api/mso-certs/:unitId/lock', authMiddleware, requireCertAuthority, async (req, res) => {
+  try { res.json(await msocerts.lockCert(req.params.unitId, req.user.id)); }
+  catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+// ---- 📋 vendor order acknowledgements + PO edits/cancellations + 🚚 tracking ----
+app.post('/api/po/:id/ack', authMiddleware, requireTier('editor'), async (req, res) => {
+  try {
+    const body = req.body || {};
+    if (body.trackingNo && !body.carrier) body.carrier = tracking.detectCarrier(body.trackingNo);
+    res.json(await addAck(req.params.id, body, req.user.id));
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+app.patch('/api/po/:id', authMiddleware, requireTier('editor'), async (req, res) => {
+  try { res.json(await editPOQty(req.params.id, req.body?.qty, req.user.id)); }
+  catch (e) { res.status(400).json({ error: e.message }); }
+});
+app.post('/api/po/:id/cancel', authMiddleware, requireTier('editor'), async (req, res) => {
+  try { res.json(await cancelPO(req.params.id, req.body || {}, req.user.id)); }
+  catch (e) { res.status(400).json({ error: e.message }); }
+});
+app.post('/api/acks/:id/tracking-status', authMiddleware, requireTier('editor'), async (req, res) => {
+  try { res.json(await tracking.setTrackingStatus(Number(req.params.id), req.body?.status, { via: 'manual' }, req.user.id)); }
+  catch (e) { res.status(400).json({ error: e.message }); }
+});
+app.post('/api/tracking/poll', authMiddleware, requireTier('admin'), async (_req, res) => {
+  res.json(await tracking.pollTracking());
+});
+
 app.post('/api/po/:id/receive', authMiddleware, requireTier('editor'), async (req, res) => {
   try { const ok = await receivePO(req.params.id, req.user.id); res.json({ ok }); }
   catch (e) { res.status(400).json({ error: String(e.message || e) }); }
@@ -3011,6 +3067,7 @@ await ensureSchema();
   // office-edited prices. After ensureSchema so its tables + the part table exist.
   await boatbuilder.ensureBoatCatalog().catch(e => log('warn', 'boatCatalog', { error: e.message }));
   await engineering.ensureEngineering().catch(e => log('warn', 'engineering', { error: e.message }));
+  tracking.startTrackingPoller();
   // Built Trailers' real dealer network -> customer table for the public locator. One-time
   // (app_config flag) so later office edits to a dealer aren't overwritten on the next reboot.
   await ensureDealers().catch(e => log('warn', 'dealerSeed', { error: e.message }));

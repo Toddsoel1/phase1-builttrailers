@@ -334,6 +334,20 @@ const colMigrations = [
   // part costs in the BOMs never move because of it.
   `ALTER TABLE vendor_invoice ADD COLUMN IF NOT EXISTS expensed NUMERIC(12,2) NOT NULL DEFAULT 0`,
   `ALTER TABLE vendor_invoice ADD COLUMN IF NOT EXISTS expensed_label TEXT`,
+  // MSO certificate paper is pre-numbered; the app tracks which certificate each MSO printed
+  // on. The counter lives in app_config ('mso_next_cert'); edits are limited-access and a
+  // confirmed certificate locks against further edits.
+  `ALTER TABLE trailer ADD COLUMN IF NOT EXISTS mso_cert_no TEXT`,
+  `ALTER TABLE trailer ADD COLUMN IF NOT EXISTS mso_cert_locked BOOLEAN NOT NULL DEFAULT false`,
+  `ALTER TABLE trailer ADD COLUMN IF NOT EXISTS mso_cert_at TIMESTAMPTZ`,
+  // Vendor order acknowledgements: one PO can be covered by several acks (qty splits), each
+  // optionally carrying carrier + tracking. Cancelled quantity is recorded as unfulfilled.
+  `CREATE TABLE IF NOT EXISTS po_ack (id SERIAL PRIMARY KEY, po_id TEXT NOT NULL, ack_no TEXT NOT NULL,
+     qty NUMERIC(12,2) NOT NULL, note TEXT, carrier TEXT, tracking_no TEXT, tracking_status TEXT,
+     tracking_checked_at TIMESTAMPTZ, created_by TEXT, created_at TIMESTAMPTZ NOT NULL DEFAULT now())`,
+  `CREATE INDEX IF NOT EXISTS idx_poack_po ON po_ack(po_id)`,
+  `ALTER TABLE purchase_order ADD COLUMN IF NOT EXISTS unfulfilled_qty NUMERIC(12,2) NOT NULL DEFAULT 0`,
+  `ALTER TABLE purchase_order ADD COLUMN IF NOT EXISTS cancel_reason TEXT`,
   `CREATE INDEX IF NOT EXISTS idx_dpl_order ON dealer_parts_line(order_id)`,
   `CREATE INDEX IF NOT EXISTS idx_dpo_status ON dealer_parts_order(status)`,
   // Bill-to vs ship-to per dealership: some dealers bill through a corporate/parent entity.

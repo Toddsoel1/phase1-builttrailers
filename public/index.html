@@ -374,7 +374,7 @@ async function runSearch(){
   gsItems=[
     ...screens.map(n=>({icon:'🧭',label:n[1].replace(/^\S+\s/,''),sub:'open screen',act:()=>go(n[0])})),
     ...r.orders.map(o=>({icon:'🔨',label:`${o.id} — ${o.customer||'(no customer)'}`,sub:`${o.model||''} · ${o.stage}`,act:()=>orderDetail(o.id)})),
-    ...r.units.map(u=>({icon:'🚛',label:u.vin,sub:`${u.model||''}${u.orderId?' · order '+u.orderId:''}`,act:u.orderId?()=>orderDetail(u.orderId):()=>go('trailers')})),
+    ...r.units.map(u=>({icon:'🚛',label:`${u.vin}  #${u.last4||String(u.vin||'').slice(-4)}`,sub:`${u.model||''}${u.orderId?' · order '+u.orderId:''}${u.invoiceRef?' · 🧾 invoice '+u.invoiceRef:''}`,act:u.orderId?()=>orderDetail(u.orderId):()=>go('trailers')})),
     ...r.customers.map(c=>({icon:'🏬',label:c.name,sub:c.kind||'',act:()=>go('customers')})),
     ...r.parts.map(p=>({icon:'📦',label:p.id,sub:p.name||'',act:()=>go('parts')})),
     ...r.models.map(m=>({icon:'🧩',label:m.name,sub:m.id,act:()=>go('boms')})),
@@ -3251,6 +3251,60 @@ async function riSend(){
 async function autoPO(){
   try{const r=await api('/api/mrp/auto',{method:'POST'});toast('⚡ Generated '+r.created+' purchase orders');page='pos';render();}catch(e){toast(e.message);}
 }
+function carrierUrl(carrier,no){
+  const n=encodeURIComponent(String(no||'').trim());
+  switch(String(carrier||'').toUpperCase()){
+    case 'UPS': return 'https://www.ups.com/track?tracknum='+n;
+    case 'FEDEX': return 'https://www.fedex.com/fedextrack/?trknbr='+n;
+    case 'USPS': return 'https://tools.usps.com/go/TrackConfirmAction?tLabels='+n;
+    case 'DHL': return 'https://www.dhl.com/us-en/home/tracking.html?tracking-id='+n;
+    default: return null;
+  }
+}
+function poAckModal(poId){
+  modal('📋 Order acknowledgement — '+esc(poId),`
+    <p class="muted" style="font-size:12px">A vendor rarely confirms a whole PO at once — record each acknowledgement as it arrives. What they can never fulfill: trim the PO (✏️) or cancel it (🚫) as unfulfilled.</p>
+    <div class="row">
+      <div class="field"><label>Acknowledgement #</label><input id="akNo" class="inp" placeholder="from the vendor's confirmation"></div>
+      <div class="field"><label>Quantity covered</label><input id="akQty" class="inp" type="number" min="0.01" step="0.01"></div>
+    </div>
+    <div class="row">
+      <div class="field"><label>Carrier</label><select id="akCarrier" class="inp"><option value="">— auto-detect —</option><option>UPS</option><option>FedEx</option><option>USPS</option><option>DHL</option><option>Other</option></select></div>
+      <div class="field"><label>Tracking # (optional)</label><input id="akTrack" class="inp" placeholder="1Z…, 9400…, …"></div>
+    </div>
+    <div class="field"><label>Note (optional)</label><input id="akNote" class="inp" placeholder="e.g. balance ships next week"></div>
+    <button class="btn" onclick="poAckSend('${esc(poId)}')">📋 Record acknowledgement</button>`);
+}
+async function poAckSend(poId){
+  try{
+    const r=await api('/api/po/'+encodeURIComponent(poId)+'/ack',{method:'POST',body:JSON.stringify({
+      ackNo:$('akNo').value,qty:Number($('akQty').value),carrier:$('akCarrier').value,trackingNo:($('akTrack').value||'').trim(),note:$('akNote').value})});
+    closeModal(); toast('📋 Ack '+r.ackNo+' — '+r.acked+' of '+r.of+' acknowledged'); viewPOs();
+  }catch(e){ toast(e.message); }
+}
+async function poEditQty(poId,qty,acked){
+  const v=prompt('New quantity for '+poId+' (vendor can\'t fulfill the rest)\nAcknowledged so far: '+acked,qty);
+  if(v==null)return;
+  try{ await api('/api/po/'+encodeURIComponent(poId),{method:'PATCH',body:JSON.stringify({qty:Number(v)})}); toast(poId+' trimmed to '+v); viewPOs(); }
+  catch(e){ toast(e.message); }
+}
+async function poCancel(poId,qty,acked){
+  const v=prompt('Cancel how many of '+poId+' as UNFULFILLED?\nEnter '+qty+' (or leave as-is) to cancel the whole PO'+(acked?'\nAcknowledged so far: '+acked:''),qty);
+  if(v==null)return;
+  const n=Number(v);
+  const full=!Number.isFinite(n)||n>=qty;
+  if(full&&!confirm('Cancel '+poId+' in FULL as unfulfilled?'))return;
+  try{ const r=await api('/api/po/'+encodeURIComponent(poId)+'/cancel',{method:'POST',body:JSON.stringify(full?{}:{qty:n})});
+    toast(full?poId+' cancelled as unfulfilled':poId+' — '+n+' cancelled, '+r.remainingQty+' still on order'); viewPOs(); }
+  catch(e){ toast(e.message); }
+}
+async function ackStatusPrompt(ackId){
+  const v=prompt('Carrier status update (e.g. In Transit, Out for Delivery, Delivered):');
+  if(!v)return;
+  try{ const r=await api('/api/acks/'+ackId+'/tracking-status',{method:'POST',body:JSON.stringify({status:v})});
+    toast(r.changed?'🚚 Status updated — Office Managers notified':'No change'); viewPOs(); }
+  catch(e){ toast(e.message); }
+}
 async function adoptVendorLead(id,name,days){
   if(!confirm(`Set ${name}'s promised lead time to their demonstrated ${days} days? New POs and MRP timing will use it.`))return;
   try{ await api('/api/vendors/'+encodeURIComponent(id)+'/adopt-lead',{method:'POST'}); toast(name+' → '+days+'-day lead adopted'); viewPOs(); }
@@ -3308,11 +3362,12 @@ async function viewPOs(){
    <table><thead><tr><th>PO</th><th>Vendor</th><th>Part</th><th class="right">Qty</th><th class="right">Total</th><th>ETA</th><th class="center">Status</th>${canEdit()?'<th></th>':''}</tr></thead><tbody>
    ${pos.map(p=>{
      const isPending=p.status==='Pending Approval',isRejected=p.status==='Rejected';
-     const badge=isPending?'b-low':isRejected?'b-below':p.status==='Open'?'b-mfg':'b-ok';
-     return `<tr><td><b>${p.id}</b></td><td>${p.vendor||''}</td><td style="font-size:12px">${p.part||p.partId}${p.vendorPartNo?`<br><span class="muted" style="font-size:10.5px">V/PN ${esc(p.vendorPartNo)}</span>`:''}</td>
-       <td class="right">${p.qty}</td><td class="right">${money(p.total)}</td><td>${p.eta||''}</td>
+     const badge=isPending?'b-low':isRejected?'b-below':p.status==='Cancelled'?'b-below':p.status==='Open'?'b-mfg':'b-ok';
+     const ackLine=(p.acks&&p.acks.length)?`<br>${p.acks.map(a=>`<span class="muted" style="font-size:10.5px">📋 ${esc(a.ackNo)} · ${a.qty}${a.trackingNo?` · <a class="lnk" href="${esc(carrierUrl(a.carrier,a.trackingNo)||'#')}" target="_blank" rel="noopener">${esc(a.carrier||'?')} ${esc(a.trackingNo)}</a>${a.trackingStatus?` <span class="badge ${/deliver/i.test(a.trackingStatus)?'b-ok':'b-low'}" style="font-size:9px">${esc(a.trackingStatus)}</span>`:''}${canEdit()?` <a class="lnk" onclick="ackStatusPrompt(${a.id})" title="Log a carrier status update">✏️</a>`:''}`:''}</span>`).join('<br>')}`:'';
+     return `<tr><td><b>${p.id}</b>${p.unfulfilledQty?`<br><span class="badge b-below" style="font-size:9px" title="Cancelled as unfulfilled">−${p.unfulfilledQty} unfulfilled</span>`:''}</td><td>${p.vendor||''}</td><td style="font-size:12px">${p.part||p.partId}${p.vendorPartNo?`<br><span class="muted" style="font-size:10.5px">V/PN ${esc(p.vendorPartNo)}</span>`:''}${ackLine}</td>
+       <td class="right">${p.qty}${p.ackQty?`<br><span class="muted" style="font-size:10px">${p.ackQty} ack'd</span>`:''}</td><td class="right">${money(p.total)}</td><td>${p.eta||''}</td>
        <td class="center"><span class="badge ${badge}">${p.status}</span></td>
-       ${canEdit()?`<td class="right">${p.status==='Open'?`<button class="btn sm sec" onclick="receivePO('${p.id}')">Receive</button>`:''}</td>`:''}
+       ${canEdit()?`<td class="right" style="white-space:nowrap">${p.status==='Open'?`<button class="btn sm sec" onclick="poAckModal('${p.id}')" title="Record a vendor order acknowledgement">📋 Ack</button> <button class="btn sm sec" onclick="poEditQty('${p.id}',${p.qty},${p.ackQty||0})" title="Vendor can't fulfill everything — trim the PO">✏️</button> <button class="btn sm sec" onclick="poCancel('${p.id}',${p.qty},${p.ackQty||0})" title="Cancel in full or in part as unfulfilled">🚫</button> <button class="btn sm sec" onclick="receivePO('${p.id}')">Receive</button>`:''}</td>`:''}
      </tr>`;
    }).join('')}
    </tbody></table></div>
@@ -3815,9 +3870,28 @@ async function viewPrintCenter(){
       </tr>`).join('')}
     </tbody></table>`:`<p class="muted">${empty}</p>`}
   </div>`;
+  const certs=await api('/api/mso-certs').catch(()=>null);
+  const canCert=isAdmin()||myTitles().some(t=>['Office Manager','General Manager'].includes(t));
+  const certCard=certs?`<div class="card" style="margin-bottom:16px"><h3>📜 MSO certificates <span class="muted" style="text-transform:none;letter-spacing:0">— pre-numbered paper; the app tracks which certificate each MSO printed on</span></h3>
+      <div style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap;margin-bottom:8px">
+        <div class="field" style="margin:0"><label>Next certificate # <span class="muted" style="font-weight:400">(the top blank sheet in the stack — update it whenever new paper arrives)</span></label>
+          <input id="certNext" value="${esc(certs.next||'')}" placeholder="e.g. 70001" style="font-family:ui-monospace,monospace;width:160px" ${canCert?'':'disabled'}></div>
+        ${canCert?`<button class="btn sm" onclick="certSetNext()">Save</button>`:'<span class="muted" style="font-size:11.5px">setting the counter is OM / GM / admin</span>'}
+      </div>
+      ${certs.recent.length?`<table><thead><tr><th>Certificate</th><th>VIN</th><th>Model</th><th>Assigned</th><th></th></tr></thead><tbody>
+        ${certs.recent.map(r=>`<tr>
+          <td>${canCert&&!r.locked?`<input value="${esc(r.certNo)}" style="font-family:ui-monospace,monospace;width:120px" onchange="certEdit('${esc(r.unitId)}',this.value)">`:`<b style="font-family:ui-monospace,monospace">${esc(r.certNo)}</b>`} ${r.locked?'<span class="badge b-ok" title="Confirmed — this certificate can never change">🔒 locked</span>':''}</td>
+          <td style="font-family:ui-monospace,monospace;font-size:12px">${esc(r.vin||'')}</td><td style="font-size:12px">${esc(r.model||'')}</td>
+          <td class="muted" style="font-size:11.5px">${r.at?new Date(r.at).toLocaleString():''}</td>
+          <td>${canCert&&!r.locked?`<button class="btn sm" onclick="certLock('${esc(r.unitId)}','${esc(r.certNo)}')">🔒 Confirm & lock</button>`:''}</td>
+        </tr>`).join('')}</tbody></table>
+      <p class="muted" style="font-size:11px;margin-top:6px">Printer mangled the stack? Fix the numbers above, then 🔒 Confirm &amp; lock each one — locked certificates can never be edited or superseded.</p>`
+      :'<p class="muted" style="font-size:12.5px">No certificates assigned yet — the next MSO print consumes the number above.</p>'}
+    </div>`:'';
   $('content').innerHTML=
     queueCard('🏷️ VIN labels to print',vinQ,'vin','Nothing queued. VIN labels queue automatically when a trailer enters Paint.')+
     queueCard('📄 MSOs to print',msoQ,'mso','Nothing queued. MSOs queue when Paint is complete — held for stock trailers until sold.')+
+    certCard+
     `<div class="card" style="margin-bottom:16px"><h3>♻️ Reprint a VIN label or MSO</h3>
       <p class="muted" style="font-size:12px;margin-bottom:10px">Damaged form, printer jam, lost before delivery. Look up the unit, state the reason, and the document requeues above with a ♻️ REPRINT badge. Every reprint is registered permanently with who, when, and why — an MSO is a title document, so the old copy must be voided first.</p>
       <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px">
@@ -3871,6 +3945,19 @@ async function clearShopPin(){
   try{ await api('/api/admin/shop-pin',{method:'POST',body:JSON.stringify({pin:''})}); toast('Shop-floor updates disabled'); loadShopPin(); }catch(e){ toast(e.message); }
 }
 function comingSoon(what){ toast(`${what} layout is coming soon — being finalized with your samples.`); }
+async function certSetNext(){
+  try{ const r=await api('/api/mso-certs/next',{method:'POST',body:JSON.stringify({next:$('certNext').value})}); toast('📜 Next certificate: '+r.next); }
+  catch(e){ toast(e.message); }
+}
+async function certEdit(unitId,certNo){
+  try{ await api('/api/mso-certs/'+encodeURIComponent(unitId),{method:'PATCH',body:JSON.stringify({certNo})}); toast('Certificate corrected — confirm & lock when the stack is right'); viewPrintCenter(); }
+  catch(e){ toast(e.message); viewPrintCenter(); }
+}
+async function certLock(unitId,certNo){
+  if(!confirm('Confirm certificate #'+certNo+' as printed correctly?\nLocked certificates can NEVER be edited or superseded.'))return;
+  try{ await api('/api/mso-certs/'+encodeURIComponent(unitId)+'/lock',{method:'POST'}); toast('🔒 Certificate '+certNo+' locked'); viewPrintCenter(); }
+  catch(e){ toast(e.message); }
+}
 async function printJobDone(jobId){ try{ await api('/api/print-queue/'+jobId+'/printed',{method:'POST'}); toast('Marked printed'); viewPrintCenter(); }catch(e){ toast(e.message); } }
 
 // ── ♻️ Guarded reprints: look up → reason + void confirmation → requeue with a badge ──
@@ -4050,6 +4137,13 @@ async function printMso(unitId){
   let d; try{ d=await api('/api/trailers/'+encodeURIComponent(unitId)+'/print-data'); }catch(e){ return toast(e.message); }
   if(!d.vin)return toast('No VIN on this unit yet.');
   if(!d.dealer)return toast('This unit has no buyer yet — the MSO names the buyer, so it prints once the trailer is sold.');
+  // Consume the next pre-numbered certificate so the app's sequence tracks the paper stack.
+  try{
+    let a=await api('/api/mso-certs/assign',{method:'POST',body:JSON.stringify({unitId})});
+    if(a.existing&&confirm('This unit is already on certificate #'+a.certNo+'.\nReprinting on NEW paper? OK assigns the next certificate number (the old sheet must be voided); Cancel keeps #'+a.certNo+'.'))
+      a=await api('/api/mso-certs/assign',{method:'POST',body:JSON.stringify({unitId,supersede:true})});
+    toast('📜 Certificate #'+a.certNo+' — check the sheet in the tray matches'+(a.superseded?' (voided '+a.superseded+')':''));
+  }catch(e){ return toast(e.message); }
   const now=new Date(), MONTHS=['JANUARY','FEBRUARY','MARCH','APRIL','MAY','JUNE','JULY','AUGUST','SEPTEMBER','OCTOBER','NOVEMBER','DECEMBER'];
   const n=v=>v==null?'':Number(v).toLocaleString('en-US');
   const F=[ // [x-in, y-in, text, guide label, sizept?, bold?]
@@ -4311,7 +4405,7 @@ async function trailersVinsTab(){
     <h3 style="margin:0 0 10px">Trailer Registry <span class="muted" style="text-transform:none;letter-spacing:0">— ${registry.length} VIN${registry.length===1?'':'s'} issued · WMI <b>${esc(config.wmi)}</b> · click a row for build &amp; warranty</span></h3>
     ${registry.length?`<table><thead><tr><th>VIN</th><th>Model</th><th>Dealer</th><th>Order</th><th>Assigned</th><th></th></tr></thead><tbody>
       ${registry.map(t=>`<tr style="cursor:pointer" onclick="openTrailerDetail('${esc(t.id)}')">
-        <td><b style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:.5px">${esc(t.vin)}</b></td>
+        <td><b style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:.5px">${esc(t.vin)}</b> <span class="badge b-buy" title="Dealers quote the last 4 — search works with just these">#${esc(String(t.vin||'').slice(-4))}</span></td>
         <td>${esc(t.model||'')} <span class="badge b-buy">${esc(t.type||'')}</span></td>
         <td>${esc(t.customer||'')}</td><td>${esc(t.orderId||'')}</td>
         <td class="muted" style="font-size:12px">${t.assignedAt?new Date(t.assignedAt).toLocaleDateString():''}</td>

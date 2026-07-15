@@ -122,12 +122,78 @@ export async function poList() {
   const rows = await all(`SELECT po.*, v.name AS vendor_name, p.name AS part_name, p.vendor_part_no
                             FROM purchase_order po LEFT JOIN vendor v ON v.id=po.vendor_id
                             LEFT JOIN part p ON p.id=po.part_id ORDER BY po.id DESC`, []);
+  const ackRows = await all('SELECT * FROM po_ack ORDER BY id', []).catch(() => []);
+  const acksBy = {};
+  for (const a of ackRows) (acksBy[a.po_id] ||= []).push({
+    id: a.id, ackNo: a.ack_no, qty: Number(a.qty), note: a.note, carrier: a.carrier,
+    trackingNo: a.tracking_no, trackingStatus: a.tracking_status, trackingCheckedAt: a.tracking_checked_at,
+  });
   return rows.map(r => ({
     id: r.id, vendor: r.vendor_name, vendorId: r.vendor_id, partId: r.part_id, part: r.part_name,
     vendorPartNo: r.vendor_part_no || null,
     qty: r.qty, unit: Number(r.unit_cost), total: r.qty * Number(r.unit_cost),
-    placed: r.placed, eta: r.eta, status: r.status
+    placed: r.placed, eta: r.eta, status: r.status,
+    acks: acksBy[r.id] || [], ackQty: (acksBy[r.id] || []).reduce((s, a) => s + a.qty, 0),
+    unfulfilledQty: Number(r.unfulfilled_qty) || 0,
   }));
+}
+
+// ---- vendor order acknowledgements + PO edits/cancellations -------------------------------
+// One PO may take several acknowledgements (a vendor rarely confirms everything at once);
+// what they can't fulfill is either edited off the PO or cancelled as unfulfilled.
+export async function addAck(poId, { ackNo, qty, carrier, trackingNo, note }, userId) {
+  const po = await one('SELECT * FROM purchase_order WHERE id=$1', [poId]);
+  if (!po) throw new Error('PO not found.');
+  if (po.status !== 'Open') throw new Error(`${poId} is ${po.status} — acknowledgements apply to Open POs.`);
+  const n = String(ackNo || '').trim();
+  if (!n) throw new Error('Enter the vendor\'s order acknowledgement number.');
+  const q2 = Number(qty);
+  if (!Number.isFinite(q2) || q2 <= 0) throw new Error('Acknowledged quantity must be greater than zero.');
+  const acked = Number((await one('SELECT COALESCE(SUM(qty),0) AS s FROM po_ack WHERE po_id=$1', [poId])).s);
+  if (acked + q2 > Number(po.qty)) throw new Error(`Acknowledgements would cover ${acked + q2} of ${Number(po.qty)} ordered — reduce the quantity.`);
+  const r = await one(
+    `INSERT INTO po_ack(po_id, ack_no, qty, note, carrier, tracking_no, created_by)
+     VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id`,
+    [poId, n, q2, String(note || '').trim() || null, String(carrier || '').trim() || null,
+     String(trackingNo || '').trim() || null, userId || null]);
+  await q('INSERT INTO audit_log(user_id,action,detail) VALUES ($1,$2,$3)',
+    [userId || null, 'po.ack', `${poId} ack ${n}: ${q2} of ${Number(po.qty)}${trackingNo ? ` — ${carrier || ''} ${trackingNo}` : ''}`]).catch(() => {});
+  return { id: r.id, ackNo: n, qty: q2, acked: acked + q2, of: Number(po.qty) };
+}
+
+export async function editPOQty(poId, qty, userId) {
+  const po = await one('SELECT * FROM purchase_order WHERE id=$1', [poId]);
+  if (!po) throw new Error('PO not found.');
+  if (po.status !== 'Open') throw new Error(`${poId} is ${po.status} — only Open POs can be edited.`);
+  const q2 = Number(qty);
+  if (!Number.isFinite(q2) || q2 <= 0) throw new Error('Quantity must be greater than zero (cancel the PO to drop it entirely).');
+  const acked = Number((await one('SELECT COALESCE(SUM(qty),0) AS s FROM po_ack WHERE po_id=$1', [poId])).s);
+  if (q2 < acked) throw new Error(`The vendor has already acknowledged ${acked} — the PO can't drop below that.`);
+  await q('UPDATE purchase_order SET qty=$1 WHERE id=$2', [q2, poId]);
+  await q('INSERT INTO audit_log(user_id,action,detail) VALUES ($1,$2,$3)',
+    [userId || null, 'po.edit', `${poId} qty ${Number(po.qty)} → ${q2} (vendor can't fulfill the difference)`]).catch(() => {});
+  return { ok: true, qty: q2 };
+}
+
+// Cancel as unfulfilled — the whole PO, or just the part of it the vendor is out of stock on.
+export async function cancelPO(poId, { qty, reason } = {}, userId) {
+  const po = await one('SELECT * FROM purchase_order WHERE id=$1', [poId]);
+  if (!po) throw new Error('PO not found.');
+  if (!['Open', 'Pending Approval'].includes(po.status)) throw new Error(`${poId} is ${po.status} — nothing to cancel.`);
+  const why = String(reason || '').trim() || 'unfulfilled by vendor';
+  const part = Number(qty);
+  if (qty != null && Number.isFinite(part) && part > 0 && part < Number(po.qty)) {
+    const acked = Number((await one('SELECT COALESCE(SUM(qty),0) AS s FROM po_ack WHERE po_id=$1', [poId])).s);
+    if (Number(po.qty) - part < acked) throw new Error(`The vendor has already acknowledged ${acked} — cancel at most ${Number(po.qty) - acked}.`);
+    await q('UPDATE purchase_order SET qty = qty - $1, unfulfilled_qty = unfulfilled_qty + $1, cancel_reason=$2 WHERE id=$3', [part, why, poId]);
+    await q('INSERT INTO audit_log(user_id,action,detail) VALUES ($1,$2,$3)',
+      [userId || null, 'po.cancel', `${poId}: ${part} of ${Number(po.qty)} cancelled as unfulfilled — ${why}`]).catch(() => {});
+    return { ok: true, partial: true, remainingQty: Number(po.qty) - part };
+  }
+  await q(`UPDATE purchase_order SET status='Cancelled', unfulfilled_qty = unfulfilled_qty + qty, cancel_reason=$1 WHERE id=$2`, [why, poId]);
+  await q('INSERT INTO audit_log(user_id,action,detail) VALUES ($1,$2,$3)',
+    [userId || null, 'po.cancel', `${poId} cancelled in full as unfulfilled — ${why}`]).catch(() => {});
+  return { ok: true, partial: false, status: 'Cancelled' };
 }
 
 // vendorId (optional) buys this lot from an ALTERNATE vendor: the part keeps its primary
@@ -239,6 +305,7 @@ export async function receivePO(poId, userId) {
   if (!po || po.status === 'Received') return false;
   if (po.status === 'Pending Approval') throw new Error('PO is pending approval — cannot receive until approved');
   if (po.status === 'Rejected') throw new Error('PO was rejected');
+  if (po.status === 'Cancelled') throw new Error('PO was cancelled as unfulfilled — nothing to receive.');
   const expFlag = (await one('SELECT expendable FROM part WHERE id=$1', [po.part_id]))?.expendable === true;
   if (!expFlag) await q('UPDATE part SET on_hand = on_hand + $1 WHERE id=$2', [po.qty, po.part_id]);
   await q("UPDATE purchase_order SET status='Received', received_at=now() WHERE id=$1", [poId]);
