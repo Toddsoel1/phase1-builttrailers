@@ -1,0 +1,282 @@
+<title>Office Manager — A Day in the App · Built Trailers</title>
+<style>
+  :root{
+    --paper:#fafaf7; --ink:#1c2129; --mut:#5b6472; --line:#dcdad2;
+    --panel:#f0efe9; --accent:#d96a10; --accent-ink:#b35408; --ok:#1a7f4b; --warn:#a05a00;
+    --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  }
+  @media (prefers-color-scheme: dark){
+    :root{ --paper:#14171c; --ink:#e8eaee; --mut:#98a1ad; --line:#2b313a;
+      --panel:#1d2129; --accent:#f08a33; --accent-ink:#f39a52; --ok:#4cc98a; --warn:#e0a34e; }
+  }
+  :root[data-theme="dark"]{ --paper:#14171c; --ink:#e8eaee; --mut:#98a1ad; --line:#2b313a;
+    --panel:#1d2129; --accent:#f08a33; --accent-ink:#f39a52; --ok:#4cc98a; --warn:#e0a34e; }
+  :root[data-theme="light"]{ --paper:#fafaf7; --ink:#1c2129; --mut:#5b6472; --line:#dcdad2;
+    --panel:#f0efe9; --accent:#d96a10; --accent-ink:#b35408; --ok:#1a7f4b; --warn:#a05a00; }
+
+  html{background:var(--paper)}
+  body{font-family:system-ui,-apple-system,"Segoe UI",sans-serif;color:var(--ink);line-height:1.62;
+    max-width:46.5rem;margin:0 auto;padding:3rem 1.4rem 6rem;font-size:16px}
+  h1{font-size:2rem;font-weight:800;letter-spacing:-.02em;line-height:1.15;margin:0 0 .4rem;text-wrap:balance}
+  h2{font-size:1.32rem;font-weight:800;letter-spacing:-.01em;margin:0 0 .9rem;text-wrap:balance;
+    padding-top:2.6rem;border-top:1px solid var(--line)}
+  h3{font-size:1.02rem;font-weight:700;margin:1.6rem 0 .5rem}
+  p{margin:.65rem 0}
+  a{color:var(--accent-ink);text-decoration:none}
+  a:hover,a:focus-visible{text-decoration:underline}
+  a:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:2px}
+
+  .kick{font-family:var(--mono);font-size:.72rem;letter-spacing:.14em;text-transform:uppercase;color:var(--accent-ink);margin-bottom:.7rem}
+  .lede{color:var(--mut);font-size:1.05rem;max-width:60ch}
+
+  .eyebrow{font-family:var(--mono);font-size:.7rem;letter-spacing:.12em;text-transform:uppercase;color:var(--mut);display:flex;gap:1.2rem;flex-wrap:wrap;margin:-.4rem 0 .8rem}
+  .eyebrow b{color:var(--accent-ink);font-weight:600}
+
+  /* the day timeline */
+  .clock{border:1px solid var(--line);border-radius:6px;overflow:hidden;margin:1.6rem 0 0}
+  .clock a{display:grid;grid-template-columns:4.6rem 1fr;gap:1rem;padding:.5rem .9rem;color:var(--ink);
+    border-top:1px solid var(--line);font-size:.94rem;align-items:baseline}
+  .clock a:first-child{border-top:0}
+  .clock a:hover{background:var(--panel);text-decoration:none}
+  .clock .t{font-family:var(--mono);font-size:.8rem;color:var(--accent-ink);white-space:nowrap}
+  .clock .what b{font-weight:650}
+  .clock .what span{color:var(--mut)}
+
+  /* principles */
+  .why{margin:1.1rem 0;padding:0 0 0 1rem;border-left:3px solid var(--accent)}
+  .why h3{margin:.9rem 0 .15rem;font-size:.98rem}
+  .why p{margin:.15rem 0 .9rem;color:var(--mut)}
+
+  /* steps */
+  ol.steps{margin:.8rem 0;padding:0;counter-reset:st;list-style:none}
+  ol.steps>li{counter-increment:st;position:relative;padding:0 0 .55rem 2.5rem;margin:0}
+  ol.steps>li::before{content:counter(st);position:absolute;left:0;top:.12em;width:1.6rem;height:1.6rem;
+    border:1px solid var(--line);border-radius:4px;display:flex;align-items:center;justify-content:center;
+    font-family:var(--mono);font-size:.78rem;color:var(--accent-ink);background:var(--panel)}
+  ol.steps b{font-weight:650}
+
+  ul.tick{margin:.6rem 0;padding-left:1.25rem}
+  ul.tick li{margin:.3rem 0}
+
+  .note{background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:.75rem 1rem;margin:1rem 0;font-size:.93rem}
+  .note .tag{font-family:var(--mono);font-size:.68rem;letter-spacing:.12em;text-transform:uppercase;color:var(--accent-ink);display:block;margin-bottom:.25rem}
+  .note.qb .tag{color:var(--ok)}
+  .note p{margin:.3rem 0}
+
+  code,.ui{font-family:var(--mono);font-size:.86em;background:var(--panel);border:1px solid var(--line);
+    border-radius:4px;padding:.06em .4em;white-space:nowrap}
+  .ui{font-weight:600}
+
+  table{border-collapse:collapse;width:100%;font-size:.9rem;margin:.8rem 0}
+  th{font-family:var(--mono);font-size:.68rem;letter-spacing:.1em;text-transform:uppercase;color:var(--mut);
+    text-align:left;padding:.4rem .6rem;border-bottom:2px solid var(--line)}
+  td{padding:.45rem .6rem;border-bottom:1px solid var(--line);vertical-align:top}
+  .tw{overflow-x:auto}
+
+  .foot{margin-top:3.4rem;padding-top:1.2rem;border-top:1px solid var(--line);color:var(--mut);font-size:.85rem}
+  @media print{ body{max-width:none;padding:0} .clock a{break-inside:avoid} h2{break-after:avoid} }
+</style>
+
+<p class="kick">Built Trailers · app.builttrailers.app · office manager runbook</p>
+<h1>A day in the app: the Office Manager</h1>
+<p class="lede">The office runs the money-and-paper side of the shop: purchasing, receiving, printing the federal documents, invoicing, and keeping QuickBooks true. The shop builds <b>Monday–Thursday, 6:00–4:30</b>; the office manager is on site <b>Monday–Wednesday</b>. This is the on-site day in order, every step spelled out — plus the reasons the app works the way it does, so the steps make sense instead of being ritual.</p>
+
+<div class="clock">
+  <a href="#inbox"><span class="t">6:00</span><span class="what"><b>Shop opens — coffee &amp; the Action Inbox</b> <span>— the app tells you what needs you today</span></span></a>
+  <a href="#pos"><span class="t">6:30</span><span class="what"><b>Purchase orders out the door</b> <span>— predictive POs, approvals, acknowledgements</span></span></a>
+  <a href="#receiving"><span class="t">8:00</span><span class="what"><b>Receiving &amp; vendor invoices</b> <span>— landed cost, expensed charges, expendables</span></span></a>
+  <a href="#print"><span class="t">9:30</span><span class="what"><b>Print Center session</b> <span>— travelers, VIN stickers, MSOs on certificate paper</span></span></a>
+  <a href="#dealerparts"><span class="t">10:30</span><span class="what"><b>Dealer parts orders</b> <span>— fulfill → ready → shipped, invoice posts itself</span></span></a>
+  <a href="#invoicing"><span class="t">12:30</span><span class="what"><b>Invoicing customers</b> <span>— single orders, batches, over-the-counter parts</span></span></a>
+  <a href="#qbo"><span class="t">1:30</span><span class="what"><b>QuickBooks block</b> <span>— pay bills, receive payments, keep the sync clean</span></span></a>
+  <a href="#counts"><span class="t">3:00</span><span class="what"><b>Cycle count check-in</b> <span>— the counter counts, you approve</span></span></a>
+  <a href="#people"><span class="t">all day</span><span class="what"><b>Keeping the shop on track</b> <span>— help, access, and the floor's phone flow</span></span></a>
+  <a href="#monthend"><span class="t">month-end</span><span class="what"><b>Reconcile + the one inventory journal</b> <span>— the only journal you type by hand</span></span></a>
+</div>
+
+<h2 id="week">The shape of the week</h2>
+<div class="tw"><table>
+  <tr><th>Day</th><th>Shop</th><th>Office manager</th></tr>
+  <tr><td><b>Mon</b></td><td>Building, 6:00–4:30</td><td>On site — heaviest inbox of the week: Thursday's queues, Thursday's cycle count to approve, the weekly digest email, and the crew's Monday vote on last week's ideas</td></tr>
+  <tr><td><b>Tue–Wed</b></td><td>Building, 6:00–4:30</td><td>On site — the standard day below</td></tr>
+  <tr><td><b>Thu</b></td><td>Building, 6:00–4:30</td><td>Off site. Nothing breaks: VINs assign, labels and MSOs queue, dealer orders queue, the counter still counts. 🚚 tracking and approval pushes still reach your phone; anything you don't handle remotely waits in a queue for Monday</td></tr>
+  <tr><td><b>Fri–Sun</b></td><td>Closed</td><td>—</td></tr>
+</table></div>
+<div class="note"><span class="tag">Thursday is the proof of the design</span>
+<p>Because everything office-facing lives in a queue with a count on it, a day with no office on site costs nothing — the work holds its place. If Thursday regularly piles up more than Monday morning can absorb, that's the signal to hand a specific queue (say, dealer parts fulfillment) to someone on the floor via a section grant.</p></div>
+
+<h2 id="thinks">First: how the app thinks</h2>
+<p>Six ideas explain almost every screen. Internalize these and the steps below stop being memorization.</p>
+<div class="why">
+  <h3>The app owns quantities. QuickBooks owns dollars.</h3>
+  <p>Parts, BOMs, VINs, stages, and counts live here — QuickBooks can't do that work. Money is QuickBooks' job: the app <em>pushes</em> every invoice, vendor bill, COGS journal, and count adjustment into QBO automatically, and you pay, collect, and reconcile there. You almost never type a transaction into QBO by hand — if you're about to, ask why the app didn't send it.</p>
+  <h3>History never rewrites (effective dating).</h3>
+  <p>Every order freezes its price the moment it's placed; every PO freezes its cost; every fulfillment freezes what it consumed. Change a catalog price or a part cost today and only <em>future</em> transactions feel it. That's why last month's reports never move under your feet — and why fixing a price is always safe.</p>
+  <h3>Inventory value is landed, and the bill equals the paper.</h3>
+  <p>When you receive a vendor invoice, freight and tax spread across the line items by value so each part carries its true landed cost — and the one bill posted to the books equals the vendor's invoice to the penny. Charges that shouldn't touch item costs (expedite fees) go in the <b>Expensed</b> bucket; consumables marked <b>Expendable</b> get billed but never stocked.</p>
+  <h3>$0 is a decision, not a default.</h3>
+  <p>An unpriced part shows dealers "Call for price" and shows you a 💲 Pricing-gaps card until someone publishes a cost or explicitly marks a $0 option "included in standard." Nothing quietly sells for free.</p>
+  <h3>Queues find you — you don't hunt.</h3>
+  <p>VIN labels queue themselves when a trailer enters Paint. MSOs queue when Paint completes (stock units wait until sold). Dealer requests, approvals, price requests, and short stock all land in your Action Inbox and on the Orders screen. If it needs the office, it's in a queue with a count on it.</p>
+  <h3>Specs and prices are per <em>model</em>, never per trailer.</h3>
+  <p>Set a model's GVWR, tire, or price once and every trailer of that model inherits it. VINs encode the model's hitch/body/length/axles per the filed federal scheme, and most of that fills itself.</p>
+</div>
+
+<h2 id="inbox">7:00 — Coffee &amp; the Action Inbox</h2>
+<p class="eyebrow"><span>Where: <b>📊 Dashboard</b></span><span>Time: <b>5 minutes</b></span></p>
+<p>The floor clocks in at 6:00 and starts on Stand-Up tasks; you open the Dashboard. On <b>Mondays</b> the inbox is double-sized — everything Thursday queued plus Thursday's cycle count — so give it the first half hour. Read the Action Inbox card top to bottom. It's personal — it only shows what <em>your</em> role can act on, with live counts:</p>
+<ul class="tick">
+  <li>✅ approvals awaiting your sign-off (POs over the threshold)</li>
+  <li>🏷️ dealer stock requests · 🔩 dealer parts orders · 📞 dealer price requests</li>
+  <li>🛑 VINs that failed the federal NHTSA check (fix before anything prints)</li>
+  <li>💲 pricing gaps (parts with no cost — dealers are seeing "Call for price")</li>
+  <li>📦 POs that have arrived and are ready to receive</li>
+</ul>
+<p>Each line links to the screen where you fix it. Work the inbox to zero over the day and nothing falls through. Monday mornings also bring the <b>weekly digest email</b> — the same numbers the Performance screen shows, so the email and the app can never disagree.</p>
+
+<h2 id="pos">7:30 — Purchase orders out the door</h2>
+<p class="eyebrow"><span>Where: <b>🤖 Predictive Ordering · 🧾 Purchase Orders</b></span></p>
+<h3>Create POs</h3>
+<ol class="steps">
+  <li>Open <span class="ui">🤖 Predictive Ordering</span>. The MRP looks at scheduled builds, current stock, and each vendor's <em>demonstrated</em> lead time (the supplier scorecard self-corrects slow vendors) and tells you what to order and when — <b>ORDER NOW</b> items first.</li>
+  <li>Create the suggested POs, or raise one manually from a part (pick an <b>alternate vendor</b> on the PO if you're buying this lot elsewhere — the part keeps its primary vendor for planning).</li>
+  <li>POs at or over the approval threshold (default $500) route to the assigned approver and sit in <b>Pending Approval</b> — approvals show in their inbox and on the PO screen. Everything else opens immediately.</li>
+  <li>Send the PO to the vendor the way that vendor likes (email/phone). The PO carries the <b>vendor's own part numbers</b>, so their desk sees their language.</li>
+</ol>
+<h3>Record the vendor's order acknowledgement</h3>
+<ol class="steps">
+  <li>When the confirmation arrives, find the PO and click <span class="ui">📋 Ack</span>. Enter the acknowledgement #, the <b>quantity covered</b>, and the tracking number if given — the carrier auto-detects (UPS/FedEx/USPS/DHL) and becomes a click-through link.</li>
+  <li>Vendors rarely confirm everything at once — record <b>multiple acks</b> against one PO as they come. The app won't let acks exceed the PO.</li>
+  <li>Vendor can't fulfill part of it? Either <span class="ui">✏️</span> trim the PO quantity (never below what's acknowledged) or <span class="ui">🚫</span> cancel — in part or in full — as <b>unfulfilled</b>. Cancelled POs can never be received by accident.</li>
+  <li>Tracking status changes push to your phone (🚚). Until a tracking provider is connected, log status updates with the ✏️ next to any tracking number — same push, manual trigger.</li>
+  <li>When the carrier reports <b>Delivered</b>, the PO wears a "🚚 carrier: delivered" badge and the inbox says <em>confirm receipt to update inventory</em>. <b>The carrier's word never moves stock</b> — a staff member on the floor confirms the boxes are real by receiving the PO (or the invoice), and that confirmation is recorded with the date and the person's name.</li>
+</ol>
+<div class="note"><span class="tag">Why it works this way</span>
+<p>The PO is the contract; the acknowledgements are the vendor's promises against it. Keeping both means "what did they actually confirm?" is always answerable — and the unfulfilled record feeds the supplier scorecard that times future POs.</p></div>
+
+<h2 id="receiving">9:00 — Receiving &amp; vendor invoices</h2>
+<p class="eyebrow"><span>Where: <b>🧾 Purchase Orders → 📥 Receive an invoice</b></span></p>
+<ol class="steps">
+  <li>Click <span class="ui">📥 Receive an invoice</span>, pick the vendor, and check every PO the paper invoice covers (one invoice often covers several POs).</li>
+  <li>Type the <b>invoice #</b> exactly as printed — it becomes the QuickBooks bill's DocNumber, which is what makes reconciliation a straight match.</li>
+  <li>Enter <b>shipping / sales tax / other</b>. Watch the preview: those charges allocate across the lines by value so every part lands at its true landed cost.</li>
+  <li>Enter anything that should <b>not</b> touch item costs — an expedite fee you paid to get out of a pinch — under <b>Expensed charges</b> with a label. It rides the bill (the total still equals the paper) but posts as a period expense; standard BOM costs don't move.</li>
+  <li>Post it. In one action: stock goes up at landed cost, the POs close, and <b>one bill posts to QuickBooks equal to the invoice bottom line, to the penny</b>.</li>
+</ol>
+<ul class="tick">
+  <li><b>Expendables</b> (tape, gloves, blades — parts flagged 🧻 on the Parts Master) get billed like everything else but are never stocked, never counted, and never absorb freight. If an invoice is <em>all</em> expendables, put the freight under Expensed — the app will remind you.</li>
+  <li>Sales-tax refunds from vendors: handle on the QuickBooks side (vendor credit) — the app's job was making the original bill exact.</li>
+</ul>
+
+<h2 id="print">10:00 — Print Center session</h2>
+<p class="eyebrow"><span>Where: <b>🖨️ Print Center · 🚛 Trailers &amp; Warranty</b></span></p>
+<p>Batch your printing once or twice a day — the queues hold everything until you're ready.</p>
+<h3>Travelers (as builds start)</h3>
+<ol class="steps">
+  <li>Open <span class="ui">🚛 Trailers &amp; Warranty</span> → Trailer Registry → <span class="ui">🏷️ Traveler</span> on the unit. Print it and hang it on the trailer.</li>
+  <li>The traveler's QR is the shop floor's remote control: any worker scans it on a phone to see the unit and — with the shop PIN, or automatically if they're signed in — mark the current stage complete. It also links the fabrication worksheet (BOM + cut list, no dollars).</li>
+</ol>
+<h3>VIN stickers (queue fills at Paint)</h3>
+<ol class="steps">
+  <li>VINs assign themselves when an order enters Build, and every new VIN is auto-checked against the federal NHTSA decoder. <b>Fix any 🛑 failures before printing</b> — the shield card at the bottom of Print Center re-runs checks.</li>
+  <li>In the <b>VIN labels</b> queue, print one label or <span class="ui">🖨️ Print all — 15513 sheet(s)</span> for the batch.</li>
+  <li>In the print window, look at the <b>sheet map</b> — a picture of the 10-label sheet in your tray. Click any positions already used from previous runs (they cross out ✕); the green <b>▶ shows exactly where printing begins</b>, and the preview places every label in its true spot. Batches overflow onto fresh sheets automatically.</li>
+  <li>Print, then <span class="ui">✓ Mark printed</span> so the queue stays honest. The map remembers your partial sheet for next time.</li>
+</ol>
+<h3>MSOs (queue fills when Paint completes; stock units wait until sold)</h3>
+<ol class="steps">
+  <li><b>When a new stack of certificate paper arrives</b>, enter the top sheet's number in <span class="ui">📜 MSO certificates → Next certificate #</span>. Certificate numbers can be any alphanumeric format — the counter advances the digits and keeps the rest.</li>
+  <li>Single MSO: <span class="ui">🖨️ Print</span> on the queue row. The app consumes the next certificate number and tells you which sheet it expects — check the tray matches.</li>
+  <li>Batch: <span class="ui">🖨️ Print all — sequential certificates</span>. You verify the <b>starting</b> number once; the whole batch numbers itself sequentially with no further prompts. A locked certificate or missing VIN anywhere stops the run <em>before</em> any number is consumed.</li>
+  <li>First time on a new printer: print on plain paper, hold it over the form, and nudge the X/Y offsets — the app remembers the calibration.</li>
+  <li>Printer mangled the stack? Correct the numbers in the certificate register (OM/GM only), then <span class="ui">🔒 Confirm &amp; lock</span> each one. <b>Locked certificates can never be edited or superseded</b> — lock as soon as you've verified the paper.</li>
+  <li>Reprints (damaged form, lost before delivery) go through <span class="ui">♻️ Reprint</span> with a mandatory reason — every reprint registers permanently with who/when/why, because an MSO is a title document and the old copy must be voided.</li>
+</ol>
+
+<h2 id="dealerparts">11:00 — Dealer parts orders</h2>
+<p class="eyebrow"><span>Where: <b>🔨 Production Flow (the 🔩 card) · Parts Master</b></span></p>
+<p>Dealers look parts up in their portal by VIN (their trailer's exact build) or by description, see Dealer / MSRP / MAP pricing, and submit DP-orders. Your side:</p>
+<ol class="steps">
+  <li>The <b>🔩 Dealer parts orders</b> card lists each order with short-stock warnings. Click <span class="ui">📦 Fulfill</span> when the parts are pulled — stock relieves and the value parks in the <b>Dealer fulfillment</b> line on Inventory Value (it's out of raw stock but not yet sold).</li>
+  <li>Click <span class="ui">✅ Ready</span> when it's staged, then <span class="ui">🤝 Picked up</span> or <span class="ui">🚚 Shipped</span> when it leaves. <b>That last click posts the invoice and COGS to QuickBooks automatically</b> and empties the fulfillment bucket. The dealer sees every status change in their portal.</li>
+  <li><b>📞 Dealer price requests</b>: a dealer asked about a "Call for price" part. Type your cost and <span class="ui">💲 Set cost &amp; publish</span> — Dealer/MSRP/MAP go live for every dealer instantly (the tiers compute themselves: dealer = 50% + 25% margin on cost; MSRP = 50% over dealer; MAP = 40%).</li>
+  <li>Parts you don't sell to dealers: tick 🚫 <b>Not for resale</b> on the part — dealers still see it on their trailer's list, labeled, with no pricing and no ordering.</li>
+</ol>
+
+<h2 id="invoicing">1:00 — Invoicing customers</h2>
+<p class="eyebrow"><span>Where: <b>🔨 Production Flow · 💵 Accounting · Parts Master</b></span></p>
+<ol class="steps">
+  <li><b>Single trailer order</b>: open the order → <span class="ui">Invoice</span>. One action consumes its parts from inventory, posts the customer invoice (one line per unit, with model and VIN) <em>and</em> the COGS journal to QuickBooks, and takes it off the build board.</li>
+  <li><b>Batch invoicing</b>: when a dealership takes several orders on one bill, build the batch on the Accounting screen and post it — same per-unit lines, one invoice.</li>
+  <li><b>Bill-to vs ship-to</b>: dealerships with a corporate parent bill to the parent automatically (set once on the customer — Accounting/Sales/GM decide). MSOs and invoices use the bill-to; Bills of Lading and delivery windows use the ship-to.</li>
+  <li><b>Walk-in / over-the-counter parts</b>: Parts Master → <span class="ui">💵 Sell parts</span>. Stock down, invoice + COGS posted, one action — nobody steps outside the app.</li>
+  <li>Delivered trailer orders: print the <b>Bill of Lading</b> from the order (uses the ship-to's delivery days/hours).</li>
+</ol>
+<div class="note"><span class="tag">Why prices never surprise you</span>
+<p>Every order carries the price that was current when it was placed — repricing the catalog today changes tomorrow's quotes, never an open order. So invoice amounts always match what was promised.</p></div>
+
+<h2 id="qbo">2:00 — The QuickBooks block</h2>
+<p class="eyebrow"><span>Where: <b>QuickBooks Online (+ 💵 Accounting for the sync)</b></span></p>
+<p>By this point the app has already pushed today's paper into QBO. Your QBO session is about money movement, not data entry:</p>
+<ol class="steps">
+  <li><b>Pay vendors</b>: QBO → Expenses → Bills. Every bill the app posted carries the vendor's real invoice # as its DocNumber and equals their paper to the penny — pay per your terms, match to the bank feed.</li>
+  <li><b>Collect payments</b>: QBO → Receive payment against the invoices the app posted (trailer invoices, batches, DP parts orders, counter sales). Deposit and match the feed.</li>
+  <li><b>Keep the sync healthy</b>: the app's Accounting screen shows the QBO connection, an error log, and sync buttons for customers / items / vendors. New buy parts should come in via <span class="ui">⬇ Import from QuickBooks</span> on the Parts Master so part ↔ item stay linked.</li>
+  <li><b>Item mapping to know</b>: each trailer model is a QBO item with <b>SKU = the model id</b>; parts revenue books to a "<b>Parts &amp; Accessories</b>" item; COGS journals hit your Inventory asset and COGS accounts. If a model is missing in QBO, the app falls back to a generic item and logs it — fix the item, not the invoice.</li>
+</ol>
+
+<h2 id="counts">3:30 — Cycle count check-in</h2>
+<p class="eyebrow"><span>Where: <b>📈 Inventory Value</b></span><span>Who counts: <b>your trained counter</b> · Who approves: <b>you</b></span></p>
+<ol class="steps">
+  <li>Assign one trained person (Shop Specialist works well) a standing cadence — e.g. 10–15 SKUs a day, highest-value parts most often. Their whole job: <span class="ui">🧮 Start a count</span>, count what the sheet asks, enter honest numbers. The app compares to expected quantities <em>after</em> they submit — blind counts stay honest.</li>
+  <li>You review each submitted count: the variance report shows every line's expected vs counted and the dollar impact. <b>Approve</b> to post the adjustment (stock corrects here <em>and</em> an inventory adjustment posts to QBO automatically) or <b>reject</b> with a note to recount.</li>
+  <li>Your daily check: has a count been submitted today? Is the approval queue empty? Two glances on the Inventory screen. The counter counts <b>Mon–Thu</b>; Thursday's count waits in the queue and is the first thing you approve Monday.</li>
+</ol>
+<div class="note"><span class="tag">Why counts matter more than they feel</span>
+<p>Every automatic number — MRP ordering, landed costs, WIP value, the monthly inventory journal — leans on on-hand being true. Fifteen minutes of counting a day is what keeps the whole machine honest. Expendables (🧻) are deliberately excluded: not worth the effort to count.</p></div>
+
+<h2 id="people">All day — keeping the shop on track</h2>
+<p class="eyebrow"><span>Where: <b>👤 Users &amp; Roles · 📣 Stand-Up · every page's help</b></span></p>
+<ul class="tick">
+  <li><b>Every page has a help panel</b> written for that page — point people there first; it answers "what do I click" questions.</li>
+  <li><b>The floor's day</b> lives on 📣 Stand-Up: auto-assigned tasks, the 60-second day verification at checkout (hours reconcile + the daily improvement idea — required, anonymous until it wins). If someone "can't do anything," it's almost always access:</li>
+  <li><b>Access problems</b>: Users &amp; Roles → their job title → Edit access. Sections are checkboxes; parts add vs parts edit are separate grants; you can copy another role's access or apply a preset. Changes apply on their next login.</li>
+  <li><b>Phones over desktops</b> for the floor: the traveler QR gives every worker unit status + stage completion with zero training. If the PIN prompt appears and they're signed in on that phone, it uses their identity automatically.</li>
+  <li><b>🚦 Rollout phases</b> (Users &amp; Roles, admin): sections we're not ready to adopt stay hidden for everyone — fewer things to learn while habits form. The People section (Team, Time Off, Goals, Wins) waits there now; one checkbox turns it on when the team's ready.</li>
+  <li><b>Search is your phone-call superpower</b>: press <code>Cmd+K</code> and type the <b>last 4 of any VIN</b> — that's how dealers quote them. The result shows the unit, its order, and the invoice reference in one jump.</li>
+</ul>
+
+<h2 id="monthend">Month-end — reconcile, then the one journal you type</h2>
+<p class="eyebrow"><span>Where: <b>QuickBooks + 📈 Inventory Value</b></span></p>
+<h3>Reconcile bank &amp; credit cards (QBO)</h3>
+<ol class="steps">
+  <li>QBO → Accounting → Reconcile, one account at a time, statement in hand.</li>
+  <li>It's clean by construction: every bill equals a vendor's paper (DocNumber = their invoice #), every invoice equals an order at its frozen price, and counter sales/DP orders posted themselves. Anything unmatched in the feed is a transaction that <em>didn't</em> come from the app — chase those first (fees, transfers, one-offs).</li>
+</ol>
+<h3>Record inventory in QuickBooks</h3>
+<ol class="steps">
+  <li>After the month's last counts are approved and receipts posted, open <span class="ui">📈 Inventory Value</span>. The total = raw materials + make parts + <b>WIP</b> (value accrued in unfinished builds by stage) + <b>finished, not invoiced</b> + <b>dealer fulfillment</b> (picked for dealers, not yet shipped).</li>
+  <li>In QBO, run the Balance Sheet and compare the Inventory asset to the app's total.</li>
+  <li>Post <b>one journal</b> dated month-end to true QBO to the app: Inventory asset ↔ COGS (or your inventory-adjustment account) for the difference. This is the only journal you type by hand all month — everything else posted itself as it happened.</li>
+  <li>Note the app total in the journal memo so next month's variance is explainable in ten seconds.</li>
+</ol>
+<div class="note qb"><span class="tag">Why one journal instead of live sync</span>
+<p>The app is the perpetual inventory system — it knows landed cost, WIP by stage, and dealer fulfillment in a way QBO structurally can't. QBO just needs the right asset number on the balance sheet. One monthly true-up journal gives the accountant a clean audit trail without fighting two systems that count differently.</p></div>
+
+<h2 id="reference">Pocket reference</h2>
+<div class="tw"><table>
+  <tr><th>I need to…</th><th>Go to</th></tr>
+  <tr><td>See what needs me</td><td>📊 Dashboard → Action Inbox</td></tr>
+  <tr><td>Order parts / send POs</td><td>🤖 Predictive Ordering · 🧾 Purchase Orders</td></tr>
+  <tr><td>Record an acknowledgement / tracking</td><td>🧾 Purchase Orders → 📋 Ack on the PO</td></tr>
+  <tr><td>Receive a vendor invoice</td><td>🧾 Purchase Orders → 📥 Receive an invoice</td></tr>
+  <tr><td>Print traveler / VIN sticker / MSO</td><td>🚛 Trailers (traveler) · 🖨️ Print Center (labels, MSOs, certificates, NHTSA, reprints)</td></tr>
+  <tr><td>Invoice a trailer / a batch / counter parts</td><td>Order → Invoice · 💵 Accounting → batches · Parts Master → 💵 Sell parts</td></tr>
+  <tr><td>Work dealer parts orders &amp; price requests</td><td>🔨 Production Flow → 🔩 and 📞 cards</td></tr>
+  <tr><td>Approve a cycle count</td><td>📈 Inventory Value → counts card</td></tr>
+  <tr><td>Find a trailer from a phone call</td><td><code>Cmd+K</code> → last 4 of the VIN</td></tr>
+  <tr><td>Fix someone's access</td><td>👤 Users &amp; Roles → job title → Edit access</td></tr>
+  <tr><td>Pay bills / receive payments / reconcile</td><td>QuickBooks Online (the app already posted the paper)</td></tr>
+</table></div>
+
+<p class="foot">Built Trailers · Office Manager runbook · reflects the app as deployed. When a screen and this page disagree, trust the screen and tell whoever maintains this doc.</p>

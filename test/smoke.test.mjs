@@ -61,6 +61,16 @@ test('health endpoint reports DB status + uptime', async () => {
   assert.ok(r.headers.get('x-request-id'), 'request id header set');
 });
 
+test('📚 learning documents are served: runbook page + PDF download', async () => {
+  const page = await fetch(BASE + '/docs/office-manager-runbook.html');
+  assert.equal(page.status, 200);
+  assert.match(await page.text(), /A day in the app: the Office Manager/);
+  const pdf = await fetch(BASE + '/docs/Office-Manager-Runbook.pdf');
+  assert.equal(pdf.status, 200);
+  assert.match(pdf.headers.get('content-type') || '', /pdf/);
+  assert.equal(new Uint8Array(await pdf.arrayBuffer()).slice(0, 4).join(','), '37,80,68,70', 'starts with %PDF');
+});
+
 test('client-error endpoint accepts a front-end crash report', async () => {
   const r = await api('/api/client-error', { method: 'POST', body: JSON.stringify({ kind: 'error', message: 'smoke client error', url: 'http://x/test' }) });
   assert.equal(r.status, 200);
