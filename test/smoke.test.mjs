@@ -2298,6 +2298,13 @@ test('📜 MSO certs, 🔎 last-4 search, 📋 PO acks + cancel, 🚚 tracking u
   assert.equal((await api('/api/mso-certs/assign', { method: 'POST', body: JSON.stringify({ unitId: vinUnitId, supersede: true }) })).status, 400, 'locked certificates cannot be superseded');
   const reg = (await json(await api('/api/mso-certs'))).recent.find(r => r.unitId === vinUnitId);
   assert.ok(reg && reg.certNo === '70005' && reg.locked === true);
+  // Alphanumeric certificate stock: prefix, suffix, and zero padding all survive the advance.
+  const unit2 = (await json(await api('/api/trailers'))).registry.find(t => t.id !== vinUnitId && t.vin);
+  assert.ok(unit2, 'suite has a second VIN-bearing unit');
+  await api('/api/mso-certs/next', { method: 'POST', body: JSON.stringify({ next: 'A-0099-B' }) });
+  assert.equal((await json(await api('/api/mso-certs/assign', { method: 'POST', body: JSON.stringify({ unitId: unit2.id }) }))).certNo, 'A-0099-B');
+  assert.equal((await json(await api('/api/mso-certs'))).next, 'A-0100-B', 'alphanumeric formats advance on the last digit run');
+  await api('/api/mso-certs/next', { method: 'POST', body: JSON.stringify({ next: '70006' }) }); // back to plain numbers
 
   // ---- search by whole VIN or last 4 ----
   const curVin = (await json(await api('/api/trailers'))).registry.find(t => t.id === vinUnitId).vin;

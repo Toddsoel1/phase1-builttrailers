@@ -21,11 +21,12 @@ export async function setNextCert(value, userId) {
   return { next: v };
 }
 
-// "70009" → "70010", "N-000123" → "N-000124" (prefix + zero padding preserved).
+// Alphanumeric certificate formats advance on their LAST digit run, keeping any prefix,
+// suffix, and zero padding: "70009" → "70010", "N-000123" → "N-000124", "70001-A" → "70002-A".
 const bump = v => {
-  const m = String(v).match(/^(.*?)(\d+)$/);
-  if (!m) throw new Error('Certificate number has no trailing digits to advance.');
-  return m[1] + String(Number(m[2]) + 1).padStart(m[2].length, '0');
+  const m = String(v).match(/^(.*?)(\d+)(\D*)$/);
+  if (!m) throw new Error('Certificate number needs digits somewhere so the sequence can advance.');
+  return m[1] + String(Number(m[2]) + 1).padStart(m[2].length, '0') + m[3];
 };
 
 // Assign the next certificate to a unit at MSO print time. Idempotent: printing again returns
