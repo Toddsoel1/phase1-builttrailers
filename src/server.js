@@ -1013,6 +1013,7 @@ app.get('/api/parts', authMiddleware, async (_req, res) => {
   res.json(rows.map(p => ({
     id: p.id, name: p.name, type: p.type, vendor: p.vendor_name, vendorId: p.vendor_id, vendorStatus: p.vendor_status, leadDays: p.lead_days,
     uom: p.uom, spec: p.spec, cost: Number(p.cost), onHand: p.on_hand, reorder: p.reorder, vendorPartNo: p.vendor_part_no, mfrPartNo: p.mfr_part_no, notForResale: p.not_for_resale === true,
+    vendorDescription: p.vendor_description, description: p.description,
     cushion: p.cushion, lot: p.lot, active: p.active !== false, extValue: Number(p.cost) * p.on_hand,
     status: p.on_hand < p.reorder ? 'below' : (p.on_hand < p.reorder + p.cushion ? 'low' : 'ok')
   })));
@@ -1029,18 +1030,19 @@ function requirePartsAdd(req, res, next) {
   next();
 }
 app.post('/api/parts', authMiddleware, requirePartsAdd, async (req, res) => {
-  const { id, name, type, cost, uom, spec, reorder, cushion, lot, vendorId, vendorPartNo } = req.body || {};
+  const { id, name, type, cost, uom, spec, reorder, cushion, lot, vendorId, vendorPartNo, vendorDescription, description } = req.body || {};
   if (!name || !String(name).trim()) return res.status(400).json({ error: 'Part name is required.' });
   const partType = ['B', 'P'].includes(type) ? type : 'M';
   if (vendorId && !await one('SELECT id FROM vendor WHERE id=$1', [vendorId])) return res.status(400).json({ error: 'Vendor not found' });
   let pid = id && String(id).trim() ? String(id).trim().toUpperCase().replace(/\s+/g, '-') : null;
   if (!pid) { const n = (await all(`SELECT id FROM part WHERE id LIKE 'MK-%'`, [])).length; pid = 'MK-' + (1001 + n); }
   if (await one('SELECT id FROM part WHERE id=$1', [pid])) return res.status(400).json({ error: `Part ${pid} already exists.` });
-  await q(`INSERT INTO part(id,name,type,cost,uom,spec,on_hand,reorder,cushion,lot,active,vendor_id,vendor_part_no)
-           VALUES ($1,$2,$3,$4,$5,$6,0,$7,$8,$9,true,$10,$11)`,
+  await q(`INSERT INTO part(id,name,type,cost,uom,spec,on_hand,reorder,cushion,lot,active,vendor_id,vendor_part_no,vendor_description,description)
+           VALUES ($1,$2,$3,$4,$5,$6,0,$7,$8,$9,true,$10,$11,$12,$13)`,
     [pid, String(name).trim(), partType, Number(cost) || 0, uom || null, spec || null,
      Number(reorder) || 0, Number(cushion) || 0, Math.max(1, Number(lot) || 1),
-     vendorId || null, String(vendorPartNo || '').trim() || null]);
+     vendorId || null, String(vendorPartNo || '').trim() || null,
+     String(vendorDescription || '').trim() || null, String(description || '').trim() || null]);
   await audit(req, 'part.create', `${pid} ${name} (${partType === 'M' ? 'Make' : 'Buy'}, app-only)`);
   res.json({ id: pid });
 });
@@ -1056,13 +1058,14 @@ function requirePartsEdit(req, res, next) {
 app.patch('/api/parts/:id', authMiddleware, requirePartsEdit, async (req, res) => {
   const cur = await one('SELECT * FROM part WHERE id=$1', [req.params.id]);
   if (!cur) return res.status(404).json({ error: 'not found' });
-  const { name, cost, uom, spec, type, reorder, cushion, lot, active, vendorId, vendorPartNo, mfrPartNo, notForResale, newId } = req.body || {};
+  const { name, cost, uom, spec, type, reorder, cushion, lot, active, vendorId, vendorPartNo, mfrPartNo, notForResale, vendorDescription, description, newId } = req.body || {};
   if (vendorId !== undefined && vendorId && !await one('SELECT id FROM vendor WHERE id=$1', [vendorId]))
     return res.status(400).json({ error: 'Vendor not found' });
   if (type !== undefined && !['B', 'M'].includes(type)) return res.status(400).json({ error: "type must be 'B' (buy) or 'M' (make)" });
   const newVendorId = vendorId !== undefined ? (vendorId || null) : cur.vendor_id;
   await q(`UPDATE part SET name=$1, cost=$2, uom=$3, spec=$4, type=$5, reorder=$6, cushion=$7, lot=$8, active=$9,
-                           vendor_id=$10, vendor_part_no=$11, mfr_part_no=$12, not_for_resale=$13 WHERE id=$14`,
+                           vendor_id=$10, vendor_part_no=$11, mfr_part_no=$12, not_for_resale=$13,
+                           vendor_description=$14, description=$15 WHERE id=$16`,
     [String(name ?? cur.name).trim() || cur.name, cost ?? cur.cost,
      uom !== undefined ? (String(uom).trim() || null) : cur.uom,
      spec !== undefined ? (String(spec).trim() || null) : cur.spec,
@@ -1071,6 +1074,8 @@ app.patch('/api/parts/:id', authMiddleware, requirePartsEdit, async (req, res) =
      vendorPartNo !== undefined ? (String(vendorPartNo).trim() || null) : cur.vendor_part_no,
      mfrPartNo !== undefined ? (String(mfrPartNo).trim() || null) : cur.mfr_part_no,
      notForResale !== undefined ? !!notForResale : (cur.not_for_resale === true),
+     vendorDescription !== undefined ? (String(vendorDescription).trim() || null) : cur.vendor_description,
+     description !== undefined ? (String(description).trim() || null) : cur.description,
      req.params.id]);
   if (notForResale !== undefined && !!notForResale !== (cur.not_for_resale === true))
     await audit(req, 'part.resale', `${req.params.id} ${notForResale ? 'marked NOT for resale' : 'available for resale again'}`);

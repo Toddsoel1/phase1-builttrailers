@@ -321,6 +321,10 @@ const colMigrations = [
   // Some parts aren't sold to dealers at all — they still show in a VIN's parts list, but the
   // dealer portal labels them "Not for Resale" (no pricing, no ordering, no price requests).
   `ALTER TABLE part ADD COLUMN IF NOT EXISTS not_for_resale BOOLEAN NOT NULL DEFAULT false`,
+  // Alongside the Parts Master part number: how the VENDOR describes the part in their catalog
+  // (rides POs and receiving), and a free-form INTERNAL description for our own people.
+  `ALTER TABLE part ADD COLUMN IF NOT EXISTS vendor_description TEXT`,
+  `ALTER TABLE part ADD COLUMN IF NOT EXISTS description TEXT`,
   `CREATE INDEX IF NOT EXISTS idx_dpl_order ON dealer_parts_line(order_id)`,
   `CREATE INDEX IF NOT EXISTS idx_dpo_status ON dealer_parts_order(status)`,
   // Bill-to vs ship-to per dealership: some dealers bill through a corporate/parent entity.

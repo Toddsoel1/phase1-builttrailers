@@ -2215,4 +2215,17 @@ test('🔩 dealer parts channel: tiered pricing, VIN lookup, lifecycle → invoi
   await api('/api/parts/MK-PROBE-HUB', { method: 'PATCH', body: JSON.stringify({ notForResale: false }) });
   const back = (await json(await fetch(BASE + '/api/dealer/parts-catalog?q=Probe%20Hub', { headers: d1.H }))).lines.find(l => l.partId === 'MK-PROBE-HUB');
   assert.equal(back.dealerPrice, 240, 'unchecking restores live pricing (cost 90 → dealer 240)');
+
+  // Key part information alongside the part number: vendor description + internal description.
+  assert.equal((await api('/api/parts/MK-PROBE-HUB', { method: 'PATCH', body: JSON.stringify({
+    vendorDescription: 'HUB KIT 3.5K EZ-LUBE W/ BEARINGS & SEAL', description: 'Fits all tandem 3500# axles — grease before install' }) })).status, 200);
+  const info = (await json(await api('/api/parts'))).find(p => p.id === 'MK-PROBE-HUB');
+  assert.equal(info.vendorDescription, 'HUB KIT 3.5K EZ-LUBE W/ BEARINGS & SEAL');
+  assert.equal(info.description, 'Fits all tandem 3500# axles — grease before install');
+  // ...and they can ride part creation too.
+  await api('/api/parts', { method: 'POST', body: JSON.stringify({ id: 'MK-PROBE-DESC', name: 'Probe Desc Part', cost: 5,
+    vendorDescription: 'VENDOR SAYS SO', description: 'internal note' }) });
+  const made = (await json(await api('/api/parts'))).find(p => p.id === 'MK-PROBE-DESC');
+  assert.equal(made.vendorDescription, 'VENDOR SAYS SO');
+  assert.equal(made.description, 'internal note');
 });

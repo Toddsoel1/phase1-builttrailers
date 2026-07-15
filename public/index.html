@@ -914,9 +914,9 @@ async function viewParts(){
    <div class="card"><h3>Parts (${parts.length}) ${csvBtn('parts_master',allParts)}</h3>
    <table><thead><tr><th>Part</th><th>Type</th><th>Vendor</th><th class="right">On hand</th><th class="right">Reorder</th><th class="right">Unit cost</th><th class="right">Ext. value</th><th class="center">Status</th>${canAddParts()?'<th></th>':''}</tr></thead><tbody>
    ${parts.map(p=>`<tr>
-     <td><b>${esc(p.id)}</b><br><span class="muted" style="font-size:11px">${esc(p.name)}</span></td>
+     <td><b>${esc(p.id)}</b><br><span class="muted" style="font-size:11px">${esc(p.name)}</span>${p.description?`<br><span class="muted" style="font-size:10.5px;font-style:italic" title="${esc(p.description)}">${esc(p.description.length>60?p.description.slice(0,57)+'…':p.description)}</span>`:''}</td>
      <td>${p.type==='M'?'<span class="badge b-mfg">MAKE</span>':'<span class="badge b-buy">BUY</span>'}${p.notForResale?' <span class="badge b-below" title="Dealers see this part labeled Not for Resale — no pricing, no ordering">NFR</span>':''}</td>
-     <td style="font-size:12px">${canEditParts()?`<a class="lnk" onclick="editPartVendor('${p.id}','${p.vendorId||''}')">${esc(p.vendor||'— assign —')}</a>`:esc(p.vendor||'')}${p.vendorStatus==='pending'?' <span class="badge b-low" style="font-size:9px">pending</span>':''}${p.vendorPartNo?`<br><span class="muted" style="font-size:10.5px">V/PN ${esc(p.vendorPartNo)}</span>`:''}</td>
+     <td style="font-size:12px">${canEditParts()?`<a class="lnk" onclick="editPartVendor('${p.id}','${p.vendorId||''}')">${esc(p.vendor||'— assign —')}</a>`:esc(p.vendor||'')}${p.vendorStatus==='pending'?' <span class="badge b-low" style="font-size:9px">pending</span>':''}${p.vendorPartNo?`<br><span class="muted" style="font-size:10.5px">V/PN ${esc(p.vendorPartNo)}</span>`:''}${p.vendorDescription?`<br><span class="muted" style="font-size:10.5px;font-style:italic" title="${esc(p.vendorDescription)}">${esc(p.vendorDescription.length>44?p.vendorDescription.slice(0,41)+'…':p.vendorDescription)}</span>`:''}</td>
      <td class="right">${p.onHand}</td><td class="right">${p.reorder}</td>
      <td class="right">${canEditParts()?`<a class="lnk" onclick="editCost('${p.id}',${p.cost})">${money2(p.cost)}</a>`:money2(p.cost)}</td>
      <td class="right">${money(p.extValue)}</td>
@@ -1021,11 +1021,13 @@ async function editPartModal(id){
         <option value="B" ${p.type==='B'?'selected':''}>Buy</option><option value="M" ${p.type==='M'?'selected':''}>Make</option></select></div>
     </div>
     <div class="field"><label>Name</label><input id="epName" class="inp" value="${esc(p.name||'')}"></div>
+    <div class="field"><label>Internal description <span class="muted" style="font-weight:400">(our own notes — where it's used, what to watch for)</span></label><textarea id="epDesc" class="inp" rows="2">${esc(p.description||'')}</textarea></div>
     <div class="row">
       <div class="field"><label>Primary vendor</label><select id="epVendor" class="inp"><option value="">— none —</option>${vOpts}</select></div>
       <div class="field"><label>Vendor part #</label><input id="epVpn" class="inp" value="${esc(p.vendorPartNo||'')}" placeholder="their number, goes on POs"></div>
       <div class="field"><label>Manufacturer part #</label><input id="epMpn" class="inp" value="${esc(p.mfrPartNo||'')}" placeholder="the maker's own number"></div>
     </div>
+    <div class="field"><label>Vendor description <span class="muted" style="font-weight:400">(how their catalog words it — helps receiving match invoices)</span></label><textarea id="epVdesc" class="inp" rows="2">${esc(p.vendorDescription||'')}</textarea></div>
     <div class="row">
       <div class="field"><label>Unit cost $</label><input id="epCost" class="inp" type="number" min="0" step="0.01" value="${p.cost}"></div>
       <div class="field"><label>UOM</label><input id="epUom" class="inp" value="${esc(p.uom||'')}" placeholder="ea / ft / lb"></div>
@@ -1046,7 +1048,7 @@ async function editPartModal(id){
 async function saveEditPart(id){
   const newId=($('epId').value||'').trim();
   const body={name:($('epName').value||'').trim(),type:$('epType').value,vendorId:$('epVendor').value||null,
-    vendorPartNo:($('epVpn').value||'').trim(),mfrPartNo:($('epMpn').value||'').trim(),notForResale:!!($('epNfr')&&$('epNfr').checked),cost:Number($('epCost').value)||0,uom:($('epUom').value||'').trim(),
+    vendorPartNo:($('epVpn').value||'').trim(),mfrPartNo:($('epMpn').value||'').trim(),vendorDescription:($('epVdesc').value||'').trim(),description:($('epDesc').value||'').trim(),notForResale:!!($('epNfr')&&$('epNfr').checked),cost:Number($('epCost').value)||0,uom:($('epUom').value||'').trim(),
     spec:($('epSpec').value||'').trim(),reorder:Number($('epReorder').value)||0,cushion:Number($('epCushion').value)||0,
     lot:Math.max(1,Number($('epLot').value)||1)};
   if(newId&&newId!==id){
