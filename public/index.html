@@ -251,7 +251,7 @@ $('liPass').addEventListener('keydown',e=>{if(e.key==='Enter')login();});
 })();
 
 // ---- nav/render ----
-const NAV=[['dashboard','📊 Dashboard'],['orders','🔨 Production Flow'],['standup','📣 Stand-Up'],['mywork','📜 My Work'],['daily','📋 Daily Update'],['performance','📈 Performance'],['neworder','➕ New Order'],['customers','🏬 Customers & Dealers'],['parts','📦 Parts Master'],['predict','🤖 Predictive Ordering'],['pos','🧾 Purchase Orders'],['boms','🧩 BOMs & Cost'],['inventory','📈 Inventory Value'],['accounting','💵 Accounting'],['ownerdash','🏛 Owner Dashboard'],['trailers','🚛 Trailers & Warranty'],['printcenter','🖨️ Print Center'],['boatadmin','🚤 Boat Builder'],['testdata','🧪 Test Data'],['team','👷 Team & Payroll'],['timeoff','📅 Schedule & Time Off'],['outcomes','🎯 Goals & Outcomes'],['wins','🎉 Wins'],['forecast','🔮 Forecasting & Planning'],['notify','💬 Notifications'],['support','🆘 Support'],['users','👤 Users & Roles']];
+const NAV=[['dashboard','📊 Dashboard'],['orders','🔨 Production Flow'],['standup','📣 Stand-Up'],['mywork','📜 My Work'],['daily','📋 Daily Update'],['performance','📈 Performance'],['neworder','➕ New Order'],['customers','🏬 Customers & Dealers'],['parts','📦 Parts Master'],['predict','🤖 Predictive Ordering'],['pos','🧾 Purchase Orders'],['boms','🧩 BOMs & Cost'],['inventory','📈 Inventory Value'],['accounting','💵 Accounting'],['ownerdash','🏛 Owner Dashboard'],['trailers','🚛 Trailers & Warranty'],['printcenter','🖨️ Print Center'],['boatadmin','🚤 Boat Builder'],['testdata','🧪 Test Data'],['histimport','🗄️ Historical Import'],['team','👷 Team & Payroll'],['timeoff','📅 Schedule & Time Off'],['outcomes','🎯 Goals & Outcomes'],['wins','🎉 Wins'],['forecast','🔮 Forecasting & Planning'],['notify','💬 Notifications'],['support','🆘 Support'],['users','👤 Users & Roles']];
 function canSee(section){
   if(isAdmin()) return true;
   if(!ME.sections) return true; // null = all sections (admin)
@@ -268,6 +268,7 @@ function navVisible(n){
   if(n[0]==='printcenter') return hasTitle('Office Manager','General Manager')||isAdmin()||sectionGrant('printcenter');
   if(n[0]==='boatadmin') return hasTitle('Office Manager','General Manager')||isAdmin()||sectionGrant('boatadmin');
   if(n[0]==='testdata') return isAdmin();
+  if(n[0]==='histimport') return isAdmin();
   return canSee(n[0]);
 }
 // Nav grouped into collapsible sections so the long list isn't overwhelming. Each group only shows
@@ -281,7 +282,7 @@ const NAV_GROUPS = [
   ['Finance', ['accounting','ownerdash','forecast']],
   ['People', ['team','timeoff','outcomes','wins']],
   ['Updates', ['notify','support']],
-  ['Admin', ['users','testdata']],
+  ['Admin', ['users','testdata','histimport']],
 ];
 function renderNav(){
   const collapsed=JSON.parse(localStorage.getItem('navCollapsed')||'{}');
@@ -404,7 +405,7 @@ async function render(){
     $('content').innerHTML='<div class="card"><p class="lead">🚦 This area unlocks in a later rollout phase — one thing at a time while the team builds its habits.</p></div>';
     return;
   }
-  const map={dashboard:viewDash,orders:viewOrders,standup:viewStandup,mywork:viewMyWork,daily:viewDaily,performance:viewPerformance,neworder:viewNewOrder,customers:viewCustomers,parts:viewParts,predict:viewPredict,pos:viewPOs,boms:viewBoms,inventory:viewInv,accounting:viewAccounting,ownerdash:viewOwnerDash,trailers:viewTrailers,printcenter:viewPrintCenter,boatadmin:viewBoatAdmin,testdata:viewTestData,team:viewTeam,timeoff:viewTimeoff,outcomes:viewOutcomes,wins:viewWins,forecast:viewForecast,notify:viewNotify,support:viewSupport,users:viewUsers};
+  const map={dashboard:viewDash,orders:viewOrders,standup:viewStandup,mywork:viewMyWork,daily:viewDaily,performance:viewPerformance,neworder:viewNewOrder,customers:viewCustomers,parts:viewParts,predict:viewPredict,pos:viewPOs,boms:viewBoms,inventory:viewInv,accounting:viewAccounting,ownerdash:viewOwnerDash,trailers:viewTrailers,printcenter:viewPrintCenter,boatadmin:viewBoatAdmin,testdata:viewTestData,histimport:viewHistImport,team:viewTeam,timeoff:viewTimeoff,outcomes:viewOutcomes,wins:viewWins,forecast:viewForecast,notify:viewNotify,support:viewSupport,users:viewUsers};
   try{
     await (map[page]||viewDash)();
     const pa=$('pActions');
@@ -3798,6 +3799,22 @@ function warrantyBadge(w){
   return '<span class="badge b-below">Expired</span>';
 }
 // ── Test Data (admin only) — provision test portal accounts + failproof wipe ──
+async function viewHistImport(){
+  $('pTitle').textContent='Historical Import';
+  $('pSub').textContent='One-time load of the pre-app VIN / MSO / invoice log — real, permanent reference records';
+  $('pActions').innerHTML='';
+  const hiBatches=await api('/api/history/batches').catch(()=>[]);
+  $('content').innerHTML=`<div class="card" style="margin-bottom:14px">
+    <h3>🗄️ Import the cleaned log <span class="badge b-low">reads only the Import Ready tab</span></h3>
+    <p class="muted" style="font-size:12.5px">Loads trailers built before the app as <b>read-only reference records</b> — searchable in global search and Trailers &amp; Warranty (📜 History), tagged Historical. A hard wall from live production: never touches Production Flow, VIN labels, or the MSO certificate counter, and untouched by the Test Data wipe. Upload → review the preview → confirm the import; every batch is logged and can be rolled back whole. Needs Review rows are resolved by hand afterward.</p>
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:10px 0">
+      <input type="file" id="hiFile" accept=".xlsx" style="max-width:320px">
+      <button class="btn" onclick="hiPreview()">Upload &amp; preview</button>
+    </div>
+    <div id="hiPanel"></div>
+  </div>
+  <div class="card"><h3>📒 Import log</h3><div id="hiBatches">${hiBatchesHtml(hiBatches)}</div></div>`;
+}
 async function hiPreview(){
   const f=$('hiFile').files[0]; if(!f) return toast('Choose the cleaned .xlsx first');
   $('hiPanel').innerHTML='<p class="muted" style="font-size:12.5px">Reading workbook…</p>';
@@ -3820,13 +3837,13 @@ async function hiPreview(){
 }
 async function hiCommit(id,n){
   if(!confirm('Import '+n+' historical trailers as read-only reference records?'))return;
-  try{ const r=await api('/api/history/import/'+id,{method:'POST'}); toast('📜 '+r.imported+' historical records imported'); viewTestData(); }catch(e){ toast(e.message); }
+  try{ const r=await api('/api/history/import/'+id,{method:'POST'}); toast('📜 '+r.imported+' historical records imported'); viewHistImport(); }catch(e){ toast(e.message); }
 }
 async function hiRollback(id){
   if(!confirm('Roll back this whole batch? All of its historical records are removed (the batch log is kept). Re-import a corrected file afterward.'))return;
-  try{ const r=await api('/api/history/rollback/'+id,{method:'POST'}); toast('↩️ '+r.removed+' historical records removed'); viewTestData(); }catch(e){ toast(e.message); }
+  try{ const r=await api('/api/history/rollback/'+id,{method:'POST'}); toast('↩️ '+r.removed+' historical records removed'); viewHistImport(); }catch(e){ toast(e.message); }
 }
-async function hiDiscard(id){ try{ await api('/api/history/discard/'+id,{method:'POST'}); toast('Preview discarded'); viewTestData(); }catch(e){ toast(e.message); } }
+async function hiDiscard(id){ try{ await api('/api/history/discard/'+id,{method:'POST'}); toast('Preview discarded'); viewHistImport(); }catch(e){ toast(e.message); } }
 function hiBatchesHtml(bs){
   if(!bs||!bs.length) return '<p class="muted" style="font-size:12px">No import batches yet.</p>';
   const badge=st=>st==='imported'?'<span class="badge b-ok">imported</span>':st==='preview'?'<span class="badge b-buy">preview</span>':st==='rolled_back'?'<span class="badge b-low">rolled back</span>':'<span class="badge b-low">discarded</span>';
@@ -3837,18 +3854,7 @@ function hiBatchesHtml(bs){
 async function viewTestData(){
   $('pTitle').textContent='Test Data';$('pSub').textContent='Provision test portal accounts and wipe test data — admin only';$('pActions').innerHTML='';
   let s; try{ s=await api('/api/admin/test-data'); }catch(e){ $('content').innerHTML=`<div class="card"><p class="msg err">${esc(e.message)}</p></div>`; return; }
-  const hiBatches=await api('/api/history/batches').catch(()=>[]);
-  const histCard=`<div class="card" style="margin-bottom:14px">
-    <h3>🗄️ Historical Import <span class="badge b-low">pre-app VIN / MSO / invoice log</span></h3>
-    <p class="muted" style="font-size:12.5px">One-time, reviewed load of the cleaned legacy log as <b>read-only reference records</b> — searchable in Trailers &amp; Warranty (📜 History) and global search. A hard wall from live production: never touches Production Flow, VIN labels, or the MSO certificate counter. Only the workbook's <b>Import Ready</b> tab is read; Needs Review rows are resolved by hand afterward.</p>
-    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:10px 0">
-      <input type="file" id="hiFile" accept=".xlsx" style="max-width:320px">
-      <button class="btn" onclick="hiPreview()">Upload &amp; preview</button>
-    </div>
-    <div id="hiPanel"></div>
-    <div id="hiBatches" style="margin-top:12px">${hiBatchesHtml(hiBatches)}</div>
-  </div>`;
-  $('content').innerHTML=histCard+`
+  $('content').innerHTML=`
     <div class="card">
       <h3>🧪 Test portal accounts</h3>
       <p class="muted" style="font-size:13px">Pre-approved test logins for the <b>dealer</b> and <b>owner</b> portals, flagged as test — so orders, registrations, claims, and signups they create stay <b>out of the Action Inbox and approval queues</b>.</p>
