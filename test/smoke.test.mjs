@@ -2451,3 +2451,85 @@ test('🧩 part fitment: designate what a part goes on; BOM edits enforce it', a
   for (const [m, pt] of [['G23TR', 'BUY-PROBE-BOWROLLER'], ['WC1P15', 'BUY-PROBE-1PBUNK'], ['WC2PT', 'BUY-PROBE-1PBUNK']])
     await api('/api/models/' + m + '/bom/' + pt, { method: 'DELETE' });
 });
+
+test('🗄️ historical import: preview → commit → searchable → duplicate guard → rollback', async () => {
+  // Build a tiny Import Ready workbook in-memory (stored zip, inlineStr cells).
+  const crc32 = (buf) => { let c; const t = []; for (let n = 0; n < 256; n++) { c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1; t[n] = c >>> 0; } let r = 0xFFFFFFFF; for (const b of buf) r = t[(r ^ b) & 0xFF] ^ (r >>> 8); return (r ^ 0xFFFFFFFF) >>> 0; };
+  const zipStore = (files) => {
+    const locals = [], centrals = []; let off = 0;
+    for (const f of files) {
+      const name = Buffer.from(f.name), data = Buffer.from(f.data), crc = crc32(data);
+      const lh = Buffer.alloc(30); lh.writeUInt32LE(0x04034b50, 0); lh.writeUInt16LE(20, 4); lh.writeUInt32LE(crc, 14); lh.writeUInt32LE(data.length, 18); lh.writeUInt32LE(data.length, 22); lh.writeUInt16LE(name.length, 26);
+      locals.push(lh, name, data);
+      const ch = Buffer.alloc(46); ch.writeUInt32LE(0x02014b50, 0); ch.writeUInt16LE(20, 4); ch.writeUInt16LE(20, 6); ch.writeUInt32LE(crc, 16); ch.writeUInt32LE(data.length, 20); ch.writeUInt32LE(data.length, 24); ch.writeUInt16LE(name.length, 28); ch.writeUInt32LE(off, 42);
+      centrals.push(Buffer.concat([ch, name]));
+      off += 30 + name.length + data.length;
+    }
+    const cd = Buffer.concat(centrals);
+    const eocd = Buffer.alloc(22); eocd.writeUInt32LE(0x06054b50, 0); eocd.writeUInt16LE(files.length, 8); eocd.writeUInt16LE(files.length, 10); eocd.writeUInt32LE(cd.length, 12); eocd.writeUInt32LE(off, 16);
+    return Buffer.concat([...locals, cd, eocd]);
+  };
+  const xml = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const xlsxOf = (rows) => zipStore([
+    { name: '[Content_Types].xml', data: '<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/></Types>' },
+    { name: '_rels/.rels', data: '<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>' },
+    { name: 'xl/workbook.xml', data: '<?xml version="1.0"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Import Ready" sheetId="1" r:id="rId1"/></sheets></workbook>' },
+    { name: 'xl/_rels/workbook.xml.rels', data: '<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>' },
+    { name: 'xl/worksheets/sheet1.xml', data: '<?xml version="1.0"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>' + rows.map((r, i) => `<row r="${i + 1}">` + r.map((v, c) => { const ref = String.fromCharCode(65 + c) + (i + 1); if (v && typeof v === 'object') return `<c r="${ref}"><v>${v.n}</v></c>`; const s = String(v ?? ''); return s === '' ? '' : `<c r="${ref}" t="inlineStr"><is><t xml:space="preserve">${xml(s)}</t></is></c>`; }).join('') + '</row>').join('') + '</sheetData></worksheet>' },
+  ]);
+
+  const HEADERS = ['Temp VIN', 'Final VIN (17-char, validated)', 'Model', 'VIN Label Printed', 'MSO #', 'MSO Print Date', 'Customer', 'Customer Address', 'Ship Date', 'Delivery Date', 'Delivery Receipt Y/N', 'Invoice #', 'Invoice Date', 'Invoice Due (date or At Pickup)', 'Amt Due', 'Amt Received', 'Payment Date(s)', 'Multiple Payments? (Y=reconcile in QB)', 'Payment Type', 'Notes'];
+  const liveVin = (await json(await api('/api/trailers'))).registry.find(r => r.vin && String(r.vin).length === 17).vin;
+  const book = xlsxOf([HEADERS,
+    ['T1', 'H1STTEST000000001', 'G23TR', 'Y', 'A9990001', '2024-08-01', 'Legacy Marine', '1 Dock St, Provo, UT', { n: 45536 }, '2024-09-02', 'Y', '99001', '2024-09-01', '2024-09-15', '', '8100', '2024-09-10', '', 'Check 55', 'Sold new'],
+    ['T2', 'H1STTEST000000002', 'WC2X', 'Y', 'A9990002', '2024-08-02', '', '', '', '', 'N', '99002', '2024-09-03', 'At Pickup', '', '', '4/20 & 4/27/2026', 'Y', 'Split', ''],
+    ['T3', 'SHORTVIN123', 'G23TR', '', '', '', 'Bad Vin Co', '', '', '', '', '', '', '', '', '', '', '', '', ''],
+    ['T4', 'H1STTEST000000003', 'G23TR', '', '', '', 'Dup A', '', '', '', '', '', '', '', '', '', '', '', '', ''],
+    ['T5', 'H1STTEST000000003', 'G23TR', '', '', '', 'Dup B', '', '', '', '', '', '', '', '', '', '', '', '', ''],
+    ['T6', liveVin, 'G23TR', '', '', '', 'Clash Co', '', '', '', '', '', '', '', '', '', '', '', '', ''],
+  ]);
+
+  // Preview: nothing written, hard errors excluded row-by-row, soft flags counted.
+  const p1 = await json(await api('/api/history/preview', { method: 'POST', body: JSON.stringify({ filename: 'cleaned-log.xlsx', dataBase64: book.toString('base64') }) }));
+  assert.equal(p1.total, 6); assert.equal(p1.ready, 2); assert.equal(p1.errorCount, 4);
+  assert.deepEqual(p1.warnings, { noCustomer: 1, unmatchedModel: 1, splitPayment: 1 });
+  assert.deepEqual(p1.unmatchedModels, ['WC2X']); assert.equal(p1.modelMatched, 1);
+  assert.ok(p1.errors.some(e => e.vin === liveVin && /already exists/.test(e.reason)), 'live VIN collision named');
+  assert.ok(p1.errors.filter(e => e.vin === 'H1STTEST000000003').length === 2, 'both copies of an in-file duplicate are excluded');
+  assert.equal((await json(await api('/api/history/records?q=H1STTEST'))).length, 0, 'preview alone writes no records');
+
+  // Commit: records land, searchable everywhere a VIN is searched.
+  assert.equal((await json(await api('/api/history/import/' + p1.batchId, { method: 'POST' }))).imported, 2);
+  const rec = (await json(await api('/api/history/records?q=Legacy%20Marine')))[0];
+  assert.equal(rec.vin, 'H1STTEST000000001');
+  assert.equal(rec.ship_date, '2024-09-01', 'Excel serial date converts to ISO');
+  assert.equal(rec.model_id, 'G23TR', 'model text matched to a live model code');
+  const rec2 = (await json(await api('/api/history/records?q=H1STTEST000000002')))[0];
+  assert.equal(rec2.invoice_due, 'At Pickup', '"At Pickup" is a valid value, not an error');
+  assert.equal(rec2.model_id, null); assert.ok(rec2.flags.includes('no_customer') && rec2.flags.includes('split_payment'));
+  const gs = await json(await api('/api/search?q=' + encodeURIComponent('H1STTEST000000001')));
+  assert.equal(gs.historical.length, 1); assert.equal(gs.historical[0].customer, 'Legacy Marine');
+
+  // Double-import protection: the same file previews to zero ready rows.
+  const p2 = await json(await api('/api/history/preview', { method: 'POST', body: JSON.stringify({ filename: 'cleaned-log.xlsx', dataBase64: book.toString('base64') }) }));
+  assert.equal(p2.ready, 0); assert.equal(p2.errorCount, 6);
+  await api('/api/history/discard/' + p2.batchId, { method: 'POST' });
+
+  // Rollback: whole batch out, audit row stays, VINs free again.
+  assert.equal((await json(await api('/api/history/rollback/' + p1.batchId, { method: 'POST' }))).removed, 2);
+  assert.equal((await json(await api('/api/history/records?q=H1STTEST'))).length, 0);
+  const batches = await json(await api('/api/history/batches'));
+  assert.equal(batches.find(b => b.id === p1.batchId).status, 'rolled_back');
+  assert.equal(batches.find(b => b.id === p2.batchId).status, 'discarded');
+  const p3 = await json(await api('/api/history/preview', { method: 'POST', body: JSON.stringify({ filename: 'cleaned-log.xlsx', dataBase64: book.toString('base64') }) }));
+  assert.equal(p3.ready, 2, 'rollback frees the VINs for a corrected re-import');
+  await api('/api/history/discard/' + p3.batchId, { method: 'POST' });
+
+  // Wrong workbook: no Import Ready tab → clear refusal. No auth → no access.
+  const wrong = xlsxOf([HEADERS]); // right layout…
+  const wrongZip = zipStore([{ name: 'xl/workbook.xml', data: '<workbook/>' }]);
+  const bad = await api('/api/history/preview', { method: 'POST', body: JSON.stringify({ filename: 'x.xlsx', dataBase64: wrongZip.toString('base64') }) });
+  assert.equal(bad.status, 400);
+  assert.ok(wrong.length > 0);
+  assert.ok([401, 403].includes((await fetch(BASE + '/api/history/records')).status), 'history requires a login');
+});

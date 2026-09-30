@@ -375,6 +375,7 @@ async function runSearch(){
     ...screens.map(n=>({icon:'🧭',label:n[1].replace(/^\S+\s/,''),sub:'open screen',act:()=>go(n[0])})),
     ...r.orders.map(o=>({icon:'🔨',label:`${o.id} — ${o.customer||'(no customer)'}`,sub:`${o.model||''} · ${o.stage}`,act:()=>orderDetail(o.id)})),
     ...r.units.map(u=>({icon:'🚛',label:`${u.vin}  #${u.last4||String(u.vin||'').slice(-4)}`,sub:`${u.model||''}${u.orderId?' · order '+u.orderId:''}${u.invoiceRef?' · 🧾 invoice '+u.invoiceRef:''}`,act:u.orderId?()=>orderDetail(u.orderId):()=>go('trailers')})),
+    ...(r.historical||[]).map(h=>({icon:'📜',label:`${h.vin}  #${String(h.vin).slice(-4)}`,sub:`Historical · ${h.model||''}${h.customer?' · '+h.customer:''}${h.invoiceNo?' · 🧾 invoice '+h.invoiceNo:''}${h.msoNo?' · MSO '+h.msoNo:''}`,act:()=>histDetail(h.vin)})),
     ...r.customers.map(c=>({icon:'🏬',label:c.name,sub:c.kind||'',act:()=>go('customers')})),
     ...r.parts.map(p=>({icon:'📦',label:p.id,sub:p.name||'',act:()=>go('parts')})),
     ...r.models.map(m=>({icon:'🧩',label:m.name,sub:m.id,act:()=>go('boms')})),
@@ -3797,10 +3798,57 @@ function warrantyBadge(w){
   return '<span class="badge b-below">Expired</span>';
 }
 // ── Test Data (admin only) — provision test portal accounts + failproof wipe ──
+async function hiPreview(){
+  const f=$('hiFile').files[0]; if(!f) return toast('Choose the cleaned .xlsx first');
+  $('hiPanel').innerHTML='<p class="muted" style="font-size:12.5px">Reading workbook…</p>';
+  let b64; try{ b64=await new Promise((res,rej)=>{const rd=new FileReader();rd.onload=()=>res(String(rd.result).split(',')[1]||'');rd.onerror=()=>rej(new Error('Could not read the file'));rd.readAsDataURL(f);}); }
+  catch(e){ $('hiPanel').innerHTML=`<p class="msg err" style="display:block">${esc(e.message)}</p>`; return; }
+  let p; try{ p=await api('/api/history/preview',{method:'POST',body:JSON.stringify({filename:f.name,dataBase64:b64})}); }
+  catch(e){ $('hiPanel').innerHTML=`<p class="msg err" style="display:block">${esc(e.message)}</p>`; return; }
+  const w=p.warnings||{};
+  $('hiPanel').innerHTML=`<div style="border:1px solid var(--line);border-radius:8px;padding:10px 12px">
+    <b style="font-size:13.5px">Preview — ${esc(p.filename)}</b> <span class="muted" style="font-size:11.5px">nothing written yet</span>
+    <div style="display:flex;gap:18px;flex-wrap:wrap;margin:8px 0;font-size:13px">
+      <span>Rows in Import Ready tab: <b>${p.total}</b></span><span>Ready to import: <b>${p.ready}</b></span>
+      <span>Excluded (hard errors): <b>${p.errorCount}</b></span></div>
+    <div class="muted" style="font-size:12px">Imports with a review flag: ${w.noCustomer||0} without a customer · ${w.unmatchedModel||0} with a model code not in the app${p.unmatchedModels&&p.unmatchedModels.length?` (${esc(p.unmatchedModels.slice(0,10).join(', '))}${p.unmatchedModels.length>10?'…':''})`:''} · ${w.splitPayment||0} split payments (reconcile in QuickBooks). Model matched on ${p.modelMatched} rows.</div>
+    ${p.errors&&p.errors.length?`<div style="max-height:160px;overflow:auto;border:1px solid var(--line);border-radius:6px;margin-top:8px;padding:6px 8px;font-size:12px">${p.errors.map(e2=>`<div>Row ${e2.row} — <b>${esc(e2.vin)}</b>: ${esc(e2.reason)}</div>`).join('')}</div>`:''}
+    <div style="margin-top:10px;display:flex;gap:8px">
+      <button class="btn" onclick="hiCommit(${p.batchId},${p.ready})" ${p.ready?'':'disabled'}>Import ${p.ready} records</button>
+      <button class="btn sec" onclick="hiDiscard(${p.batchId})">Discard preview</button></div>
+    <p class="muted" style="font-size:11px;margin-top:6px">Records are created only when you confirm — and the whole batch can be rolled back afterward if the file was wrong.</p></div>`;
+}
+async function hiCommit(id,n){
+  if(!confirm('Import '+n+' historical trailers as read-only reference records?'))return;
+  try{ const r=await api('/api/history/import/'+id,{method:'POST'}); toast('📜 '+r.imported+' historical records imported'); viewTestData(); }catch(e){ toast(e.message); }
+}
+async function hiRollback(id){
+  if(!confirm('Roll back this whole batch? All of its historical records are removed (the batch log is kept). Re-import a corrected file afterward.'))return;
+  try{ const r=await api('/api/history/rollback/'+id,{method:'POST'}); toast('↩️ '+r.removed+' historical records removed'); viewTestData(); }catch(e){ toast(e.message); }
+}
+async function hiDiscard(id){ try{ await api('/api/history/discard/'+id,{method:'POST'}); toast('Preview discarded'); viewTestData(); }catch(e){ toast(e.message); } }
+function hiBatchesHtml(bs){
+  if(!bs||!bs.length) return '<p class="muted" style="font-size:12px">No import batches yet.</p>';
+  const badge=st=>st==='imported'?'<span class="badge b-ok">imported</span>':st==='preview'?'<span class="badge b-buy">preview</span>':st==='rolled_back'?'<span class="badge b-low">rolled back</span>':'<span class="badge b-low">discarded</span>';
+  const d=v=>v?String(v).slice(0,10):'';
+  return `<b style="font-size:13px">Import log</b><table style="width:100%;font-size:12px;margin-top:6px"><tr><th style="text-align:left">#</th><th style="text-align:left">File</th><th style="text-align:left">Status</th><th style="text-align:right">Rows</th><th style="text-align:left">By / when</th><th></th></tr>${
+    bs.map(b=>`<tr><td style="padding:4px 8px 4px 0">${b.id}</td><td>${esc(b.filename||'')}</td><td>${badge(b.status)}</td><td style="text-align:right">${b.row_count}</td><td class="muted">${esc(b.created_by||'')} · ${d(b.created_at)}${b.imported_at?' → imported '+d(b.imported_at):''}${b.rolled_back_at?' → rolled back '+d(b.rolled_back_at):''}</td><td style="text-align:right">${b.status==='imported'?`<button class="btn sec" style="padding:3px 10px;font-size:11px" onclick="hiRollback(${b.id})">Roll back</button>`:b.status==='preview'?`<button class="btn sec" style="padding:3px 10px;font-size:11px" onclick="hiDiscard(${b.id})">Discard</button>`:''}</td></tr>`).join('')}</table>`;
+}
 async function viewTestData(){
   $('pTitle').textContent='Test Data';$('pSub').textContent='Provision test portal accounts and wipe test data — admin only';$('pActions').innerHTML='';
   let s; try{ s=await api('/api/admin/test-data'); }catch(e){ $('content').innerHTML=`<div class="card"><p class="msg err">${esc(e.message)}</p></div>`; return; }
-  $('content').innerHTML=`
+  const hiBatches=await api('/api/history/batches').catch(()=>[]);
+  const histCard=`<div class="card" style="margin-bottom:14px">
+    <h3>🗄️ Historical Import <span class="badge b-low">pre-app VIN / MSO / invoice log</span></h3>
+    <p class="muted" style="font-size:12.5px">One-time, reviewed load of the cleaned legacy log as <b>read-only reference records</b> — searchable in Trailers &amp; Warranty (📜 History) and global search. A hard wall from live production: never touches Production Flow, VIN labels, or the MSO certificate counter. Only the workbook's <b>Import Ready</b> tab is read; Needs Review rows are resolved by hand afterward.</p>
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:10px 0">
+      <input type="file" id="hiFile" accept=".xlsx" style="max-width:320px">
+      <button class="btn" onclick="hiPreview()">Upload &amp; preview</button>
+    </div>
+    <div id="hiPanel"></div>
+    <div id="hiBatches" style="margin-top:12px">${hiBatchesHtml(hiBatches)}</div>
+  </div>`;
+  $('content').innerHTML=histCard+`
     <div class="card">
       <h3>🧪 Test portal accounts</h3>
       <p class="muted" style="font-size:13px">Pre-approved test logins for the <b>dealer</b> and <b>owner</b> portals, flagged as test — so orders, registrations, claims, and signups they create stay <b>out of the Action Inbox and approval queues</b>.</p>
@@ -4356,6 +4404,42 @@ async function printTraveler(unitId){
   w.document.write(html); w.document.close(); w.focus(); setTimeout(()=>{try{w.print();}catch(e){}},400);
 }
 
+async function trailersHistoryTab(){
+  return `<div class="card">
+    <h3>📜 Historical trailers <span class="badge b-low">pre-app reference records</span></h3>
+    <p class="muted" style="font-size:12.5px">Trailers from the 2024–2026 log, before the app. Search by VIN, last 4, customer, MSO #, or invoice #. Read-only — these never touch Production Flow or live VIN/MSO numbering.</p>
+    <div style="display:flex;gap:8px;margin:10px 0"><input id="histQ" placeholder="VIN, last 4, customer, MSO #, invoice #…" style="max-width:340px" onkeydown="if(event.key==='Enter')histSearch()"><button class="btn" onclick="histSearch()">Search</button></div>
+    <div id="histOut" class="muted" style="font-size:13px">Type a search above — e.g. the last 4 of a VIN.</div>
+  </div>`;
+}
+async function histSearch(){
+  const qv=($('histQ').value||'').trim(); const out=$('histOut'); if(qv.length<2){out.innerHTML='Type at least 2 characters.';return;}
+  let rows; try{ rows=await api('/api/history/records?q='+encodeURIComponent(qv)+'&limit=50'); }catch(e){ out.innerHTML=`<p class="msg err" style="display:block">${esc(e.message)}</p>`; return; }
+  if(!rows.length){ out.innerHTML='No historical records match.'; return; }
+  out.innerHTML=`<table style="width:100%;font-size:12.5px"><tr><th style="text-align:left">VIN</th><th style="text-align:left">Model</th><th style="text-align:left">Customer</th><th style="text-align:left">MSO #</th><th style="text-align:left">Invoice #</th><th style="text-align:left">Ship</th></tr>${
+    rows.map(r=>`<tr style="cursor:pointer" onclick="histDetail('${esc(r.vin)}')"><td style="padding:5px 8px 5px 0"><b>${esc(r.vin)}</b> <span class="muted">#${esc(String(r.vin).slice(-4))}</span></td><td>${esc(r.model_id||r.model_text||'')}</td><td>${esc(r.customer_name||'—')}</td><td>${esc(r.mso_number||'')}</td><td>${esc(r.invoice_no||'')}</td><td>${esc(r.ship_date||'')}</td></tr>`).join('')}</table>`+(rows.length>=50?'<p class="muted" style="font-size:11px;margin-top:6px">Showing first 50 — narrow the search for more.</p>':'');
+}
+async function histDetail(vin){
+  let rows; try{ rows=await api('/api/history/records?q='+encodeURIComponent(vin)); }catch(e){ return toast(e.message); }
+  const r=rows.find(x=>x.vin===vin)||rows[0]; if(!r) return toast('Historical record not found');
+  const F=(l,v)=>v?`<tr><td class="muted" style="padding:3px 10px 3px 0;white-space:nowrap;vertical-align:top">${l}</td><td style="padding:3px 0"><b>${esc(String(v))}</b></td></tr>`:'';
+  modal('📜 '+esc(r.vin),`
+    <span class="badge b-low">Historical — imported reference record</span>
+    <table style="font-size:13px;margin-top:10px">${
+      F('Model', r.model_id||r.model_text)+(r.model_id&&r.model_text&&r.model_id!==r.model_text?F('Model (as logged)',r.model_text):'')+
+      F('Customer', r.customer_name||'(unassigned at time of log)')+F('Address', r.customer_address)+
+      F('MSO #', r.mso_number)+F('MSO printed', r.mso_issued_date)+
+      F('Ship date', r.ship_date)+F('Delivery date', r.delivery_date)+
+      F('Delivery receipt', r.delivery_confirmed===true?'Y':r.delivery_confirmed===false?'N':'')+
+      F('Invoice #', r.invoice_no)+F('Invoice date', r.invoice_date)+F('Invoice due', r.invoice_due)+
+      F('Amt due', r.amt_due)+F('Amt received', r.amt_received)+
+      F('Payment date(s)', r.payment_dates)+F('Payment type', r.payment_type)+
+      (r.multi_payment?F('Split payment','Y — reconcile details live in QuickBooks'):'')+
+      F('Notes', r.notes)}
+    </table>
+    <p class="muted" style="font-size:11.5px;margin-top:10px">Invoice and payment fields are reference context from the pre-app log — <b>not synced with QuickBooks</b>. For a current balance, use Accounting. Historical records are read-only; a bad batch is fixed by rollback &amp; re-import on the Test Data screen.</p>
+    <div style="margin-top:12px;text-align:right"><button class="btn sec" onclick="closeModal()">Close</button></div>`);
+}
 async function viewTrailers(){
   $('pTitle').textContent='Trailers & Warranty';
   $('pSub').textContent='Per-trailer VINs, build history, and warranty';
@@ -4367,7 +4451,8 @@ async function viewTrailers(){
     <button class="${trailerTab==='regs'?'active':''}" onclick="trailerTab='regs';viewTrailers()">📝 Registrations${pendN?` <span class="badge b-low" style="margin-left:2px">${pendN}</span>`:''}</button>
     <button class="${trailerTab==='claims'?'active':''}" onclick="trailerTab='claims';viewTrailers()">🛠️ Warranty Claims</button>
     <button class="${trailerTab==='docs'?'active':''}" onclick="trailerTab='docs';viewTrailers()">📚 Documents</button>
-    <button class="${trailerTab==='margins'?'active':''}" onclick="trailerTab='margins';viewTrailers()">📊 Margins</button></div>`;
+    <button class="${trailerTab==='margins'?'active':''}" onclick="trailerTab='margins';viewTrailers()">📊 Margins</button>
+    <button class="${trailerTab==='history'?'active':''}" onclick="trailerTab='history';viewTrailers()">📜 History</button></div>`;
   let body='';
   try{
     if(trailerTab==='dealer') body=await trailersDealerTab();
@@ -4375,6 +4460,7 @@ async function viewTrailers(){
     else if(trailerTab==='regs') body=await trailersRegsTab();
     else if(trailerTab==='docs') body=await trailersDocsTab();
     else if(trailerTab==='margins') body=await trailersMarginsTab();
+    else if(trailerTab==='history') body=await trailersHistoryTab();
     else body=await trailersVinsTab();
   }catch(e){ body=`<div class="card">Error: ${esc(e.message)}</div>`; }
   $('content').innerHTML=tabs+body;

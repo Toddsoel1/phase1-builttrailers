@@ -360,6 +360,12 @@ const colMigrations = [
   `CREATE TABLE IF NOT EXISTS part_fit (part_id TEXT NOT NULL, kind TEXT NOT NULL, value TEXT NOT NULL,
      PRIMARY KEY (part_id, kind, value))`,
   `CREATE INDEX IF NOT EXISTS idx_partfit_part ON part_fit(part_id)`,
+  // Historical import: pre-app VIN/MSO/invoice log as read-only reference records.
+  // Sibling of trailer with NO shared write path — live production rows never touch it.
+  `CREATE TABLE IF NOT EXISTS history_import_batch (id SERIAL PRIMARY KEY, filename TEXT, status TEXT NOT NULL DEFAULT 'preview', row_count INTEGER NOT NULL DEFAULT 0, summary TEXT, rows_json TEXT, created_by TEXT, created_at TIMESTAMPTZ NOT NULL DEFAULT now(), imported_at TIMESTAMPTZ, imported_by TEXT, rolled_back_at TIMESTAMPTZ, rolled_back_by TEXT)`,
+  `CREATE TABLE IF NOT EXISTS historical_trailer (vin TEXT PRIMARY KEY, batch_id INTEGER NOT NULL, model_text TEXT, model_id TEXT, mso_number TEXT, mso_issued_date TEXT, customer_name TEXT, customer_address TEXT, ship_date TEXT, delivery_date TEXT, delivery_confirmed BOOLEAN, invoice_no TEXT, invoice_date TEXT, invoice_due TEXT, amt_due TEXT, amt_received TEXT, payment_dates TEXT, multi_payment BOOLEAN NOT NULL DEFAULT false, payment_type TEXT, notes TEXT, flags TEXT, created_at TIMESTAMPTZ NOT NULL DEFAULT now())`,
+  `CREATE INDEX IF NOT EXISTS idx_hist_customer ON historical_trailer(customer_name)`,
+  `CREATE INDEX IF NOT EXISTS idx_hist_batch ON historical_trailer(batch_id)`,
   `CREATE INDEX IF NOT EXISTS idx_dpl_order ON dealer_parts_line(order_id)`,
   `CREATE INDEX IF NOT EXISTS idx_dpo_status ON dealer_parts_order(status)`,
   // Bill-to vs ship-to per dealership: some dealers bill through a corporate/parent entity.

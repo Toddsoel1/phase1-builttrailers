@@ -48,6 +48,7 @@ import * as dealernotify from './dealernotify.js';
 import * as storage from './storage.js';
 import * as push from './push.js';
 import * as testdata from './testdata.js';
+import * as history from './history.js';
 import { geocodeAddress } from './geocode.js';
 import { emailConfigured } from './email.js';
 import { runReminders } from './reminders.js';
@@ -1702,7 +1703,7 @@ app.get('/api/search', authMiddleware, async (req, res) => {
   const raw = String(req.query.q || '').trim();
   if (raw.length < 2) return res.json({ orders: [], units: [], customers: [], parts: [], models: [] });
   const like = '%' + raw.replace(/[\\%_]/g, '\\$&') + '%';
-  const [orders, units, customers, parts, models] = await Promise.all([
+  const [orders, units, customers, parts, models, historical] = await Promise.all([
     all(`SELECT o.id, o.stage, c.name AS customer, m.name AS model FROM sales_order o
            LEFT JOIN customer c ON c.id=o.customer_id LEFT JOIN model m ON m.id=o.model_id
           WHERE o.id ILIKE $1 OR c.name ILIKE $1 ORDER BY o.created_at DESC NULLS LAST, o.id DESC LIMIT 5`, [like]),
@@ -1714,6 +1715,7 @@ app.get('/api/search', authMiddleware, async (req, res) => {
     all(`SELECT id, name, kind FROM customer WHERE name ILIKE $1 OR contact ILIKE $1 ORDER BY name LIMIT 5`, [like]),
     all(`SELECT id, name FROM part WHERE id ILIKE $1 OR name ILIKE $1 ORDER BY id LIMIT 5`, [like]),
     all(`SELECT id, name FROM model WHERE id ILIKE $1 OR name ILIKE $1 ORDER BY id LIMIT 5`, [like]),
+    history.searchHistorical(like).catch(() => []),
   ]);
   res.json({
     orders: orders.map(o => ({ id: o.id, stage: o.stage, customer: o.customer, model: o.model })),
@@ -1721,6 +1723,7 @@ app.get('/api/search', authMiddleware, async (req, res) => {
     customers: customers.map(c => ({ id: c.id, name: c.name, kind: c.kind })),
     parts: parts.map(p => ({ id: p.id, name: p.name })),
     models: models.map(m => ({ id: m.id, name: m.name })),
+    historical: historical.map(h => ({ vin: h.vin, model: h.model_id || h.model_text, customer: h.customer_name, msoNo: h.mso_number, invoiceNo: h.invoice_no })),
   });
 });
 
@@ -2894,6 +2897,43 @@ app.post('/api/boat-admin/boat', authMiddleware, requireBoatAdmin, async (req, r
 });
 
 // ---- Test mode (admin only): provision flagged test portal accounts + a failproof wipe ----
+// ---- Historical Import (pre-app VIN/MSO/invoice log — read-only reference records) ----
+function requireHistoryAuthority(req, res, next) {
+  if (hasTitle(req, ['General Manager'])) return next();
+  return res.status(403).json({ error: 'Historical Import is limited to the General Manager or an admin.' });
+}
+app.get('/api/history/batches', authMiddleware, requireHistoryAuthority, async (_req, res) => res.json(await history.listBatches()));
+app.get('/api/history/records', authMiddleware, async (req, res) => {
+  try { res.json(await history.records({ q: req.query.q, batchId: req.query.batch, limit: req.query.limit })); }
+  catch (e) { res.status(400).json({ error: e.message }); }
+});
+app.post('/api/history/preview', authMiddleware, requireHistoryAuthority, async (req, res) => {
+  try {
+    const { filename, dataBase64 } = req.body || {};
+    if (!dataBase64) return res.status(400).json({ error: 'No file received.' });
+    const out = await history.previewImport(Buffer.from(dataBase64, 'base64'), filename || 'upload.xlsx', req.user.name || req.user.id);
+    await audit(req, 'history.preview', `${out.filename}: ${out.total} rows → ${out.ready} ready, ${out.errorCount} errors (batch ${out.batchId})`);
+    res.json(out);
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+app.post('/api/history/import/:id', authMiddleware, requireHistoryAuthority, async (req, res) => {
+  try {
+    const out = await history.commitBatch(req.params.id, req.user.name || req.user.id);
+    await audit(req, 'history.import', `batch ${req.params.id}: ${out.imported} historical trailers imported`);
+    res.json(out);
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+app.post('/api/history/rollback/:id', authMiddleware, requireHistoryAuthority, async (req, res) => {
+  try {
+    const out = await history.rollbackBatch(req.params.id, req.user.name || req.user.id);
+    await audit(req, 'history.rollback', `batch ${req.params.id}: ${out.removed} historical records removed`);
+    res.json(out);
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+app.post('/api/history/discard/:id', authMiddleware, requireHistoryAuthority, async (req, res) => {
+  try { res.json(await history.discardBatch(req.params.id)); await audit(req, 'history.discard', `preview batch ${req.params.id} discarded`); }
+  catch (e) { res.status(400).json({ error: e.message }); }
+});
 app.get('/api/admin/test-data', authMiddleware, requireTier('admin'), async (_req, res) => res.json(await testdata.testStatus()));
 app.post('/api/admin/test-accounts', authMiddleware, requireTier('admin'), async (_req, res) => res.json(await testdata.provisionTestAccounts()));
 app.post('/api/admin/test-data/wipe', authMiddleware, requireTier('admin'), async (req, res) => {
